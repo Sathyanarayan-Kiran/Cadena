@@ -123,6 +123,7 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
             owner_id: item.owner_id,
             team_id: item.team_id,
             org_id: item.org_id,
+            recipients: [item.owner_id].filter(Boolean),
           },
         );
       }
@@ -130,6 +131,20 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
       if (newScore > 100 && !this.emittedBreaches.has(stateEntryKey)) {
         this.emittedBreaches.add(stateEntryKey);
         breachCount++;
+
+        let teamLeadId: string | null = null;
+        if (item.team_id) {
+          const leadRes = await this.dbService.db.query(
+            `SELECT id FROM people WHERE team_id = $1 AND role = 'team_lead' LIMIT 1;`,
+            [item.team_id],
+          );
+          if (leadRes.rows.length > 0) {
+            teamLeadId = leadRes.rows[0].id;
+          }
+        }
+
+        const recipients = Array.from(new Set([item.owner_id, teamLeadId].filter(Boolean)));
+
         await this.eventBus.publish(
           'SLABreached',
           item.id,
@@ -141,8 +156,10 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
             aging_score: newScore,
             threshold_minutes: policy?.threshold_minutes || 0,
             owner_id: item.owner_id,
+            team_lead_id: teamLeadId,
             team_id: item.team_id,
             org_id: item.org_id,
+            recipients,
           },
         );
       }
