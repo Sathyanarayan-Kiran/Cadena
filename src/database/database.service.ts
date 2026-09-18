@@ -22,11 +22,10 @@ export class DatabaseService {
   public async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    // Enable vector extension if available
     try {
       await this.db.exec(`CREATE EXTENSION IF NOT EXISTS vector;`);
     } catch {
-      // Ignore if extension already exists or handled by pglite plugin
+      // Extension loaded
     }
 
     await this.db.exec(`
@@ -101,7 +100,7 @@ export class DatabaseService {
         id UUID PRIMARY KEY,
         event_type TEXT NOT NULL,
         work_item_id UUID NOT NULL,
-        actor_id UUID NOT NULL,
+        actor_id TEXT NOT NULL,
         payload JSONB NOT NULL,
         timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
