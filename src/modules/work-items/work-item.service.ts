@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
 import { InProcessEventBus } from '../events/event-bus';
 import { CustomFieldSchemaService } from './custom-field-schema.service';
+import { WorkflowService } from '../workflow/workflow.service';
 import {
   CreateWorkItemDto,
   DEFAULT_STATUS,
@@ -38,6 +39,7 @@ export class WorkItemService {
   private dbService = DatabaseService.getInstance();
   private eventBus = InProcessEventBus.getInstance();
   private schemaService = new CustomFieldSchemaService();
+  private workflowService = new WorkflowService();
 
   public async createWorkItem(dto: CreateWorkItemDto, actorId: string = 'system'): Promise<WorkItem> {
     if (!VALID_WORK_ITEM_TYPES.includes(dto.type as WorkItemType)) {
@@ -47,7 +49,7 @@ export class WorkItemService {
     const type = dto.type as WorkItemType;
     const customFields = dto.custom_fields || {};
 
-    // Validate against registered schema if present
+    // Validate custom fields
     const schemaDef = await this.schemaService.getLatestSchema(type);
     if (schemaDef) {
       const valResult = this.schemaService.validateCustomFields(schemaDef.schema, customFields);
@@ -56,8 +58,12 @@ export class WorkItemService {
       }
     }
 
+    // Lookup latest workflow definition
+    const activeWorkflow = await this.workflowService.getWorkflowDefinition(type);
+    const workflowVersion = activeWorkflow ? activeWorkflow.version : 1;
+    const initialStatus = activeWorkflow?.definition?.initial_state || DEFAULT_STATUS[type];
+
     const id = randomUUID();
-    const status = DEFAULT_STATUS[type];
     const now = new Date().toISOString();
     const priority = dto.priority || 'P2';
     const severity = dto.severity || null;
@@ -75,8 +81,8 @@ export class WorkItemService {
         type,
         dto.title,
         description,
-        status,
-        1,
+        initialStatus,
+        workflowVersion,
         priority,
         severity,
         dto.owner_id || null,
@@ -99,8 +105,8 @@ export class WorkItemService {
       type,
       title: dto.title,
       description,
-      status,
-      workflow_version: 1,
+      status: initialStatus,
+      workflow_version: workflowVersion,
       priority,
       severity,
       owner_id: dto.owner_id || null,
