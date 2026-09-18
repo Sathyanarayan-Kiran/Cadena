@@ -184,12 +184,19 @@
       justify-content: space-between;
       align-items: center;
       margin-bottom: 28px;
+      flex-wrap: wrap;
+      gap: 12px;
     }
 
     .filters {
       display: flex;
       gap: 16px;
       align-items: center;
+    }
+
+    .toolbar-actions {
+      display: flex;
+      gap: 12px;
     }
 
     .btn {
@@ -221,6 +228,11 @@
 
     .btn-secondary:hover {
       background: rgba(51, 65, 85, 0.8);
+    }
+
+    .btn-dogfood {
+      background: linear-gradient(135deg, var(--accent-cyan), #0284c7);
+      color: white;
     }
 
     /* Items Grid */
@@ -552,9 +564,15 @@
         </div>
       </div>
 
-      <button class="btn" onclick="openCreateModal()">
-        <span>➕</span> Create Work Item
-      </button>
+      <div class="toolbar-actions">
+        <button class="btn btn-dogfood" onclick="importStageBDogfooding()">
+          <span>📥</span> Import 12-Epic Backlog (Stage B)
+        </button>
+
+        <button class="btn" onclick="openCreateModal()">
+          <span>➕</span> Create Work Item
+        </button>
+      </div>
     </div>
 
     <!-- Items Grid -->
@@ -621,7 +639,7 @@
         <button class="modal-close" onclick="closeModal('transitionModal')">✕</button>
       </div>
 
-      <div id="transitionAlert" class="alert-banner"></div>
+      <div id="transAlert" class="alert-banner"></div>
 
       <input type="hidden" id="transItemId">
       
@@ -716,12 +734,32 @@
       }
     }
 
+    async function importStageBDogfooding() {
+      const orgId = document.getElementById('tenantSelect').value;
+      if (!confirm(`Import 12-Epic backlog (50 WorkItems & 38 Relationships) into Tenant Org '${orgId.slice(0, 8)}...'?`)) {
+        return;
+      }
+
+      try {
+        const res = await fetch('/workitems/import-backlog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-org-id': orgId },
+          body: JSON.stringify({ org_id: orgId })
+        });
+        const data = await res.json();
+        alert(`🎉 Stage B Dogfooding Backlog Ingested Successfully!\n- Epics Imported: ${data.epicCount}\n- User Stories: ${data.storyCount}\n- Total WorkItems: ${data.totalImported}\n- Relationships: ${data.linkCount}`);
+        loadWorkItems();
+      } catch (err) {
+        alert(`❌ Import Failed: ${err.message}`);
+      }
+    }
+
     function renderGrid() {
       const grid = document.getElementById('itemsGrid');
       grid.innerHTML = '';
 
       if (currentWorkItems.length === 0) {
-        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 40px;">No work items match the selected filter criteria.</div>';
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 40px;">No work items match the selected filter criteria. Click "Import 12-Epic Backlog" to load dogfood dataset!</div>';
         return;
       }
 
@@ -737,7 +775,8 @@
         if (item.custom_fields && Object.keys(item.custom_fields).length > 0) {
           customFieldsHtml = '<div class="custom-fields-box">';
           for (const [k, v] of Object.entries(item.custom_fields)) {
-            customFieldsHtml += `<div class="custom-field-row"><span>${k}:</span> <span>${v}</span></div>`;
+            const valDisplay = typeof v === 'object' ? JSON.stringify(v) : v;
+            customFieldsHtml += `<div class="custom-field-row"><span>${k}:</span> <span>${valDisplay}</span></div>`;
           }
           customFieldsHtml += '</div>';
         }
