@@ -83,6 +83,8 @@ export class DatabaseService {
         team_id UUID NOT NULL,
         org_id UUID NOT NULL,
         entered_state_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        aging_bucket TEXT DEFAULT 'green',
+        aging_score NUMERIC DEFAULT 0,
         custom_fields JSONB DEFAULT '{}',
         tags TEXT[] DEFAULT '{}',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -104,6 +106,17 @@ export class DatabaseService {
         actor_id TEXT NOT NULL,
         payload JSONB NOT NULL,
         timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS sla_policies (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL REFERENCES orgs(id),
+        item_type TEXT NOT NULL,
+        state TEXT NOT NULL,
+        threshold_minutes INT NOT NULL,
+        calendar TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(org_id, item_type, state)
       );
     `);
 
