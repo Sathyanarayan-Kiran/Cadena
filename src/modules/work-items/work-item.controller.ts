@@ -8,12 +8,14 @@ import {
   Query,
   Headers,
 } from '@nestjs/common';
-import { WorkItemService, UnrecognizedTypeError, ListWorkItemsFilter } from './work-item.service';
+import { WorkItemService, UnrecognizedTypeError, InvalidCustomFieldsError, ListWorkItemsFilter } from './work-item.service';
 import { CreateWorkItemDto } from './work-item.types';
+import { CustomFieldSchemaService, RegisterCustomFieldSchemaDto } from './custom-field-schema.service';
 
 @Controller('workitems')
 export class WorkItemController {
   private service = new WorkItemService();
+  private schemaService = new CustomFieldSchemaService();
 
   @Post()
   async createWorkItem(
@@ -35,8 +37,24 @@ export class WorkItemController {
           HttpStatus.UNPROCESSABLE_ENTITY,
         );
       }
+      if (err instanceof InvalidCustomFieldsError) {
+        throw new HttpException(
+          {
+            statusCode: 422,
+            error: 'Unprocessable Entity',
+            message: err.message,
+            errors: err.errors,
+          },
+          HttpStatus.UNPROCESSABLE_ENTITY,
+        );
+      }
       throw err;
     }
+  }
+
+  @Post('custom-fields/schemas')
+  async registerSchema(@Body() dto: RegisterCustomFieldSchemaDto) {
+    return this.schemaService.registerSchema(dto);
   }
 
   @Get()
