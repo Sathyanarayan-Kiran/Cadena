@@ -1,5 +1,6 @@
 import { PGlite } from '@electric-sql/pglite';
-import { vector } from '@electric-sql/pglite/vector';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { vector } = require('@electric-sql/pglite/vector');
 
 export class DatabaseService {
   private static instance: DatabaseService;

@@ -1,0 +1,984 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cadena — Unified SDLC & ITSM Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #090d16;
+      --card-bg: rgba(22, 28, 45, 0.7);
+      --card-border: rgba(255, 255, 255, 0.08);
+      --primary: #6366f1;
+      --primary-glow: rgba(99, 102, 241, 0.35);
+      --accent-cyan: #06b6d4;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --text-main: #f3f4f6;
+      --text-muted: #9ca3af;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.15), transparent 40%),
+        radial-gradient(circle at 85% 85%, rgba(6, 182, 212, 0.12), transparent 40%);
+      color: var(--text-main);
+      min-height: 100vh;
+      padding-bottom: 60px;
+    }
+
+    header {
+      backdrop-filter: blur(16px);
+      background: rgba(15, 23, 42, 0.8);
+      border-bottom: 1px solid var(--card-border);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 16px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      width: 38px;
+      height: 38px;
+      background: linear-gradient(135deg, var(--primary), var(--accent-cyan));
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Outfit', sans-serif;
+      font-weight: 800;
+      font-size: 20px;
+      color: white;
+      box-shadow: 0 0 16px var(--primary-glow);
+    }
+
+    .brand-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 20px;
+      font-weight: 700;
+      background: linear-gradient(90deg, #fff, #94a3b8);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-badge {
+      background: rgba(99, 102, 241, 0.2);
+      border: 1px solid rgba(99, 102, 241, 0.4);
+      color: #a5b4fc;
+      font-size: 11px;
+      padding: 3px 8px;
+      border-radius: 99px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+    }
+
+    .user-controls {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(30, 41, 59, 0.6);
+      border: 1px solid var(--card-border);
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+    }
+
+    .control-group label {
+      color: var(--text-muted);
+      font-weight: 500;
+    }
+
+    select, input, textarea {
+      background: #0f172a;
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: var(--text-main);
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+
+    select:focus, input:focus, textarea:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 8px var(--primary-glow);
+    }
+
+    .container {
+      max-width: 1300px;
+      margin: 32px auto;
+      padding: 0 24px;
+    }
+
+    /* KPI Row */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 20px;
+      margin-bottom: 32px;
+    }
+
+    .kpi-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: transform 0.2s;
+    }
+
+    .kpi-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 255, 255, 0.15);
+    }
+
+    .kpi-val {
+      font-family: 'Outfit', sans-serif;
+      font-size: 32px;
+      font-weight: 800;
+      margin-top: 4px;
+    }
+
+    .kpi-lbl {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      font-weight: 600;
+    }
+
+    /* Toolbar */
+    .toolbar {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 16px 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 28px;
+    }
+
+    .filters {
+      display: flex;
+      gap: 16px;
+      align-items: center;
+    }
+
+    .btn {
+      background: linear-gradient(135deg, var(--primary), #4f46e5);
+      color: white;
+      border: none;
+      padding: 8px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      box-shadow: 0 4px 12px var(--primary-glow);
+      transition: opacity 0.2s, transform 0.1s;
+    }
+
+    .btn:hover {
+      opacity: 0.95;
+      transform: scale(1.02);
+    }
+
+    .btn-secondary {
+      background: rgba(30, 41, 59, 0.8);
+      border: 1px solid var(--card-border);
+      box-shadow: none;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(51, 65, 85, 0.8);
+    }
+
+    /* Items Grid */
+    .items-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
+      gap: 24px;
+    }
+
+    .item-card {
+      background: var(--card-bg);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: all 0.2s ease-in-out;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .item-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--primary), var(--accent-cyan));
+    }
+
+    .item-card.type-incident::before {
+      background: linear-gradient(90deg, var(--accent-rose), var(--accent-amber));
+    }
+
+    .item-card:hover {
+      border-color: rgba(99, 102, 241, 0.4);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .card-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+    }
+
+    .item-key {
+      font-family: 'Outfit', sans-serif;
+      font-weight: 700;
+      font-size: 13px;
+      color: var(--text-muted);
+      letter-spacing: 0.5px;
+    }
+
+    .item-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: #fff;
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+
+    .badges {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      font-size: 11px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 6px;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .badge-story { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
+    .badge-incident { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
+    .badge-status { background: rgba(30, 41, 59, 0.8); color: #cbd5e1; border: 1px solid var(--card-border); }
+    
+    .aging-green { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .aging-amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
+    .aging-red { background: rgba(244, 63, 94, 0.2); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.4); font-weight: 700; }
+
+    .custom-fields-box {
+      background: rgba(15, 23, 42, 0.5);
+      border: 1px dashed var(--card-border);
+      border-radius: 8px;
+      padding: 10px 12px;
+      font-size: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .custom-field-row {
+      display: flex;
+      justify-content: space-between;
+      color: var(--text-muted);
+    }
+
+    .custom-field-row span:last-child {
+      color: var(--text-main);
+      font-weight: 500;
+    }
+
+    .card-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 4px;
+      padding-top: 12px;
+      border-top: 1px solid var(--card-border);
+    }
+
+    .card-actions .btn {
+      flex: 1;
+      padding: 6px 10px;
+      font-size: 12px;
+      justify-content: center;
+    }
+
+    /* Modal Overlay */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(8px);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    .modal-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal {
+      background: #0f172a;
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      width: 90%;
+      max-width: 560px;
+      padding: 28px;
+      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 14px;
+    }
+
+    .modal-title {
+      font-family: 'Outfit', sans-serif;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .modal-close {
+      background: none;
+      border: none;
+      color: var(--text-muted);
+      font-size: 20px;
+      cursor: pointer;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-group label {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .alert-banner {
+      padding: 12px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.4;
+      display: none;
+    }
+
+    .alert-banner.error {
+      display: block;
+      background: rgba(244, 63, 94, 0.15);
+      border: 1px solid rgba(244, 63, 94, 0.3);
+      color: #fb7185;
+    }
+
+    .alert-banner.success {
+      display: block;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: #34d399;
+    }
+
+    /* Lineage Chain Visualizer */
+    .lineage-nodes {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      position: relative;
+    }
+
+    .lineage-node-card {
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .lineage-connector {
+      text-align: center;
+      color: var(--accent-cyan);
+      font-size: 14px;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="brand">
+      <div class="brand-logo">C</div>
+      <div class="brand-title">Cadena</div>
+      <div class="brand-badge">Phase 0 Pilot</div>
+    </div>
+
+    <div class="user-controls">
+      <div class="control-group">
+        <label for="tenantSelect">Tenant Org:</label>
+        <select id="tenantSelect" onchange="loadWorkItems()">
+          <option value="00000000-0000-0000-0000-000000000099">Org A (Primary Pilot)</option>
+          <option value="22222222-2222-2222-2222-222222222222">Org B (Isolated Tenant)</option>
+        </select>
+      </div>
+
+      <div class="control-group">
+        <label for="roleSelect">Actor Role (RBAC):</label>
+        <select id="roleSelect">
+          <option value="developer">Developer</option>
+          <option value="incident_commander">Incident Commander</option>
+          <option value="on_call">On-Call Engineer</option>
+          <option value="team_lead">Team Lead</option>
+          <option value="cab_approver">CAB Approver</option>
+        </select>
+      </div>
+    </div>
+  </header>
+
+  <div class="container">
+    
+    <!-- KPI Row -->
+    <div class="kpi-grid">
+      <div class="kpi-card">
+        <div>
+          <div class="kpi-lbl">Total Work Items</div>
+          <div class="kpi-val" id="kpiTotal">0</div>
+        </div>
+        <div style="font-size: 28px;">📦</div>
+      </div>
+
+      <div class="kpi-card">
+        <div>
+          <div class="kpi-lbl">Delivery (Stories)</div>
+          <div class="kpi-val" id="kpiStories" style="color: #818cf8;">0</div>
+        </div>
+        <div style="font-size: 28px;">⚡</div>
+      </div>
+
+      <div class="kpi-card">
+        <div>
+          <div class="kpi-lbl">Operational (Incidents)</div>
+          <div class="kpi-val" id="kpiIncidents" style="color: #fb7185;">0</div>
+        </div>
+        <div style="font-size: 28px;">🚨</div>
+      </div>
+
+      <div class="kpi-card">
+        <div>
+          <div class="kpi-lbl">Aging Breaches (Red)</div>
+          <div class="kpi-val" id="kpiBreaches" style="color: #f43f5e;">0</div>
+        </div>
+        <div style="font-size: 28px;">🔥</div>
+      </div>
+    </div>
+
+    <!-- Toolbar -->
+    <div class="toolbar">
+      <div class="filters">
+        <div class="control-group">
+          <label>Type:</label>
+          <select id="filterType" onchange="loadWorkItems()">
+            <option value="">All Types</option>
+            <option value="story">Story</option>
+            <option value="incident">Incident</option>
+          </select>
+        </div>
+
+        <div class="control-group">
+          <label>Aging Bucket:</label>
+          <select id="filterAging" onchange="loadWorkItems()">
+            <option value="">All Buckets</option>
+            <option value="green">🟢 Green</option>
+            <option value="amber">🟡 Amber</option>
+            <option value="red">🔴 Red Breach</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="btn" onclick="openCreateModal()">
+        <span>➕</span> Create Work Item
+      </button>
+    </div>
+
+    <!-- Items Grid -->
+    <div class="items-grid" id="itemsGrid">
+      <!-- Dynamic WorkItem cards render here -->
+    </div>
+
+  </div>
+
+  <!-- Create Item Modal -->
+  <div class="modal-overlay" id="createModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Create Canonical WorkItem</div>
+        <button class="modal-close" onclick="closeModal('createModal')">✕</button>
+      </div>
+
+      <div class="form-group">
+        <label for="createType">Item Type</label>
+        <select id="createType" onchange="toggleTypeFields()">
+          <option value="story">Story (Delivery)</option>
+          <option value="incident">Incident (Operational)</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="createTitle">Title</label>
+        <input type="text" id="createTitle" placeholder="e.g. Implement OAuth login flow">
+      </div>
+
+      <div class="form-group">
+        <label for="createDesc">Description</label>
+        <textarea id="createDesc" rows="2" placeholder="Brief technical summary..."></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="createPriority">Priority</label>
+        <select id="createPriority">
+          <option value="P0">P0 (Critical)</option>
+          <option value="P1">P1 (High)</option>
+          <option value="P2" selected>P2 (Medium)</option>
+          <option value="P3">P3 (Low)</option>
+        </select>
+      </div>
+
+      <div class="form-group" id="severityGroup" style="display: none;">
+        <label for="createSeverity">Severity (Incidents Only)</label>
+        <select id="createSeverity">
+          <option value="SEV1">SEV1 (Outage)</option>
+          <option value="SEV2">SEV2 (Major Degradation)</option>
+          <option value="SEV3">SEV3 (Minor Impact)</option>
+        </select>
+      </div>
+
+      <button class="btn" onclick="submitCreateItem()">Create Item</button>
+    </div>
+  </div>
+
+  <!-- Transition Modal -->
+  <div class="modal-overlay" id="transitionModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">State Machine Transition</div>
+        <button class="modal-close" onclick="closeModal('transitionModal')">✕</button>
+      </div>
+
+      <div id="transitionAlert" class="alert-banner"></div>
+
+      <input type="hidden" id="transItemId">
+      
+      <div class="form-group">
+        <label>Current Status:</label>
+        <div id="transCurrentStatus" style="font-weight: 600; color: var(--accent-cyan);">--</div>
+      </div>
+
+      <div class="form-group">
+        <label for="transToState">Target State:</label>
+        <input type="text" id="transToState" placeholder="e.g. Investigating, Mitigated, Resolved, InReview">
+      </div>
+
+      <div class="form-group">
+        <label for="transMitigation">Mitigation Summary (Required for 'Mitigated' state):</label>
+        <input type="text" id="transMitigation" placeholder="e.g. Rolled back release v2.3.1">
+      </div>
+
+      <button class="btn" onclick="submitTransition()">Attempt Transition</button>
+    </div>
+  </div>
+
+  <!-- Link Modal -->
+  <div class="modal-overlay" id="linkModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Create Typed Relationship Edge</div>
+        <button class="modal-close" onclick="closeModal('linkModal')">✕</button>
+      </div>
+
+      <div id="linkAlert" class="alert-banner"></div>
+
+      <input type="hidden" id="linkSourceId">
+
+      <div class="form-group">
+        <label for="linkTargetSelect">Target WorkItem:</label>
+        <select id="linkTargetSelect"></select>
+      </div>
+
+      <div class="form-group">
+        <label for="linkTypeSelect">Relationship Edge Type:</label>
+        <select id="linkTypeSelect">
+          <option value="caused_by">caused_by (Incident -> Problem/Story)</option>
+          <option value="fixed_by">fixed_by (Incident/Bug -> Story/PR)</option>
+          <option value="child_of">child_of (Story -> Epic)</option>
+          <option value="parent_of">parent_of (Epic -> Story)</option>
+          <option value="blocks">blocks</option>
+          <option value="relates_to">relates_to</option>
+          <option value="deployed_in">deployed_in (Story -> Release)</option>
+        </select>
+      </div>
+
+      <button class="btn" onclick="submitCreateLink()">Create Typed Edge</button>
+    </div>
+  </div>
+
+  <!-- Lineage Modal -->
+  <div class="modal-overlay" id="lineageModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">Upstream Lineage Chain Explorer</div>
+        <button class="modal-close" onclick="closeModal('lineageModal')">✕</button>
+      </div>
+
+      <div class="lineage-nodes" id="lineageChainContainer">
+        <!-- Rendered lineage nodes -->
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentWorkItems = [];
+
+    async function loadWorkItems() {
+      const orgId = document.getElementById('tenantSelect').value;
+      const type = document.getElementById('filterType').value;
+      const aging = document.getElementById('filterAging').value;
+
+      let url = `/workitems?org_id=${orgId}`;
+      if (type) url += `&type=${type}`;
+      if (aging) url += `&aging_bucket=${aging}`;
+
+      try {
+        const res = await fetch(url, {
+          headers: { 'x-org-id': orgId }
+        });
+        currentWorkItems = await res.json();
+        renderGrid();
+        updateKPIs();
+      } catch (err) {
+        console.error('Failed to load work items:', err);
+      }
+    }
+
+    function renderGrid() {
+      const grid = document.getElementById('itemsGrid');
+      grid.innerHTML = '';
+
+      if (currentWorkItems.length === 0) {
+        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 40px;">No work items match the selected filter criteria.</div>';
+        return;
+      }
+
+      currentWorkItems.forEach(item => {
+        const card = document.createElement('div');
+        card.className = `item-card type-${item.type}`;
+
+        const isIncident = item.type === 'incident';
+        const typeBadgeClass = isIncident ? 'badge-incident' : 'badge-story';
+        const agingClass = `aging-${item.aging_bucket || 'green'}`;
+
+        let customFieldsHtml = '';
+        if (item.custom_fields && Object.keys(item.custom_fields).length > 0) {
+          customFieldsHtml = '<div class="custom-fields-box">';
+          for (const [k, v] of Object.entries(item.custom_fields)) {
+            customFieldsHtml += `<div class="custom-field-row"><span>${k}:</span> <span>${v}</span></div>`;
+          }
+          customFieldsHtml += '</div>';
+        }
+
+        card.innerHTML = `
+          <div class="card-head">
+            <div>
+              <div class="item-key">${item.type.toUpperCase()} • ${item.id.slice(0, 8)}</div>
+              <div class="item-title">${escapeHtml(item.title)}</div>
+            </div>
+          </div>
+
+          <div class="badges">
+            <span class="badge ${typeBadgeClass}">${isIncident ? '🚨 Incident' : '⚡ Story'}</span>
+            <span class="badge badge-status">${item.status}</span>
+            <span class="badge badge-status">${item.priority}</span>
+            ${item.severity ? `<span class="badge badge-incident">${item.severity}</span>` : ''}
+            <span class="badge ${agingClass}">${(item.aging_bucket || 'green').toUpperCase()}</span>
+          </div>
+
+          ${customFieldsHtml}
+
+          <div class="card-actions">
+            <button class="btn btn-secondary" onclick="openTransitionModal('${item.id}', '${item.status}')">🔄 Transition</button>
+            <button class="btn btn-secondary" onclick="openLinkModal('${item.id}')">🔗 Link</button>
+            <button class="btn btn-secondary" onclick="openLineageModal('${item.id}')">🌲 Lineage</button>
+          </div>
+        `;
+
+        grid.appendChild(card);
+      });
+    }
+
+    function updateKPIs() {
+      document.getElementById('kpiTotal').innerText = currentWorkItems.length;
+      document.getElementById('kpiStories').innerText = currentWorkItems.filter(i => i.type === 'story').length;
+      document.getElementById('kpiIncidents').innerText = currentWorkItems.filter(i => i.type === 'incident').length;
+      document.getElementById('kpiBreaches').innerText = currentWorkItems.filter(i => i.aging_bucket === 'red').length;
+    }
+
+    function toggleTypeFields() {
+      const type = document.getElementById('createType').value;
+      document.getElementById('severityGroup').style.display = type === 'incident' ? 'flex' : 'none';
+    }
+
+    function openCreateModal() {
+      document.getElementById('createModal').classList.add('active');
+    }
+
+    function openTransitionModal(id, currentStatus) {
+      document.getElementById('transItemId').value = id;
+      document.getElementById('transCurrentStatus').innerText = currentStatus;
+      document.getElementById('transAlert').className = 'alert-banner';
+      document.getElementById('transAlert').innerText = '';
+      document.getElementById('transitionModal').classList.add('active');
+    }
+
+    function openLinkModal(sourceId) {
+      document.getElementById('linkSourceId').value = sourceId;
+      document.getElementById('linkAlert').className = 'alert-banner';
+      document.getElementById('linkAlert').innerText = '';
+
+      const targetSelect = document.getElementById('linkTargetSelect');
+      targetSelect.innerHTML = '';
+
+      currentWorkItems.filter(i => i.id !== sourceId).forEach(target => {
+        const opt = document.createElement('option');
+        opt.value = target.id;
+        opt.innerText = `[${target.type.toUpperCase()}] ${target.title}`;
+        targetSelect.appendChild(opt);
+      });
+
+      document.getElementById('linkModal').classList.add('active');
+    }
+
+    async function openLineageModal(id) {
+      const container = document.getElementById('lineageChainContainer');
+      container.innerHTML = '<div style="text-align: center; color: var(--text-muted);">Tracing upstream lineage...</div>';
+      document.getElementById('lineageModal').classList.add('active');
+
+      try {
+        const res = await fetch(`/workitems/${id}/lineage?direction=up`);
+        const data = await res.json();
+        
+        container.innerHTML = '';
+        if (!data.chain || data.chain.length === 0) {
+          container.innerHTML = '<div style="text-align: center; color: var(--text-muted);">No upstream lineage found for this item.</div>';
+          return;
+        }
+
+        data.chain.forEach((node, idx) => {
+          if (idx > 0) {
+            const conn = document.createElement('div');
+            conn.className = 'lineage-connector';
+            conn.innerText = '↑ linked via edge';
+            container.appendChild(conn);
+          }
+
+          const nodeCard = document.createElement('div');
+          nodeCard.className = 'lineage-node-card';
+          nodeCard.innerHTML = `
+            <div>
+              <div style="font-weight: 700; color: #fff;">${escapeHtml(node.title)}</div>
+              <div style="font-size: 12px; color: var(--text-muted);">${node.type.toUpperCase()} • ${node.status}</div>
+            </div>
+            <span class="badge ${node.type === 'incident' ? 'badge-incident' : 'badge-story'}">${node.type}</span>
+          `;
+          container.appendChild(nodeCard);
+        });
+      } catch (err) {
+        container.innerHTML = `<div class="alert-banner error">Failed to load lineage: ${err.message}</div>`;
+      }
+    }
+
+    async function submitCreateItem() {
+      const orgId = document.getElementById('tenantSelect').value;
+      const type = document.getElementById('createType').value;
+      const title = document.getElementById('createTitle').value;
+      const description = document.getElementById('createDesc').value;
+      const priority = document.getElementById('createPriority').value;
+      const severity = type === 'incident' ? document.getElementById('createSeverity').value : null;
+
+      if (!title) {
+        alert('Please enter a title');
+        return;
+      }
+
+      try {
+        const res = await fetch('/workitems', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-org-id': orgId },
+          body: JSON.stringify({
+            type, title, description, priority, severity,
+            team_id: '00000000-0000-0000-0000-000000000001',
+            org_id: orgId
+          })
+        });
+
+        if (res.ok) {
+          closeModal('createModal');
+          loadWorkItems();
+        } else {
+          const errData = await res.json();
+          alert(`Error: ${errData.message || 'Failed to create item'}`);
+        }
+      } catch (err) {
+        alert(`Error: ${err.message}`);
+      }
+    }
+
+    async function submitTransition() {
+      const id = document.getElementById('transItemId').value;
+      const toState = document.getElementById('transToState').value;
+      const mitigation = document.getElementById('transMitigation').value;
+      const role = document.getElementById('roleSelect').value;
+
+      const alertBanner = document.getElementById('transAlert');
+      alertBanner.className = 'alert-banner';
+      alertBanner.innerText = '';
+
+      if (!toState) {
+        alertBanner.className = 'alert-banner error';
+        alertBanner.innerText = 'Please specify a target state';
+        return;
+      }
+
+      const fields = {};
+      if (mitigation) fields.mitigation_summary = mitigation;
+
+      try {
+        const res = await fetch(`/workitems/${id}/transitions`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-actor-role': role
+          },
+          body: JSON.stringify({ to_state: toState, fields })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          alertBanner.className = 'alert-banner success';
+          alertBanner.innerText = `✅ Successfully transitioned to state '${data.to_state}'!`;
+          setTimeout(() => {
+            closeModal('transitionModal');
+            loadWorkItems();
+          }, 1200);
+        } else {
+          alertBanner.className = 'alert-banner error';
+          alertBanner.innerText = `❌ ${data.error}: ${data.reason || data.message}`;
+        }
+      } catch (err) {
+        alertBanner.className = 'alert-banner error';
+        alertBanner.innerText = `❌ Error: ${err.message}`;
+      }
+    }
+
+    async function submitCreateLink() {
+      const sourceId = document.getElementById('linkSourceId').value;
+      const targetId = document.getElementById('linkTargetSelect').value;
+      const linkType = document.getElementById('linkTypeSelect').value;
+
+      const alertBanner = document.getElementById('linkAlert');
+      alertBanner.className = 'alert-banner';
+      alertBanner.innerText = '';
+
+      try {
+        const res = await fetch(`/workitems/${sourceId}/links`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ target_id: targetId, link_type: linkType })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          alertBanner.className = 'alert-banner success';
+          alertBanner.innerText = `✅ Created typed edge link '${linkType}' successfully!`;
+          setTimeout(() => {
+            closeModal('linkModal');
+            loadWorkItems();
+          }, 1200);
+        } else {
+          alertBanner.className = 'alert-banner error';
+          alertBanner.innerText = `❌ ${data.error}: ${data.message}`;
+        }
+      } catch (err) {
+        alertBanner.className = 'alert-banner error';
+        alertBanner.innerText = `❌ Error: ${err.message}`;
+      }
+    }
+
+    function closeModal(modalId) {
+      document.getElementById(modalId).classList.remove('active');
+    }
+
+    function escapeHtml(str) {
+      return (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    // Initial load
+    loadWorkItems();
+  </script>
+</body>
+</html>
