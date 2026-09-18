@@ -29,6 +29,7 @@ export interface WorkItem {
   tags: string[];
   created_at: string;
   updated_at: string;
+  aging_bucket: 'green' | 'amber' | 'red';
 }
 
 export interface CreateWorkItemDto {

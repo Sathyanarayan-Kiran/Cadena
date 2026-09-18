@@ -17,6 +17,15 @@ export class UnrecognizedTypeError extends Error {
   }
 }
 
+export interface ListWorkItemsFilter {
+  type?: string;
+  state?: string;
+  status?: string;
+  owner_id?: string;
+  team_id?: string;
+  aging_bucket?: 'green' | 'amber' | 'red';
+}
+
 export class WorkItemService {
   private dbService = DatabaseService.getInstance();
   private eventBus = InProcessEventBus.getInstance();
@@ -96,7 +105,64 @@ export class WorkItemService {
     return this.mapRowToWorkItem(res.rows[0]);
   }
 
+  public async listWorkItems(filter: ListWorkItemsFilter, orgId: string): Promise<WorkItem[]> {
+    await this.dbService.initialize();
+
+    let query = `SELECT * FROM work_items WHERE org_id = $1`;
+    const params: any[] = [orgId];
+
+    if (filter.type) {
+      params.push(filter.type);
+      query += ` AND type = $${params.length}`;
+    }
+
+    const targetState = filter.state || filter.status;
+    if (targetState) {
+      params.push(targetState);
+      query += ` AND status = $${params.length}`;
+    }
+
+    if (filter.owner_id) {
+      params.push(filter.owner_id);
+      query += ` AND owner_id = $${params.length}`;
+    }
+
+    if (filter.team_id) {
+      params.push(filter.team_id);
+      query += ` AND team_id = $${params.length}`;
+    }
+
+    query += ` ORDER BY created_at DESC`;
+
+    const res = await this.dbService.db.query<any>(query, params);
+    let items = (res.rows || []).map((row) => this.mapRowToWorkItem(row));
+
+    if (filter.aging_bucket) {
+      items = items.filter((item) => item.aging_bucket === filter.aging_bucket);
+    }
+
+    return items;
+  }
+
+  public computeAgingBucket(enteredStateAt: string, customAgingBucket?: string): 'green' | 'amber' | 'red' {
+    if (customAgingBucket === 'green' || customAgingBucket === 'amber' || customAgingBucket === 'red') {
+      return customAgingBucket;
+    }
+    const entered = new Date(enteredStateAt).getTime();
+    const now = Date.now();
+    const diffHours = (now - entered) / (1000 * 60 * 60);
+
+    if (diffHours >= 48) return 'red';
+    if (diffHours >= 24) return 'amber';
+    return 'green';
+  }
+
   private mapRowToWorkItem(row: any): WorkItem {
+    const customFields = typeof row.custom_fields === 'string' ? JSON.parse(row.custom_fields) : row.custom_fields || {};
+    const enteredStateAt = typeof row.entered_state_at === 'string' ? row.entered_state_at : new Date(row.entered_state_at).toISOString();
+
+    const agingBucket = this.computeAgingBucket(enteredStateAt, customFields.aging_bucket);
+
     return {
       id: row.id,
       type: row.type as WorkItemType,
@@ -109,11 +175,12 @@ export class WorkItemService {
       owner_id: row.owner_id,
       team_id: row.team_id,
       org_id: row.org_id,
-      entered_state_at: typeof row.entered_state_at === 'string' ? row.entered_state_at : new Date(row.entered_state_at).toISOString(),
-      custom_fields: typeof row.custom_fields === 'string' ? JSON.parse(row.custom_fields) : row.custom_fields || {},
+      entered_state_at: enteredStateAt,
+      custom_fields: customFields,
       tags: row.tags || [],
       created_at: typeof row.created_at === 'string' ? row.created_at : new Date(row.created_at).toISOString(),
       updated_at: typeof row.updated_at === 'string' ? row.updated_at : new Date(row.updated_at).toISOString(),
-    };
+      aging_bucket: agingBucket,
+    } as any;
   }
 }
