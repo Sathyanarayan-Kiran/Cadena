@@ -1,12 +1,14 @@
 import {
   Body,
   Controller,
+  Get,
   HttpException,
   HttpStatus,
   Post,
+  Query,
   Headers,
 } from '@nestjs/common';
-import { WorkItemService, UnrecognizedTypeError } from './work-item.service';
+import { WorkItemService, UnrecognizedTypeError, ListWorkItemsFilter } from './work-item.service';
 import { CreateWorkItemDto } from './work-item.types';
 
 @Controller('workitems')
@@ -35,5 +37,28 @@ export class WorkItemController {
       }
       throw err;
     }
+  }
+
+  @Get()
+  async listWorkItems(
+    @Query('type') type?: string,
+    @Query('state') state?: string,
+    @Query('status') status?: string,
+    @Query('owner_id') ownerId?: string,
+    @Query('team_id') teamId?: string,
+    @Query('aging_bucket') agingBucket?: 'green' | 'amber' | 'red',
+    @Headers('x-org-id') headerOrgId?: string,
+    @Query('org_id') queryOrgId?: string,
+  ) {
+    const orgId = headerOrgId || queryOrgId || '00000000-0000-0000-0000-000000000099';
+    const filter: ListWorkItemsFilter = {
+      type,
+      state: state || status,
+      owner_id: ownerId,
+      team_id: teamId,
+      aging_bucket: agingBucket,
+    };
+
+    return this.service.listWorkItems(filter, orgId);
   }
 }
