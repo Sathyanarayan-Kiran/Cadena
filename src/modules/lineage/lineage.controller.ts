@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Param,
   Post,
+  Query,
   Headers,
 } from '@nestjs/common';
 import { InvalidEdgeTypeError, LineageService } from './lineage.service';
@@ -47,5 +48,23 @@ export class LineageController {
   @Get(':id/relationships')
   async getRelationships(@Param('id') id: string) {
     return this.service.getItemRelationships(id);
+  }
+
+  @Get(':id/lineage')
+  async getLineage(
+    @Param('id') id: string,
+    @Query('direction') direction?: 'up' | 'down',
+    @Query('depth') depth?: string,
+    @Query('edge_types') edgeTypes?: string,
+  ) {
+    const d = depth ? parseInt(depth, 10) : undefined;
+    const edges = edgeTypes ? edgeTypes.split(',').map((e) => e.trim()) : undefined;
+
+    return this.service.getLineage({
+      workItemId: id,
+      direction: direction || 'up',
+      depth: d,
+      edgeTypes: edges,
+    });
   }
 }
