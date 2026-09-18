@@ -38,6 +38,28 @@ export async function importBacklogDogfooding(
   let storyCount = 0;
   let linkCount = 0;
 
+  // Seed default Org, Team, and SLA policies for tenant
+  const db = DatabaseService.getInstance().db;
+  await db.query(`INSERT INTO orgs (id, name) VALUES ($1, 'Primary Tenant Org') ON CONFLICT DO NOTHING;`, [orgId]);
+  await db.query(`INSERT INTO teams (id, org_id, name) VALUES ($1, $2, 'Primary Team') ON CONFLICT DO NOTHING;`, [teamId, orgId]);
+
+  const defaultPolicies = [
+    { type: 'story', state: 'In Review', minutes: 960, calendar: '5x8' },
+    { type: 'bug', state: 'In Progress', minutes: 480, calendar: '5x8' },
+    { type: 'incident', state: 'Investigating', minutes: 60, calendar: '24x7' },
+    { type: 'incident', state: 'Triaged', minutes: 120, calendar: '24x7' },
+    { type: 'change_request', state: 'CAB Review', minutes: 1440, calendar: '5x8' },
+  ];
+
+  for (const p of defaultPolicies) {
+    await db.query(
+      `INSERT INTO sla_policies (id, org_id, item_type, state, threshold_minutes, calendar)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (org_id, item_type, state) DO NOTHING;`,
+      [crypto.randomUUID(), orgId, p.type, p.state, p.minutes, p.calendar],
+    );
+  }
+
   for (const epicData of backlog.epics) {
     // 1. Create Epic WorkItem
     const epicItem = await itemService.createWorkItem({

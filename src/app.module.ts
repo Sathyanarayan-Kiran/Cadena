@@ -4,13 +4,15 @@ import { join } from 'path';
 import { WorkItemController } from './modules/work-items/work-item.controller';
 import { WorkflowController } from './modules/workflow/workflow.controller';
 import { LineageController } from './modules/lineage/lineage.controller';
+import { SlaModule } from './modules/sla/sla.module';
 
 @Module({
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
-      exclude: ['/workitems*'],
+      exclude: ['/workitems*', '/sla-policies*', '/aging*'],
     }),
+    SlaModule,
   ],
   controllers: [WorkItemController, WorkflowController, LineageController],
   providers: [],

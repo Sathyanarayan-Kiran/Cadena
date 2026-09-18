@@ -566,6 +566,14 @@
       </div>
 
       <div class="toolbar-actions">
+        <button class="btn btn-secondary" onclick="openSlaModal()">
+          <span>⚙️</span> SLA Policies
+        </button>
+
+        <button class="btn btn-secondary" onclick="triggerAgingRecompute()">
+          <span>⏱️</span> Recompute Aging
+        </button>
+
         <button class="btn btn-dogfood" onclick="importStageBDogfooding()">
           <span>📥</span> Import 12-Epic Backlog (Stage B)
         </button>
@@ -711,6 +719,52 @@
     </div>
   </div>
 
+  <!-- SLA Policy Modal -->
+  <div class="modal-overlay" id="slaModal">
+    <div class="modal">
+      <div class="modal-header">
+        <div class="modal-title">SLA Policy Configuration</div>
+        <button class="modal-close" onclick="closeModal('slaModal')">✕</button>
+      </div>
+
+      <div id="slaPoliciesList" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
+        <!-- Configured policies render here -->
+      </div>
+
+      <div style="border-top: 1px solid var(--card-border); padding-top: 14px; font-weight: 600; font-size: 13px;">Add / Update SLA Policy</div>
+
+      <div class="form-group">
+        <label for="slaItemType">Item Type</label>
+        <select id="slaItemType">
+          <option value="story">Story</option>
+          <option value="incident">Incident</option>
+          <option value="bug">Bug</option>
+          <option value="change_request">Change Request</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="slaState">State</label>
+        <input type="text" id="slaState" placeholder="e.g. In Review, Investigating, Triaged">
+      </div>
+
+      <div class="form-group">
+        <label for="slaThreshold">Threshold (Minutes)</label>
+        <input type="number" id="slaThreshold" placeholder="e.g. 60 (1 hr) or 960 (2 business days)">
+      </div>
+
+      <div class="form-group">
+        <label for="slaCalendar">Business Calendar</label>
+        <select id="slaCalendar">
+          <option value="5x8">5x8 (Mon-Fri 9am-5pm)</option>
+          <option value="24x7">24x7 (Continuous)</option>
+        </select>
+      </div>
+
+      <button class="btn" onclick="submitSlaPolicy()">Save SLA Policy</button>
+    </div>
+  </div>
+
   <script>
     let currentWorkItems = [];
 
@@ -771,6 +825,8 @@
         const isIncident = item.type === 'incident';
         const typeBadgeClass = isIncident ? 'badge-incident' : 'badge-story';
         const agingClass = `aging-${item.aging_bucket || 'green'}`;
+        const score = Number(item.aging_score || 0).toFixed(1);
+        const barWidth = Math.min(100, Math.max(0, score));
 
         let customFieldsHtml = '';
         if (item.custom_fields && Object.keys(item.custom_fields).length > 0) {
@@ -795,7 +851,12 @@
             <span class="badge badge-status">${item.status}</span>
             <span class="badge badge-status">${item.priority}</span>
             ${item.severity ? `<span class="badge badge-incident">${item.severity}</span>` : ''}
-            <span class="badge ${agingClass}">${(item.aging_bucket || 'green').toUpperCase()}</span>
+            <span class="badge ${agingClass}">${(item.aging_bucket || 'green').toUpperCase()} (${score}%)</span>
+          </div>
+
+          <!-- SLA Runway Progress Bar -->
+          <div style="background: rgba(15, 23, 42, 0.6); border-radius: 6px; height: 6px; width: 100%; overflow: hidden; position: relative;">
+            <div style="height: 100%; width: ${barWidth}%; background: ${item.aging_bucket === 'red' ? '#f43f5e' : item.aging_bucket === 'amber' ? '#f59e0b' : '#10b981'}; transition: width 0.3s ease;"></div>
           </div>
 
           ${customFieldsHtml}
@@ -809,6 +870,72 @@
 
         grid.appendChild(card);
       });
+    }
+
+    async function triggerAgingRecompute() {
+      const orgId = document.getElementById('tenantSelect').value;
+      try {
+        const res = await fetch('/aging/recompute', {
+          method: 'POST',
+          headers: { 'x-org-id': orgId }
+        });
+        const data = await res.json();
+        alert(`⏱️ SLA Aging Recomputed Successfully!\n- Processed Items: ${data.summary.processedCount}\n- Updated Items: ${data.summary.updatedCount}\n- Warnings Emitted: ${data.summary.warningCount}\n- Breaches Emitted: ${data.summary.breachCount}`);
+        loadWorkItems();
+      } catch (err) {
+        alert(`❌ Recompute Failed: ${err.message}`);
+      }
+    }
+
+    async function openSlaModal() {
+      const orgId = document.getElementById('tenantSelect').value;
+      try {
+        const res = await fetch(`/sla-policies?org_id=${orgId}`);
+        const policies = await res.json();
+        
+        const listDiv = document.getElementById('slaPoliciesList');
+        listDiv.innerHTML = '';
+        if (policies.length === 0) {
+          listDiv.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No SLA policies defined yet for this tenant.</div>';
+        } else {
+          policies.forEach(p => {
+            const row = document.createElement('div');
+            row.style.cssText = 'background: rgba(30, 41, 59, 0.6); border: 1px solid var(--card-border); padding: 8px 12px; border-radius: 6px; display: flex; justify-content: space-between; font-size: 12px;';
+            row.innerHTML = `<span><strong>${p.item_type.toUpperCase()}</strong> (${p.state})</span> <span>${p.threshold_minutes}m [${p.calendar}]</span>`;
+            listDiv.appendChild(row);
+          });
+        }
+
+        document.getElementById('slaModal').classList.add('active');
+      } catch (err) {
+        console.error('Failed to load SLA policies:', err);
+      }
+    }
+
+    async function submitSlaPolicy() {
+      const orgId = document.getElementById('tenantSelect').value;
+      const type = document.getElementById('slaItemType').value;
+      const state = document.getElementById('slaState').value.trim();
+      const threshold = parseInt(document.getElementById('slaThreshold').value, 10);
+      const calendar = document.getElementById('slaCalendar').value;
+
+      if (!state || isNaN(threshold) || threshold <= 0) {
+        alert('Please specify a valid state name and threshold in minutes (>0).');
+        return;
+      }
+
+      try {
+        await fetch('/sla-policies', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-org-id': orgId },
+          body: JSON.stringify({ item_type: type, state, threshold_minutes: threshold, calendar })
+        });
+        alert(`✅ SLA Policy Saved for (${type}, ${state}) -> ${threshold} mins [${calendar}]`);
+        openSlaModal();
+        triggerAgingRecompute();
+      } catch (err) {
+        alert(`❌ Failed to save SLA policy: ${err.message}`);
+      }
     }
 
     function updateKPIs() {
