@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
 import { InProcessEventBus } from '../events/event-bus';
+import { CustomFieldSchemaService } from './custom-field-schema.service';
 import {
   CreateWorkItemDto,
   DEFAULT_STATUS,
@@ -17,6 +18,13 @@ export class UnrecognizedTypeError extends Error {
   }
 }
 
+export class InvalidCustomFieldsError extends Error {
+  constructor(public readonly errors: string[]) {
+    super(`Custom fields validation failed: ${errors.join(', ')}`);
+    this.name = 'InvalidCustomFieldsError';
+  }
+}
+
 export interface ListWorkItemsFilter {
   type?: string;
   state?: string;
@@ -29,6 +37,7 @@ export interface ListWorkItemsFilter {
 export class WorkItemService {
   private dbService = DatabaseService.getInstance();
   private eventBus = InProcessEventBus.getInstance();
+  private schemaService = new CustomFieldSchemaService();
 
   public async createWorkItem(dto: CreateWorkItemDto, actorId: string = 'system'): Promise<WorkItem> {
     if (!VALID_WORK_ITEM_TYPES.includes(dto.type as WorkItemType)) {
@@ -36,13 +45,23 @@ export class WorkItemService {
     }
 
     const type = dto.type as WorkItemType;
+    const customFields = dto.custom_fields || {};
+
+    // Validate against registered schema if present
+    const schemaDef = await this.schemaService.getLatestSchema(type);
+    if (schemaDef) {
+      const valResult = this.schemaService.validateCustomFields(schemaDef.schema, customFields);
+      if (!valResult.valid) {
+        throw new InvalidCustomFieldsError(valResult.errors || []);
+      }
+    }
+
     const id = randomUUID();
     const status = DEFAULT_STATUS[type];
     const now = new Date().toISOString();
     const priority = dto.priority || 'P2';
     const severity = dto.severity || null;
     const description = dto.description || '';
-    const customFields = dto.custom_fields || {};
     const tags = dto.tags || [];
 
     await this.dbService.initialize();
@@ -71,6 +90,10 @@ export class WorkItemService {
       ],
     );
 
+    const mergedCustomFields = schemaDef?.defaults
+      ? { ...schemaDef.defaults, ...customFields }
+      : customFields;
+
     const item: WorkItem = {
       id,
       type,
@@ -84,10 +107,11 @@ export class WorkItemService {
       team_id: dto.team_id,
       org_id: dto.org_id,
       entered_state_at: now,
-      custom_fields: customFields,
+      custom_fields: mergedCustomFields,
       tags,
       created_at: now,
       updated_at: now,
+      aging_bucket: this.computeAgingBucket(now, mergedCustomFields.aging_bucket),
     };
 
     await this.eventBus.publish('WorkItemCreated', id, { type: 'user', id: actorId }, { work_item: item });
@@ -135,13 +159,13 @@ export class WorkItemService {
     query += ` ORDER BY created_at DESC`;
 
     const res = await this.dbService.db.query<any>(query, params);
-    let items = (res.rows || []).map((row) => this.mapRowToWorkItem(row));
+    const mapped = await Promise.all((res.rows || []).map((row) => this.mapRowToWorkItem(row)));
 
     if (filter.aging_bucket) {
-      items = items.filter((item) => item.aging_bucket === filter.aging_bucket);
+      return mapped.filter((item) => item.aging_bucket === filter.aging_bucket);
     }
 
-    return items;
+    return mapped;
   }
 
   public computeAgingBucket(enteredStateAt: string, customAgingBucket?: string): 'green' | 'amber' | 'red' {
@@ -157,9 +181,14 @@ export class WorkItemService {
     return 'green';
   }
 
-  private mapRowToWorkItem(row: any): WorkItem {
-    const customFields = typeof row.custom_fields === 'string' ? JSON.parse(row.custom_fields) : row.custom_fields || {};
+  private async mapRowToWorkItem(row: any): Promise<WorkItem> {
+    const rawCustomFields = typeof row.custom_fields === 'string' ? JSON.parse(row.custom_fields) : row.custom_fields || {};
     const enteredStateAt = typeof row.entered_state_at === 'string' ? row.entered_state_at : new Date(row.entered_state_at).toISOString();
+
+    const schemaDef = await this.schemaService.getLatestSchema(row.type);
+    const customFields = schemaDef?.defaults
+      ? { ...schemaDef.defaults, ...rawCustomFields }
+      : rawCustomFields;
 
     const agingBucket = this.computeAgingBucket(enteredStateAt, customFields.aging_bucket);
 
@@ -181,6 +210,6 @@ export class WorkItemService {
       created_at: typeof row.created_at === 'string' ? row.created_at : new Date(row.created_at).toISOString(),
       updated_at: typeof row.updated_at === 'string' ? row.updated_at : new Date(row.updated_at).toISOString(),
       aging_bucket: agingBucket,
-    } as any;
+    };
   }
 }
