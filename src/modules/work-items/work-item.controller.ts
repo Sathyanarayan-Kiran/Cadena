@@ -13,12 +13,14 @@ import { WorkItemService, UnrecognizedTypeError, InvalidCustomFieldsError, ListW
 import { CreateWorkItemDto } from './work-item.types';
 import { CustomFieldSchemaService, RegisterCustomFieldSchemaDto } from './custom-field-schema.service';
 import { WorkflowService, GuardFailedError, MissingRequiredFieldsError, InvalidTransitionError } from '../workflow/workflow.service';
+import { RbacService } from '../rbac/rbac.service';
 
 @Controller('workitems')
 export class WorkItemController {
   private service = new WorkItemService();
   private schemaService = new CustomFieldSchemaService();
   private workflowService = new WorkflowService();
+  private rbacService = new RbacService();
 
   @Post()
   async createWorkItem(
@@ -60,14 +62,17 @@ export class WorkItemController {
     @Param('id') id: string,
     @Body() body: { to_state: string; fields?: Record<string, any> },
     @Headers('x-actor-id') actorId?: string,
-    @Headers('x-actor-role') actorRole?: string,
+    @Headers('x-actor-role') headerRole?: string,
   ) {
     try {
+      const resolvedActorId = actorId || '00000000-0000-0000-0000-000000000001';
+      const actorRole = await this.rbacService.resolveActorRole(resolvedActorId, headerRole);
+
       return await this.workflowService.transitionWorkItem({
         workItemId: id,
         toState: body.to_state,
-        actorId: actorId || 'user-1',
-        actorRole: actorRole || 'developer',
+        actorId: resolvedActorId,
+        actorRole,
         fields: body.fields,
       });
     } catch (err) {
