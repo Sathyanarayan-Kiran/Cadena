@@ -39,9 +39,16 @@ export class WorkItemController {
   async createWorkItem(
     @Body() dto: CreateWorkItemDto,
     @Headers('x-actor-id') actorId?: string,
+    @Headers('x-org-id') headerOrgId?: string,
   ) {
     try {
-      const item = await this.service.createWorkItem(dto, actorId || 'user-1');
+      if (headerOrgId && dto.org_id && headerOrgId !== dto.org_id) {
+        throw new HttpException('Body org_id does not match the active tenant', HttpStatus.FORBIDDEN);
+      }
+      const item = await this.service.createWorkItem(
+        { ...dto, org_id: headerOrgId || dto.org_id },
+        actorId || 'user-1',
+      );
       return item;
     } catch (err) {
       if (err instanceof UnrecognizedTypeError) {
@@ -76,6 +83,7 @@ export class WorkItemController {
     @Body() body: { to_state: string; fields?: Record<string, any> },
     @Headers('x-actor-id') actorId?: string,
     @Headers('x-actor-role') headerRole?: string,
+    @Headers('x-org-id') headerOrgId?: string,
   ) {
     try {
       const resolvedActorId = actorId || '00000000-0000-0000-0000-000000000001';
@@ -83,6 +91,7 @@ export class WorkItemController {
 
       return await this.workflowService.transitionWorkItem({
         workItemId: id,
+        orgId: headerOrgId || '00000000-0000-0000-0000-000000000099',
         toState: body.to_state,
         actorId: resolvedActorId,
         actorRole,
@@ -153,9 +162,33 @@ export class WorkItemController {
     return this.service.listWorkItems(filter, orgId);
   }
 
+  @Get(':id/available-transitions')
+  async getAvailableTransitions(
+    @Param('id') id: string,
+    @Headers('x-org-id') headerOrgId?: string,
+  ) {
+    try {
+      return await this.workflowService.getAvailableTransitions(
+        id,
+        headerOrgId || '00000000-0000-0000-0000-000000000099',
+      );
+    } catch (err) {
+      if (err instanceof InvalidTransitionError) {
+        throw new HttpException(err.message, HttpStatus.NOT_FOUND);
+      }
+      throw err;
+    }
+  }
+
   @Get(':id')
-  async getWorkItem(@Param('id') id: string) {
-    const item = await this.service.getWorkItemById(id);
+  async getWorkItem(
+    @Param('id') id: string,
+    @Headers('x-org-id') headerOrgId?: string,
+  ) {
+    const item = await this.service.getWorkItemById(
+      id,
+      headerOrgId || '00000000-0000-0000-0000-000000000099',
+    );
     if (!item) {
       throw new HttpException('WorkItem not found', HttpStatus.NOT_FOUND);
     }

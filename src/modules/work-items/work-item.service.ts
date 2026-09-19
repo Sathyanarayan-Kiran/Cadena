@@ -117,7 +117,8 @@ export class WorkItemService {
       tags,
       created_at: now,
       updated_at: now,
-      aging_bucket: this.computeAgingBucket(now, mergedCustomFields.aging_bucket),
+      aging_bucket: 'green',
+      aging_score: 0,
     };
 
     await this.eventBus.publish('WorkItemCreated', id, { type: 'user', id: actorId }, { work_item: item });
@@ -125,12 +126,17 @@ export class WorkItemService {
     return item;
   }
 
-  public async getWorkItemById(id: string): Promise<WorkItem | null> {
+  public async getWorkItemById(id: string, orgId?: string): Promise<WorkItem | null> {
     await this.dbService.initialize();
-    const res = await this.dbService.db.query<any>(
-      `SELECT * FROM work_items WHERE id = $1`,
-      [id],
-    );
+    const res = orgId
+      ? await this.dbService.db.query<any>(
+          `SELECT * FROM work_items WHERE id = $1 AND org_id = $2`,
+          [id, orgId],
+        )
+      : await this.dbService.db.query<any>(
+          `SELECT * FROM work_items WHERE id = $1`,
+          [id],
+        );
     if (!res.rows || res.rows.length === 0) return null;
     return this.mapRowToWorkItem(res.rows[0]);
   }
@@ -174,19 +180,6 @@ export class WorkItemService {
     return mapped;
   }
 
-  public computeAgingBucket(enteredStateAt: string, customAgingBucket?: string): 'green' | 'amber' | 'red' {
-    if (customAgingBucket === 'green' || customAgingBucket === 'amber' || customAgingBucket === 'red') {
-      return customAgingBucket;
-    }
-    const entered = new Date(enteredStateAt).getTime();
-    const now = Date.now();
-    const diffHours = (now - entered) / (1000 * 60 * 60);
-
-    if (diffHours >= 48) return 'red';
-    if (diffHours >= 24) return 'amber';
-    return 'green';
-  }
-
   private async mapRowToWorkItem(row: any): Promise<WorkItem> {
     const rawCustomFields = typeof row.custom_fields === 'string' ? JSON.parse(row.custom_fields) : row.custom_fields || {};
     const enteredStateAt = typeof row.entered_state_at === 'string' ? row.entered_state_at : new Date(row.entered_state_at).toISOString();
@@ -196,7 +189,11 @@ export class WorkItemService {
       ? { ...schemaDef.defaults, ...rawCustomFields }
       : rawCustomFields;
 
-    const agingBucket = this.computeAgingBucket(enteredStateAt, customFields.aging_bucket);
+    const persistedBucket = row.aging_bucket;
+    const agingBucket = persistedBucket === 'amber' || persistedBucket === 'red'
+      ? persistedBucket
+      : 'green';
+    const agingScore = Number(row.aging_score || 0);
 
     return {
       id: row.id,
@@ -216,6 +213,7 @@ export class WorkItemService {
       created_at: typeof row.created_at === 'string' ? row.created_at : new Date(row.created_at).toISOString(),
       updated_at: typeof row.updated_at === 'string' ? row.updated_at : new Date(row.updated_at).toISOString(),
       aging_bucket: agingBucket,
+      aging_score: agingScore,
     };
   }
 }

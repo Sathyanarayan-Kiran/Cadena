@@ -65,6 +65,7 @@ describe('US2.2 — Workflow Guards & Required Fields Enforcement', () => {
     // 2. Attempt transition 'triaged' -> 'investigating' with unauthorized role 'developer'
     const failRes = await request(app.getHttpServer())
       .post(`/workitems/${incidentId}/transitions`)
+      .set('x-org-id', orgId)
       .set('x-actor-role', 'developer')
       .send({
         to_state: 'investigating',
@@ -78,6 +79,7 @@ describe('US2.2 — Workflow Guards & Required Fields Enforcement', () => {
     // 3. Attempt transition with authorized role 'incident_commander'
     const successRes = await request(app.getHttpServer())
       .post(`/workitems/${incidentId}/transitions`)
+      .set('x-org-id', orgId)
       .set('x-actor-role', 'incident_commander')
       .send({
         to_state: 'investigating',
@@ -104,6 +106,7 @@ describe('US2.2 — Workflow Guards & Required Fields Enforcement', () => {
 
     await request(app.getHttpServer())
       .post(`/workitems/${incidentId}/transitions`)
+      .set('x-org-id', orgId)
       .set('x-actor-role', 'incident_commander')
       .send({ to_state: 'investigating' })
       .expect(201);
@@ -111,6 +114,7 @@ describe('US2.2 — Workflow Guards & Required Fields Enforcement', () => {
     // 2. Attempt transition 'investigating' -> 'mitigated' WITHOUT 'mitigation_summary'
     const failRes = await request(app.getHttpServer())
       .post(`/workitems/${incidentId}/transitions`)
+      .set('x-org-id', orgId)
       .send({
         to_state: 'mitigated',
         fields: {},
@@ -123,6 +127,7 @@ describe('US2.2 — Workflow Guards & Required Fields Enforcement', () => {
     // 3. Attempt transition WITH required field 'mitigation_summary' supplied
     const successRes = await request(app.getHttpServer())
       .post(`/workitems/${incidentId}/transitions`)
+      .set('x-org-id', orgId)
       .send({
         to_state: 'mitigated',
         fields: {

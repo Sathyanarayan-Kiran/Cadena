@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { DatabaseService } from '../src/database/database.service';
 import { SlaCalculatorService } from '../src/modules/sla/sla-calculator.service';
 import { AgingEngineService } from '../src/modules/sla/aging-engine.service';
+import { WorkItemService } from '../src/modules/work-items/work-item.service';
 import { randomUUID } from 'crypto';
 
 describe('US3.2: Continuous Aging Score & Heatmap Buckets', () => {
@@ -47,9 +48,14 @@ describe('US3.2: Continuous Aging Score & Heatmap Buckets', () => {
     await agingEngine.recomputeAgingForOrg(ORG_ID);
 
     // Verify item in database
-    const res = await dbService.db.query(`SELECT aging_bucket, aging_score FROM work_items WHERE id = $1;`, [itemId]);
+    const res = await dbService.db.query<{ aging_bucket: string; aging_score: number }>(`SELECT aging_bucket, aging_score FROM work_items WHERE id = $1;`, [itemId]);
     expect(res.rows[0].aging_bucket).toBe('amber');
     expect(Number(res.rows[0].aging_score)).toBe(80);
+
+    // The public WorkItem read model must expose the persisted engine result.
+    const item = await new WorkItemService().getWorkItemById(itemId, ORG_ID);
+    expect(item?.aging_bucket).toBe('amber');
+    expect(item?.aging_score).toBe(80);
   });
 
   it("flips bucket to red when item exceeds 100% of threshold during recompute cycle", async () => {
@@ -72,8 +78,12 @@ describe('US3.2: Continuous Aging Score & Heatmap Buckets', () => {
     await agingEngine.recomputeAgingForOrg(ORG_ID);
 
     // Verify item bucket flipped to red
-    const res = await dbService.db.query(`SELECT aging_bucket, aging_score FROM work_items WHERE id = $1;`, [itemId]);
+    const res = await dbService.db.query<{ aging_bucket: string; aging_score: number }>(`SELECT aging_bucket, aging_score FROM work_items WHERE id = $1;`, [itemId]);
     expect(res.rows[0].aging_bucket).toBe('red');
     expect(Number(res.rows[0].aging_score)).toBe(125); // 75/60 * 100 = 125%
+
+    const item = await new WorkItemService().getWorkItemById(itemId, ORG_ID);
+    expect(item?.aging_bucket).toBe('red');
+    expect(item?.aging_score).toBe(125);
   });
 });

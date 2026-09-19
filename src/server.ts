@@ -4,6 +4,7 @@ import { DatabaseService } from './database/database.service';
 import { WorkItemService } from './modules/work-items/work-item.service';
 import { WorkflowService } from './modules/workflow/workflow.service';
 import { LineageService } from './modules/lineage/lineage.service';
+import { randomUUID } from 'crypto';
 
 async function bootstrap() {
   await DatabaseService.getInstance().initialize();
@@ -15,6 +16,30 @@ async function bootstrap() {
 
   const orgId = '00000000-0000-0000-0000-000000000099';
   const teamId = '00000000-0000-0000-0000-000000000001';
+
+  const db = DatabaseService.getInstance().db;
+  await db.query(
+    `INSERT INTO orgs (id, name) VALUES ($1, 'Primary Pilot Org') ON CONFLICT DO NOTHING`,
+    [orgId],
+  );
+  await db.query(
+    `INSERT INTO teams (id, org_id, name) VALUES ($1, $2, 'Platform Team') ON CONFLICT DO NOTHING`,
+    [teamId, orgId],
+  );
+
+  const defaultPolicies = [
+    { type: 'story', state: 'In Review', minutes: 960, calendar: '5x8' },
+    { type: 'incident', state: 'Triaged', minutes: 120, calendar: '24x7' },
+    { type: 'incident', state: 'Investigating', minutes: 60, calendar: '24x7' },
+  ];
+  for (const policy of defaultPolicies) {
+    await db.query(
+      `INSERT INTO sla_policies (id, org_id, item_type, state, threshold_minutes, calendar)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (org_id, item_type, state) DO NOTHING`,
+      [randomUUID(), orgId, policy.type, policy.state, policy.minutes, policy.calendar],
+    );
+  }
 
   const existingItems = await itemService.listWorkItems({}, orgId);
   if (existingItems.length === 0) {
@@ -36,7 +61,7 @@ async function bootstrap() {
 
     // 1. Create Epic
     const epic = await itemService.createWorkItem({
-      type: 'story',
+      type: 'epic',
       title: 'Epic: Unified Platform Core Kernel',
       description: 'Canonical WorkItem schema and workflow state engine',
       priority: 'P0',
@@ -54,7 +79,7 @@ async function bootstrap() {
       org_id: orgId,
       custom_fields: { story_points: 8, sprint: 'Sprint 1' },
     });
-    await lineageService.createLink(story.id, epic.id, 'child_of');
+    await lineageService.createLink(story.id, epic.id, 'child_of', 'system', orgId);
 
     // 3. Create Bug Fix Story
     const bugFix = await itemService.createWorkItem({
@@ -66,7 +91,7 @@ async function bootstrap() {
       org_id: orgId,
       custom_fields: { story_points: 2, sprint: 'Sprint 1' },
     });
-    await lineageService.createLink(bugFix.id, story.id, 'child_of');
+    await lineageService.createLink(bugFix.id, story.id, 'child_of', 'system', orgId);
 
     // 4. Create Incident
     const incident = await itemService.createWorkItem({
@@ -77,9 +102,9 @@ async function bootstrap() {
       severity: 'SEV1',
       team_id: teamId,
       org_id: orgId,
-      custom_fields: { aging_bucket: 'red', alert_source: 'Datadog' },
+      custom_fields: { alert_source: 'Datadog' },
     });
-    await lineageService.createLink(incident.id, bugFix.id, 'fixed_by');
+    await lineageService.createLink(incident.id, bugFix.id, 'fixed_by', 'system', orgId);
 
     console.log('✅ Demo seed data created successfully!');
   }

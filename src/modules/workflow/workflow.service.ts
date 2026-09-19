@@ -3,6 +3,58 @@ import { DatabaseService } from '../../database/database.service';
 import { InProcessEventBus } from '../events/event-bus';
 import { PublishedWorkflowRecord, WorkflowDefinition } from './workflow.types';
 
+const BUILT_IN_WORKFLOWS: Record<string, WorkflowDefinition> = {
+  epic: {
+    type: 'epic',
+    states: ['Proposed', 'Planned', 'In Progress', 'In Review', 'Blocked', 'Done', 'Verified', 'Closed', 'Reopened'],
+    initial_state: 'Proposed',
+    terminal_states: ['Closed'],
+    transitions: [
+      { from: 'Proposed', to: 'Planned' },
+      { from: 'Planned', to: 'In Progress' },
+      { from: 'In Progress', to: 'In Review' },
+      { from: 'In Review', to: 'Blocked' },
+      { from: 'Blocked', to: 'In Progress' },
+      { from: 'In Review', to: 'Done' },
+      { from: 'Done', to: 'Verified' },
+      { from: 'Verified', to: 'Closed' },
+      { from: 'Closed', to: 'Reopened' },
+      { from: 'Reopened', to: 'In Progress' },
+    ],
+  },
+  story: {
+    type: 'story',
+    states: ['Proposed', 'Planned', 'In Progress', 'In Review', 'Blocked', 'Done', 'Verified', 'Closed', 'Reopened'],
+    initial_state: 'Proposed',
+    terminal_states: ['Closed'],
+    transitions: [
+      { from: 'Proposed', to: 'Planned' },
+      { from: 'Planned', to: 'In Progress' },
+      { from: 'In Progress', to: 'In Review' },
+      { from: 'In Review', to: 'Blocked' },
+      { from: 'Blocked', to: 'In Progress' },
+      { from: 'In Review', to: 'Done' },
+      { from: 'Done', to: 'Verified' },
+      { from: 'Verified', to: 'Closed' },
+      { from: 'Closed', to: 'Reopened' },
+      { from: 'Reopened', to: 'In Progress' },
+    ],
+  },
+  incident: {
+    type: 'incident',
+    states: ['Triaged', 'Investigating', 'Mitigated', 'Resolved', 'Post-incident Review', 'Closed'],
+    initial_state: 'Triaged',
+    terminal_states: ['Closed'],
+    transitions: [
+      { from: 'Triaged', to: 'Investigating', guard: 'actor.role in [on_call, incident_commander]' },
+      { from: 'Investigating', to: 'Mitigated', requires_fields: ['mitigation_summary'] },
+      { from: 'Mitigated', to: 'Resolved', guard: 'incident_commander' },
+      { from: 'Resolved', to: 'Post-incident Review' },
+      { from: 'Post-incident Review', to: 'Closed' },
+    ],
+  },
+};
+
 export class InvalidWorkflowDefinitionError extends Error {
   constructor(public readonly errors: string[]) {
     super(`Invalid WorkflowDefinition: ${errors.join('; ')}`);
@@ -37,6 +89,7 @@ export class InvalidTransitionError extends Error {
 
 export interface TransitionContext {
   workItemId: string;
+  orgId: string;
   toState: string;
   actorId: string;
   actorRole: string;
@@ -187,7 +240,19 @@ export class WorkflowService {
     }
 
     const res = await this.dbService.db.query<any>(query, params);
-    if (!res.rows || res.rows.length === 0) return null;
+    if (!res.rows || res.rows.length === 0) {
+      const builtIn = BUILT_IN_WORKFLOWS[type];
+      if (builtIn && (!version || version === 1)) {
+        return {
+          id: `built-in:${type}`,
+          type,
+          version: 1,
+          definition: builtIn,
+          created_at: '2026-09-18T00:00:00.000Z',
+        };
+      }
+      return null;
+    }
 
     const row = res.rows[0];
     return {
@@ -204,8 +269,8 @@ export class WorkflowService {
 
     // 1. Fetch work item
     const itemRes = await this.dbService.db.query<any>(
-      `SELECT * FROM work_items WHERE id = $1`,
-      [ctx.workItemId],
+      `SELECT * FROM work_items WHERE id = $1 AND org_id = $2`,
+      [ctx.workItemId, ctx.orgId],
     );
     if (!itemRes.rows || itemRes.rows.length === 0) {
       throw new InvalidTransitionError(`Work item '${ctx.workItemId}' not found`);
@@ -229,10 +294,7 @@ export class WorkflowService {
     );
 
     if (!matchingRule) {
-      // If no explicit definition exists, check default status transitions or reject
-      if (wf) {
-        throw new InvalidTransitionError(`Transition from '${fromState}' to '${ctx.toState}' is not allowed for type '${itemType}' v${workflowVersion}`);
-      }
+      throw new InvalidTransitionError(`Transition from '${fromState}' to '${ctx.toState}' is not allowed for type '${itemType}' v${workflowVersion}`);
     }
 
     // 3. Evaluate Role Guard if specified on rule
@@ -290,6 +352,32 @@ export class WorkflowService {
       custom_fields: mergedFields,
       updated_at: now,
     };
+  }
+
+  public async getAvailableTransitions(workItemId: string, orgId: string): Promise<{
+    current_state: string;
+    transitions: Array<{ to_state: string; requires_fields: string[]; guard?: unknown }>;
+  }> {
+    await this.dbService.initialize();
+    const itemRes = await this.dbService.db.query<any>(
+      `SELECT type, status, workflow_version FROM work_items WHERE id = $1 AND org_id = $2`,
+      [workItemId, orgId],
+    );
+    if (!itemRes.rows || itemRes.rows.length === 0) {
+      throw new InvalidTransitionError(`Work item '${workItemId}' not found`);
+    }
+
+    const item = itemRes.rows[0];
+    const workflow = await this.getWorkflowDefinition(item.type, item.workflow_version);
+    const transitions = (workflow?.definition.transitions || [])
+      .filter((transition) => transition.from === item.status)
+      .map((transition) => ({
+        to_state: transition.to,
+        requires_fields: transition.requires_fields || [],
+        guard: transition.guard,
+      }));
+
+    return { current_state: item.status, transitions };
   }
 
   private evaluateRoleGuard(guard: any, actorRole: string): void {

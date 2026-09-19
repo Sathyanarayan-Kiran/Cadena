@@ -63,7 +63,7 @@ export async function importBacklogDogfooding(
   for (const epicData of backlog.epics) {
     // 1. Create Epic WorkItem
     const epicItem = await itemService.createWorkItem({
-      type: 'story',
+      type: 'epic',
       title: `[${epicData.epic_id}] ${epicData.title}`,
       description: `Epic specification: ${epicData.title}`,
       priority: 'P1',
@@ -95,7 +95,7 @@ export async function importBacklogDogfooding(
       storyCount++;
 
       // Create typed relationship edge child_of
-      await lineageService.createLink(storyItem.id, epicItem.id, 'child_of');
+      await lineageService.createLink(storyItem.id, epicItem.id, 'child_of', 'backlog-import', orgId);
       linkCount++;
     }
   }

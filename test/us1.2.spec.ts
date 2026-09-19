@@ -24,7 +24,7 @@ describe('US1.2 — Work Item Filtering & Multi-Tenant Isolation', () => {
 
   it('US1.2: filters work items by state and aging bucket', async () => {
     // 1. Create items with different states and aging buckets for orgA
-    // Item 1: state = in_review, custom_fields = { aging_bucket: 'red' }
+    // Item 1: state = in_review, persisted aging bucket = red
     await request(app.getHttpServer())
       .post('/workitems')
       .send({
@@ -32,12 +32,11 @@ describe('US1.2 — Work Item Filtering & Multi-Tenant Isolation', () => {
         title: 'Story In Review Red Aging',
         team_id: team1,
         org_id: orgA,
-        custom_fields: { aging_bucket: 'red' },
       });
 
     // Manually set status to in_review for Item 1
     const db = DatabaseService.getInstance().db;
-    await db.query(`UPDATE work_items SET status = 'in_review' WHERE title = 'Story In Review Red Aging'`);
+    await db.query(`UPDATE work_items SET status = 'in_review', aging_bucket = 'red' WHERE title = 'Story In Review Red Aging'`);
 
     // Item 2: state = in_review, custom_fields = { aging_bucket: 'green' }
     await request(app.getHttpServer())
@@ -47,7 +46,6 @@ describe('US1.2 — Work Item Filtering & Multi-Tenant Isolation', () => {
         title: 'Story In Review Green Aging',
         team_id: team1,
         org_id: orgA,
-        custom_fields: { aging_bucket: 'green' },
       });
     await db.query(`UPDATE work_items SET status = 'in_review' WHERE title = 'Story In Review Green Aging'`);
 
@@ -59,8 +57,8 @@ describe('US1.2 — Work Item Filtering & Multi-Tenant Isolation', () => {
         title: 'Story Proposed Red Aging',
         team_id: team1,
         org_id: orgA,
-        custom_fields: { aging_bucket: 'red' },
       });
+    await db.query(`UPDATE work_items SET aging_bucket = 'red' WHERE title = 'Story Proposed Red Aging'`);
 
     // Query GET /workitems?state=in_review&aging_bucket=red for orgA
     const res = await request(app.getHttpServer())
@@ -114,5 +112,30 @@ describe('US1.2 — Work Item Filtering & Multi-Tenant Isolation', () => {
     const titlesB = resOrgB.body.map((i: any) => i.title);
     expect(titlesB).toContain('Org B Secret Incident');
     expect(titlesB).not.toContain('Org A Secret Story');
+  });
+
+  it('US1.2: denies cross-tenant item reads and links by id', async () => {
+    const itemA = await request(app.getHttpServer())
+      .post('/workitems')
+      .set('x-org-id', orgA)
+      .send({ type: 'story', title: 'Org A Link Source', team_id: team1, org_id: orgA })
+      .expect(201);
+
+    const itemB = await request(app.getHttpServer())
+      .post('/workitems')
+      .set('x-org-id', orgB)
+      .send({ type: 'story', title: 'Org B Private Target', team_id: team1, org_id: orgB })
+      .expect(201);
+
+    await request(app.getHttpServer())
+      .get(`/workitems/${itemB.body.id}`)
+      .set('x-org-id', orgA)
+      .expect(404);
+
+    await request(app.getHttpServer())
+      .post(`/workitems/${itemA.body.id}/links`)
+      .set('x-org-id', orgA)
+      .send({ target_id: itemB.body.id, link_type: 'relates_to' })
+      .expect(400);
   });
 });

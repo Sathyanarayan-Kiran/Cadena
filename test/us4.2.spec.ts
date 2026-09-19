@@ -48,6 +48,7 @@ describe('US4.2 — Upstream Lineage Traversal Query', () => {
 
     await request(app.getHttpServer())
       .post(`/workitems/${storyId}/links`)
+      .set('x-org-id', orgId)
       .send({ target_id: epicId, link_type: 'child_of' })
       .expect(201);
 
@@ -65,6 +66,7 @@ describe('US4.2 — Upstream Lineage Traversal Query', () => {
 
     await request(app.getHttpServer())
       .post(`/workitems/${fixId}/links`)
+      .set('x-org-id', orgId)
       .send({ target_id: storyId, link_type: 'child_of' })
       .expect(201);
 
@@ -82,12 +84,14 @@ describe('US4.2 — Upstream Lineage Traversal Query', () => {
 
     await request(app.getHttpServer())
       .post(`/workitems/${incidentId}/links`)
+      .set('x-org-id', orgId)
       .send({ target_id: fixId, link_type: 'fixed_by' })
       .expect(201);
 
     // 5. Query upstream lineage GET /workitems/{incidentId}/lineage?direction=up
     const lineageRes = await request(app.getHttpServer())
       .get(`/workitems/${incidentId}/lineage?direction=up`)
+      .set('x-org-id', orgId)
       .expect(200);
 
     expect(lineageRes.body.root_id).toBe(incidentId);
@@ -99,6 +103,19 @@ describe('US4.2 — Upstream Lineage Traversal Query', () => {
       'Bug Fix PR: Token Expiration Fix',
       'Story: Implement OAuth Tokens',
       'Epic: Authentication Redesign',
+    ]);
+
+    // Downstream traversal follows the inverse semantic direction.
+    const downstreamRes = await request(app.getHttpServer())
+      .get(`/workitems/${epicId}/lineage?direction=down`)
+      .set('x-org-id', orgId)
+      .expect(200);
+
+    expect(downstreamRes.body.chain.map((node: any) => node.title)).toEqual([
+      'Epic: Authentication Redesign',
+      'Story: Implement OAuth Tokens',
+      'Bug Fix PR: Token Expiration Fix',
+      'Incident: Token Validation Failure',
     ]);
   });
 });

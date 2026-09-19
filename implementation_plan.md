@@ -2,6 +2,79 @@
 
 This document outlines the architecture, technical design, database schema, event model, and execution plan for **Epic 3 — Aging & SLA Engine** (US3.1, US3.2, US3.3).
 
+## Codex implementation update — 2026-09-19
+
+> **Attribution boundary:** Everything in this section describes work implemented by **Codex** on 2026-09-19. The section titled **Original Gemini implementation plan (historical baseline)** and all content below it are retained to distinguish the earlier Gemini plan from the Codex changes.
+
+**Status:** Implemented; final build and automated regression verification recorded below.
+
+### Changes implemented by Codex
+
+#### Release and correctness stabilization
+
+- Corrected the TypeScript build layout by compiling only `src/` with `src` as `rootDir`, so the existing `npm start` command resolves the emitted `dist/server.js` entry point.
+- Fixed strict typing for the SLA team-lead query and the SLA test result rows.
+- Added `aging_score` to the canonical API type and corrected WorkItem mapping to return persisted `aging_bucket` and `aging_score` values written by the aging engine.
+- Removed the older API read-path behavior that inferred SLA health from `custom_fields`, making the SLA columns the single source of truth.
+- Added built-in, enforced workflows for Epic, Story, and Incident items. Items without a custom published workflow can no longer transition to arbitrary state names.
+- Added `GET /workitems/:id/available-transitions` so clients can render only workflow-permitted next states and required fields.
+- Scoped item detail, transition, relationship, and lineage operations to the active `x-org-id` tenant; cross-tenant links are explicitly rejected.
+- Corrected lineage traversal so upstream and downstream follow relationship semantics instead of returning the same traversal.
+
+#### Canonical model and dogfooding
+
+- Added `epic` as a first-class WorkItem type with the delivery workflow and valid Epic/Story relationship pairs.
+- Updated Stage B backlog import to create actual Epic items rather than Stories carrying an `is_epic` flag as their effective type.
+- Kept the original backlog counts intact: 12 Epics, 38 Stories, and 38 parent-child relationships.
+
+#### Codex UI overhaul
+
+- Replaced the single demo card grid with a responsive team workspace and application navigation.
+- Added tenant-wide KPI cards, SLA attention messaging, search, type/SLA filters, and board/list view switching.
+- Added compact, worst-SLA-first work cards grouped by workflow state.
+- Added an accessible item-details drawer with overview, safe custom-field rendering, and contextual actions.
+- Replaced free-text transitions with options returned by the active workflow, including conditional mitigation-summary capture.
+- Added responsive and keyboard-accessible native dialogs for create, transition, linking, lineage, SLA policy, pilot actions, and backlog-import confirmation.
+- Replaced browser `alert()`/`confirm()` flows with inline errors, confirmation UI, and live-region toasts.
+- Added distinct “No SLA policy” presentation so ungoverned work is not misrepresented as healthy green work.
+- Added 30-second background refresh, loading skeletons, retryable error states, responsive mobile navigation, reduced-motion support, and visible keyboard focus.
+- Removed dynamic `innerHTML` rendering of API data; user-controlled values now render through `textContent`/DOM nodes to prevent stored markup injection.
+
+#### Codex verification additions
+
+- Updated existing tests to pass tenant context on protected item routes.
+- Updated SLA filter fixtures to use the persisted SLA columns instead of a custom-field override.
+- Updated dogfooding verification to assert that imported backlog parents are true `epic` items.
+- Added/updated coverage for the public SLA API contract, tenant isolation, and directional lineage behavior.
+
+### Primary files changed by Codex
+
+- `public/index.html`
+- `src/modules/work-items/work-item.types.ts`
+- `src/modules/work-items/work-item.service.ts`
+- `src/modules/work-items/work-item.controller.ts`
+- `src/modules/workflow/workflow.service.ts`
+- `src/modules/lineage/lineage.types.ts`
+- `src/modules/lineage/lineage.service.ts`
+- `src/modules/lineage/lineage.controller.ts`
+- `src/modules/sla/aging-engine.service.ts`
+- `src/scripts/import-backlog.ts`
+- `src/server.ts`
+- `tsconfig.json`
+- Acceptance and regression tests under `test/`
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Browser UI script parse check: **PASS**
+- `npm test`: **PASS — 12 test files, 22 tests**
+
+---
+
+## Original Gemini implementation plan (historical baseline)
+
+The remainder of this document is the earlier Gemini-authored proposal. It is preserved as historical design context; the Codex section above is the authoritative record of the follow-up implementation.
+
 ---
 
 ## User Review Required

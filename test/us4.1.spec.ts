@@ -49,6 +49,7 @@ describe('US4.1 — Typed Links Between Work Items', () => {
     // 2. Create typed link: Incident B was `caused_by` Story A
     const linkRes = await request(app.getHttpServer())
       .post(`/workitems/${incidentId}/links`)
+      .set('x-org-id', orgId)
       .send({
         target_id: storyId,
         link_type: 'caused_by',
@@ -62,6 +63,7 @@ describe('US4.1 — Typed Links Between Work Items', () => {
     // 3. Verify link appears in Incident B relationship list (as outgoing link)
     const relB = await request(app.getHttpServer())
       .get(`/workitems/${incidentId}/links`)
+      .set('x-org-id', orgId)
       .expect(200);
 
     expect(relB.body.outgoing.some((l: any) => l.target_id === storyId && l.link_type === 'caused_by')).toBe(true);
@@ -69,6 +71,7 @@ describe('US4.1 — Typed Links Between Work Items', () => {
     // 4. Verify link appears in Story A relationship list (as incoming link)
     const relA = await request(app.getHttpServer())
       .get(`/workitems/${storyId}/links`)
+      .set('x-org-id', orgId)
       .expect(200);
 
     expect(relA.body.incoming.some((l: any) => l.source_id === incidentId && l.link_type === 'caused_by')).toBe(true);
@@ -99,6 +102,7 @@ describe('US4.1 — Typed Links Between Work Items', () => {
     // 2. Attempt invalid edge `deployed_in` between two Incidents
     const res = await request(app.getHttpServer())
       .post(`/workitems/${inc1.body.id}/links`)
+      .set('x-org-id', orgId)
       .send({
         target_id: inc2.body.id,
         link_type: 'deployed_in',

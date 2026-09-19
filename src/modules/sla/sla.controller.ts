@@ -1,8 +1,9 @@
-import { Controller, Get, Post, Body, Headers, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, Query, HttpException, HttpStatus } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { AgingEngineService } from './aging-engine.service';
 import { SlaCalendar } from './sla-calculator.service';
 import { randomUUID } from 'crypto';
+import { VALID_WORK_ITEM_TYPES } from '../work-items/work-item.types';
 
 @Controller()
 export class SlaController {
@@ -37,7 +38,23 @@ export class SlaController {
       calendar: SlaCalendar;
     },
   ) {
-    const orgId = body.org_id || headerOrgId || '00000000-0000-0000-0000-000000000099';
+    if (headerOrgId && body.org_id && body.org_id !== headerOrgId) {
+      throw new HttpException('Body org_id does not match the active tenant', HttpStatus.FORBIDDEN);
+    }
+    if (
+      !VALID_WORK_ITEM_TYPES.includes(body.item_type as (typeof VALID_WORK_ITEM_TYPES)[number])
+      || !body.state?.trim()
+      || !Number.isInteger(body.threshold_minutes)
+      || body.threshold_minutes <= 0
+      || !['5x8', '24x7'].includes(body.calendar)
+    ) {
+      throw new HttpException(
+        'A valid item type, state, positive whole-minute threshold, and calendar are required',
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    const orgId = headerOrgId || body.org_id || '00000000-0000-0000-0000-000000000099';
     const id = randomUUID();
 
     await this.dbService.db.query(
@@ -45,12 +62,12 @@ export class SlaController {
        VALUES ($1, $2, $3, $4, $5, $6)
        ON CONFLICT (org_id, item_type, state)
        DO UPDATE SET threshold_minutes = EXCLUDED.threshold_minutes, calendar = EXCLUDED.calendar;`,
-      [id, orgId, body.item_type, body.state, body.threshold_minutes, body.calendar],
+      [id, orgId, body.item_type, body.state.trim(), body.threshold_minutes, body.calendar],
     );
 
     const res = await this.dbService.db.query(
       `SELECT * FROM sla_policies WHERE org_id = $1 AND item_type = $2 AND state = $3;`,
-      [orgId, body.item_type, body.state],
+      [orgId, body.item_type, body.state.trim()],
     );
 
     return res.rows[0];

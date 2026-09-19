@@ -64,7 +64,7 @@ describe('US1.1 — Canonical WorkItem Schema', () => {
       .expect(422);
 
     expect(res.body.statusCode).toBe(422);
-    expect(res.body.valid_types).toEqual(['story', 'incident']);
+    expect(res.body.valid_types).toEqual(['epic', 'story', 'incident']);
     expect(res.body.message).toContain('Unrecognized work item type');
   });
 });

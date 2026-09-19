@@ -134,7 +134,7 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
 
         let teamLeadId: string | null = null;
         if (item.team_id) {
-          const leadRes = await this.dbService.db.query(
+          const leadRes = await this.dbService.db.query<{ id: string }>(
             `SELECT id FROM people WHERE team_id = $1 AND role = 'team_lead' LIMIT 1;`,
             [item.team_id],
           );

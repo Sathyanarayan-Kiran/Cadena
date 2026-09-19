@@ -20,6 +20,7 @@ export class InvalidEdgeTypeError extends Error {
 
 export interface LineageQueryParams {
   workItemId: string;
+  orgId?: string;
   direction?: 'up' | 'down';
   depth?: number;
   edgeTypes?: string[];
@@ -43,23 +44,31 @@ export class LineageService {
     targetId: string,
     linkType: LinkType,
     actorId: string = 'user-1',
+    orgId?: string,
   ): Promise<WorkItemLink> {
     await this.dbService.initialize();
 
     const sourceRes = await this.dbService.db.query<any>(
-      `SELECT id, type FROM work_items WHERE id = $1`,
-      [sourceId],
+      orgId
+        ? `SELECT id, type, org_id FROM work_items WHERE id = $1 AND org_id = $2`
+        : `SELECT id, type, org_id FROM work_items WHERE id = $1`,
+      orgId ? [sourceId, orgId] : [sourceId],
     );
     if (!sourceRes.rows || sourceRes.rows.length === 0) {
       throw new Error(`Source work item '${sourceId}' not found`);
     }
 
     const targetRes = await this.dbService.db.query<any>(
-      `SELECT id, type FROM work_items WHERE id = $1`,
-      [targetId],
+      orgId
+        ? `SELECT id, type, org_id FROM work_items WHERE id = $1 AND org_id = $2`
+        : `SELECT id, type, org_id FROM work_items WHERE id = $1`,
+      orgId ? [targetId, orgId] : [targetId],
     );
     if (!targetRes.rows || targetRes.rows.length === 0) {
       throw new Error(`Target work item '${targetId}' not found`);
+    }
+    if (sourceRes.rows[0].org_id !== targetRes.rows[0].org_id) {
+      throw new Error('Cross-tenant work item links are not allowed');
     }
 
     const sourceType = sourceRes.rows[0].type;
@@ -98,8 +107,13 @@ export class LineageService {
     return link;
   }
 
-  public async getItemRelationships(workItemId: string): Promise<{ outgoing: WorkItemLink[]; incoming: WorkItemLink[]; all: WorkItemLink[] }> {
+  public async getItemRelationships(workItemId: string, orgId?: string): Promise<{ outgoing: WorkItemLink[]; incoming: WorkItemLink[]; all: WorkItemLink[] }> {
     await this.dbService.initialize();
+
+    if (orgId) {
+      const item = await this.workItemService.getWorkItemById(workItemId, orgId);
+      if (!item) throw new Error(`Work item '${workItemId}' not found`);
+    }
 
     const outRes = await this.dbService.db.query<any>(
       `SELECT * FROM work_item_links WHERE source_id = $1 ORDER BY created_at ASC`,
@@ -123,6 +137,9 @@ export class LineageService {
   public async getLineage(params: LineageQueryParams): Promise<LineageResult> {
     await this.dbService.initialize();
 
+    const root = await this.workItemService.getWorkItemById(params.workItemId, params.orgId);
+    if (!root) throw new Error(`Work item '${params.workItemId}' not found`);
+
     const direction = params.direction || 'up';
     const maxDepth = params.depth || 10;
     const filterEdgeTypes = params.edgeTypes && params.edgeTypes.length > 0 ? new Set(params.edgeTypes) : null;
@@ -140,34 +157,25 @@ export class LineageService {
       if (currentDepth >= maxDepth) continue;
 
       // Query links for currId
-      const linksRes = await this.dbService.db.query<any>(
-        `SELECT * FROM work_item_links WHERE source_id = $1 OR target_id = $1`,
-        [currId],
-      );
+      const linksRes = params.orgId
+        ? await this.dbService.db.query<any>(
+            `SELECT link.* FROM work_item_links link
+             JOIN work_items source_item ON source_item.id = link.source_id
+             JOIN work_items target_item ON target_item.id = link.target_id
+             WHERE (link.source_id = $1 OR link.target_id = $1)
+               AND source_item.org_id = $2 AND target_item.org_id = $2`,
+            [currId, params.orgId],
+          )
+        : await this.dbService.db.query<any>(
+            `SELECT * FROM work_item_links WHERE source_id = $1 OR target_id = $1`,
+            [currId],
+          );
 
       for (const row of linksRes.rows || []) {
         const link = this.mapRowToLink(row);
         if (filterEdgeTypes && !filterEdgeTypes.has(link.link_type)) continue;
 
-        let nextId: string | null = null;
-
-        if (direction === 'up') {
-          // Upstream traversal:
-          // If currId is source_id and link is (caused_by, fixed_by, child_of, relates_to), next is target_id
-          // If currId is target_id and link is (parent_of, blocked_by), next is source_id
-          if (link.source_id === currId) {
-            nextId = link.target_id;
-          } else if (link.target_id === currId) {
-            nextId = link.source_id;
-          }
-        } else {
-          // Downstream traversal:
-          if (link.source_id === currId) {
-            nextId = link.target_id;
-          } else if (link.target_id === currId) {
-            nextId = link.source_id;
-          }
-        }
+        const nextId = this.getNextNodeId(link, currId, direction);
 
         if (nextId && !visitedNodeIds.has(nextId)) {
           visitedNodeIds.add(nextId);
@@ -185,7 +193,7 @@ export class LineageService {
     // Fetch node details for orderedNodeIds
     const nodes: any[] = [];
     for (const id of orderedNodeIds) {
-      const item = await this.workItemService.getWorkItemById(id);
+      const item = await this.workItemService.getWorkItemById(id, params.orgId);
       if (item) nodes.push(item);
     }
 
@@ -196,6 +204,30 @@ export class LineageService {
       edges: resultEdges,
       chain: nodes,
     };
+  }
+
+  private getNextNodeId(link: WorkItemLink, currentId: string, direction: 'up' | 'down'): string | null {
+    if (link.link_type === 'relates_to') {
+      return link.source_id === currentId ? link.target_id : link.source_id;
+    }
+
+    const sourcePointsUpstream = new Set<LinkType>([
+      'child_of', 'blocked_by', 'caused_by', 'fixed_by', 'deployed_in', 'duplicate_of',
+    ]);
+    const sourcePointsDownstream = new Set<LinkType>(['parent_of', 'blocks', 'affects']);
+
+    if (sourcePointsUpstream.has(link.link_type)) {
+      if (direction === 'up' && link.source_id === currentId) return link.target_id;
+      if (direction === 'down' && link.target_id === currentId) return link.source_id;
+      return null;
+    }
+
+    if (sourcePointsDownstream.has(link.link_type)) {
+      if (direction === 'up' && link.target_id === currentId) return link.source_id;
+      if (direction === 'down' && link.source_id === currentId) return link.target_id;
+    }
+
+    return null;
   }
 
   private mapRowToLink(row: any): WorkItemLink {

@@ -82,12 +82,14 @@ describe('US10.3 — RBAC Transition Gating & User Role Resolution', () => {
     // Advance to Investigating
     await request(app.getHttpServer())
       .post(`/workitems/${incId}/transitions`)
+      .set('x-org-id', orgId)
       .send({ to_state: 'Investigating' })
       .expect(201);
 
     // 2. Attempt transition to 'Resolved' as Alice (developer) via x-actor-id header
     const failRes = await request(app.getHttpServer())
       .post(`/workitems/${incId}/transitions`)
+      .set('x-org-id', orgId)
       .set('x-actor-id', devActorId)
       .send({ to_state: 'Resolved' })
       .expect(409);
@@ -98,6 +100,7 @@ describe('US10.3 — RBAC Transition Gating & User Role Resolution', () => {
     // 3. Attempt transition to 'Resolved' as Bob (incident_commander) via x-actor-id header
     const successRes = await request(app.getHttpServer())
       .post(`/workitems/${incId}/transitions`)
+      .set('x-org-id', orgId)
       .set('x-actor-id', icActorId)
       .send({ to_state: 'Resolved' })
       .expect(201);

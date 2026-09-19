@@ -21,9 +21,16 @@ export class LineageController {
     @Param('id') sourceId: string,
     @Body() dto: CreateLinkDto,
     @Headers('x-actor-id') actorId?: string,
+    @Headers('x-org-id') headerOrgId?: string,
   ) {
     try {
-      return await this.service.createLink(sourceId, dto.target_id, dto.link_type, actorId || 'user-1');
+      return await this.service.createLink(
+        sourceId,
+        dto.target_id,
+        dto.link_type,
+        actorId || 'user-1',
+        headerOrgId || '00000000-0000-0000-0000-000000000099',
+      );
     } catch (err: any) {
       if (err instanceof InvalidEdgeTypeError) {
         throw new HttpException(
@@ -41,13 +48,25 @@ export class LineageController {
   }
 
   @Get(':id/links')
-  async getLinks(@Param('id') id: string) {
-    return this.service.getItemRelationships(id);
+  async getLinks(
+    @Param('id') id: string,
+    @Headers('x-org-id') headerOrgId?: string,
+  ) {
+    return this.service.getItemRelationships(
+      id,
+      headerOrgId || '00000000-0000-0000-0000-000000000099',
+    );
   }
 
   @Get(':id/relationships')
-  async getRelationships(@Param('id') id: string) {
-    return this.service.getItemRelationships(id);
+  async getRelationships(
+    @Param('id') id: string,
+    @Headers('x-org-id') headerOrgId?: string,
+  ) {
+    return this.service.getItemRelationships(
+      id,
+      headerOrgId || '00000000-0000-0000-0000-000000000099',
+    );
   }
 
   @Get(':id/lineage')
@@ -56,12 +75,14 @@ export class LineageController {
     @Query('direction') direction?: 'up' | 'down',
     @Query('depth') depth?: string,
     @Query('edge_types') edgeTypes?: string,
+    @Headers('x-org-id') headerOrgId?: string,
   ) {
     const d = depth ? parseInt(depth, 10) : undefined;
     const edges = edgeTypes ? edgeTypes.split(',').map((e) => e.trim()) : undefined;
 
     return this.service.getLineage({
       workItemId: id,
+      orgId: headerOrgId || '00000000-0000-0000-0000-000000000099',
       direction: direction || 'up',
       depth: d,
       edgeTypes: edges,

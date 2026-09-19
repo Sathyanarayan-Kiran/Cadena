@@ -42,6 +42,7 @@ describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
     // 3. Verify Epic 1 and US1.1 exist and are linked
     const epic1 = res.body.find((item: any) => item.title.includes('[E1]'));
     expect(epic1).toBeDefined();
+    expect(epic1.type).toBe('epic');
 
     const us11 = res.body.find((item: any) => item.title.includes('[US1.1]'));
     expect(us11).toBeDefined();
@@ -49,6 +50,7 @@ describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
     // 4. Query upstream lineage for US1.1
     const lineageRes = await request(app.getHttpServer())
       .get(`/workitems/${us11.id}/lineage?direction=up`)
+      .set('x-org-id', dogfoodOrgId)
       .expect(200);
 
     expect(lineageRes.body.chain.length).toBeGreaterThanOrEqual(2);

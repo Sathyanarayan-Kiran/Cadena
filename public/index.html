@@ -3,1149 +3,379 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cadena — Unified SDLC & ITSM Platform</title>
+  <meta name="description" content="Cadena unified SDLC and ITSM team workspace">
+  <title>Cadena — Team work health</title>
   <link rel="icon" href="data:,">
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700;800&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-dark: #090d16;
-      --card-bg: rgba(22, 28, 45, 0.7);
-      --card-border: rgba(255, 255, 255, 0.08);
-      --primary: #6366f1;
-      --primary-glow: rgba(99, 102, 241, 0.35);
-      --accent-cyan: #06b6d4;
-      --accent-emerald: #10b981;
-      --accent-amber: #f59e0b;
-      --accent-rose: #f43f5e;
-      --text-main: #f3f4f6;
-      --text-muted: #9ca3af;
+      color-scheme: light;
+      --canvas: #f3f5f8; --surface: #fff; --subtle: #f8fafc; --raised: #e9eef5;
+      --sidebar: #0b1424; --sidebar-muted: #95a4b9; --ink: #152033; --muted: #66758a;
+      --border: #dce3ec; --border-strong: #c8d2df; --blue: #2457d6; --blue-dark: #183fa9; --blue-soft: #e8efff;
+      --green: #14805e; --green-soft: #e7f6f0; --amber: #a7600a; --amber-soft: #fff2da;
+      --red: #bf3045; --red-soft: #fdebef; --violet: #6d4fd1; --violet-soft: #f0edff;
+      --shadow-sm: 0 1px 2px rgba(15,23,42,.05); --shadow-md: 0 12px 28px rgba(15,23,42,.12);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      font-family: 'Inter', sans-serif;
-      background-color: var(--bg-dark);
-      background-image: 
-        radial-gradient(circle at 15% 15%, rgba(99, 102, 241, 0.15), transparent 40%),
-        radial-gradient(circle at 85% 85%, rgba(6, 182, 212, 0.12), transparent 40%);
-      color: var(--text-main);
-      min-height: 100vh;
-      padding-bottom: 60px;
+    * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--canvas); }
+    body { margin: 0; min-height: 100vh; color: var(--ink); background: var(--canvas); }
+    button, input, select, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
+    :focus-visible { outline: 3px solid rgba(36,87,214,.32); outline-offset: 2px; }
+    .app-shell { min-height: 100vh; display: grid; grid-template-columns: 244px minmax(0,1fr); }
+    .sidebar { position: sticky; top: 0; z-index: 50; height: 100vh; padding: 22px 16px 18px; display: flex; flex-direction: column; gap: 22px; color: #fff; background: var(--sidebar); }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px; }
+    .brand-mark { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 11px; color: #fff; font-weight: 800; background: linear-gradient(140deg,#3970ef,#754ed8); box-shadow: inset 0 0 0 1px rgba(255,255,255,.18),0 7px 18px rgba(36,87,214,.32); }
+    .brand-name { font-size: 18px; font-weight: 750; letter-spacing: -.02em; }
+    .brand-stage { margin-top: 2px; color: var(--sidebar-muted); font-size: 11px; font-weight: 650; letter-spacing: .06em; text-transform: uppercase; }
+    .nav-label { padding: 0 10px; color: #64748b; font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+    .nav { display: grid; gap: 4px; }
+    .nav-button { width: 100%; padding: 10px 12px; display: flex; align-items: center; gap: 11px; border: 0; border-radius: 9px; color: #b7c2d2; background: transparent; text-align: left; font-size: 13px; font-weight: 600; }
+    .nav-button:hover { color: #fff; background: rgba(255,255,255,.06); }
+    .nav-button.active { color: #fff; background: rgba(62,111,231,.2); box-shadow: inset 3px 0 #5b86f4; }
+    .nav-glyph { width: 20px; color: #7f91aa; font-size: 17px; text-align: center; }
+    .sidebar-spacer { flex: 1; }
+    .sidebar-settings { display: grid; gap: 12px; padding: 13px; border: 1px solid rgba(255,255,255,.08); border-radius: 12px; background: rgba(255,255,255,.035); }
+    .sidebar-field { display: grid; gap: 5px; }
+    .sidebar-field label { color: var(--sidebar-muted); font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+    .sidebar-field select { width: 100%; padding: 8px 9px; border: 1px solid rgba(255,255,255,.12); border-radius: 7px; color: #e6edf6; background: #111e31; font-size: 12px; }
+    .sidebar-user { display: flex; align-items: center; gap: 10px; padding: 4px 5px 0; }
+    .avatar { width: 32px; height: 32px; display: grid; place-items: center; border-radius: 50%; color: #cad8ff; background: #243b67; font-size: 11px; font-weight: 800; }
+    .sidebar-user strong { display: block; font-size: 12px; }
+    .sidebar-user span { color: var(--sidebar-muted); font-size: 11px; }
+    .main { min-width: 0; }
+    .mobile-header { display: none; }
+    .main-inner { max-width: 1500px; margin: 0 auto; padding: 31px 34px 48px; }
+    .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; margin-bottom: 24px; }
+    .eyebrow { margin: 0 0 6px; color: var(--blue); font-size: 11px; font-weight: 750; letter-spacing: .1em; text-transform: uppercase; }
+    h1 { margin: 0; font-size: clamp(25px,3vw,34px); line-height: 1.15; letter-spacing: -.035em; }
+    .page-description { max-width: 680px; margin: 8px 0 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+    .header-actions { display: flex; align-items: center; justify-content: flex-end; gap: 9px; flex-wrap: wrap; }
+    .sync-note { width: 100%; color: var(--muted); font-size: 11px; text-align: right; }
+    .button { min-height: 38px; padding: 8px 13px; display: inline-flex; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 9px; color: #fff; background: var(--blue); box-shadow: var(--shadow-sm); font-size: 12px; font-weight: 700; white-space: nowrap; }
+    .button:hover { background: var(--blue-dark); }
+    .button.secondary { color: var(--ink); background: var(--surface); border-color: var(--border); }
+    .button.secondary:hover { background: var(--subtle); border-color: var(--border-strong); }
+    .button.ghost { min-height: 32px; padding: 6px 9px; color: var(--muted); background: transparent; border-color: transparent; box-shadow: none; }
+    .button.ghost:hover { color: var(--ink); background: var(--raised); }
+    .icon-button { width: 36px; height: 36px; padding: 0; display: grid; place-items: center; border: 1px solid var(--border); border-radius: 9px; color: var(--muted); background: var(--surface); }
+    .icon-button:hover { color: var(--ink); background: var(--subtle); }
+    .kpi-grid { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 13px; margin-bottom: 16px; }
+    .kpi-card { padding: 17px 18px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: var(--shadow-sm); }
+    .kpi-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    .kpi-label { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .045em; text-transform: uppercase; }
+    .kpi-icon { width: 29px; height: 29px; display: grid; place-items: center; border-radius: 8px; color: var(--blue); background: var(--blue-soft); font-weight: 800; }
+    .kpi-value { margin-top: 10px; font-size: 28px; font-weight: 760; letter-spacing: -.035em; }
+    .kpi-context { margin-top: 3px; color: var(--muted); font-size: 11px; }
+    .kpi-card.alert .kpi-icon { color: var(--red); background: var(--red-soft); }
+    .kpi-card.warning .kpi-icon { color: var(--amber); background: var(--amber-soft); }
+    .attention-bar { padding: 13px 16px; margin-bottom: 17px; display: flex; align-items: center; justify-content: space-between; gap: 18px; border: 1px solid #f0d6a8; border-radius: 12px; background: #fffaf0; }
+    .attention-copy { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .attention-dot { width: 9px; height: 9px; flex: 0 0 auto; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 5px var(--amber-soft); }
+    .attention-copy strong { display: block; font-size: 13px; }
+    .attention-copy span { display: block; margin-top: 2px; color: #806b4d; font-size: 11px; }
+    .workspace { overflow: hidden; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: var(--shadow-sm); }
+    .workspace-head { padding: 17px 18px 14px; border-bottom: 1px solid var(--border); }
+    .workspace-title-row { margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+    .workspace-title { margin: 0; font-size: 16px; letter-spacing: -.015em; }
+    .workspace-subtitle { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+    .view-switch { padding: 3px; display: inline-flex; border: 1px solid var(--border); border-radius: 9px; background: var(--subtle); }
+    .view-button { padding: 6px 10px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 11px; font-weight: 700; }
+    .view-button.active { color: var(--ink); background: var(--surface); box-shadow: var(--shadow-sm); }
+    .filters { display: grid; grid-template-columns: minmax(220px,1fr) repeat(2,minmax(135px,180px)); gap: 9px; }
+    .search-wrap { position: relative; }
+    .search-wrap::before { content: '⌕'; position: absolute; left: 11px; top: 7px; color: var(--muted); font-size: 19px; }
+    .field, .filters select, .filters input { width: 100%; min-height: 38px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--ink); background: var(--surface); font-size: 12px; }
+    .filters input { padding-left: 34px; }
+    .workspace-body { min-height: 350px; padding: 16px; background: var(--subtle); }
+    .loading-grid { display: grid; grid-template-columns: repeat(3,minmax(260px,1fr)); gap: 12px; }
+    .skeleton { height: 180px; border-radius: 12px; background: linear-gradient(90deg,#edf1f5 25%,#f7f9fb 45%,#edf1f5 65%); background-size: 220% 100%; animation: shimmer 1.25s infinite; }
+    @keyframes shimmer { to { background-position: -220% 0; } }
+    .board { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(280px,1fr); gap: 12px; overflow-x: auto; padding-bottom: 7px; scroll-snap-type: x proximity; }
+    .board-column { min-height: 280px; padding: 10px; border: 1px solid var(--border); border-radius: 12px; background: #eef2f6; scroll-snap-align: start; }
+    .column-head { padding: 2px 3px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .column-title { display: flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .055em; }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: #7b8aa0; }
+    .column-count { min-width: 22px; padding: 2px 6px; border-radius: 999px; color: var(--muted); background: #fff; font-size: 10px; font-weight: 750; text-align: center; }
+    .column-items { display: grid; gap: 9px; }
+    .work-card { position: relative; padding: 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); box-shadow: var(--shadow-sm); }
+    .work-card:hover { border-color: #bdc9d9; box-shadow: 0 5px 15px rgba(15,23,42,.07); }
+    .card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .item-key { color: var(--muted); font-size: 10px; font-weight: 750; letter-spacing: .04em; text-transform: uppercase; }
+    .priority { padding: 3px 6px; border-radius: 5px; color: #536177; background: #eef2f6; font-size: 9px; font-weight: 800; }
+    .priority.p0 { color: var(--red); background: var(--red-soft); }
+    .priority.p1 { color: var(--amber); background: var(--amber-soft); }
+    .card-open { width: 100%; padding: 0; border: 0; color: inherit; background: transparent; text-align: left; }
+    .card-title { margin: 9px 0 11px; font-size: 13px; font-weight: 680; line-height: 1.4; }
+    .tag-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .tag { padding: 4px 7px; display: inline-flex; align-items: center; gap: 4px; border-radius: 999px; color: #536177; background: #eef2f6; font-size: 9px; font-weight: 750; }
+    .tag.epic { color: var(--violet); background: var(--violet-soft); }
+    .tag.story { color: var(--blue); background: var(--blue-soft); }
+    .tag.incident { color: var(--red); background: var(--red-soft); }
+    .sla-block { margin-top: 13px; }
+    .sla-line { margin-bottom: 6px; display: flex; align-items: center; justify-content: space-between; gap: 9px; font-size: 9px; font-weight: 750; }
+    .sla-line span:first-child { color: var(--muted); text-transform: uppercase; letter-spacing: .055em; }
+    .sla-value.green { color: var(--green); } .sla-value.amber { color: var(--amber); } .sla-value.red { color: var(--red); } .sla-value.none { color: var(--muted); }
+    .progress { height: 5px; overflow: hidden; border-radius: 999px; background: #e6ebf1; }
+    .progress-bar { height: 100%; border-radius: inherit; background: var(--green); }
+    .progress-bar.amber { background: var(--amber); } .progress-bar.red { background: var(--red); } .progress-bar.none { width: 0 !important; }
+    .card-footer { margin-top: 13px; padding-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border-top: 1px solid #edf0f4; }
+    .owner { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 9px; font-weight: 650; }
+    .owner-avatar { width: 20px; height: 20px; display: grid; place-items: center; border-radius: 50%; color: #4c5f78; background: #e8edf3; font-size: 8px; font-weight: 800; }
+    .card-actions { display: flex; gap: 2px; }
+    .card-action { padding: 4px 6px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 10px; font-weight: 700; }
+    .card-action:hover { color: var(--blue); background: var(--blue-soft); }
+    .list-scroll { overflow-x: auto; }
+    .list-table { width: 100%; border-collapse: collapse; background: var(--surface); }
+    .list-table th { padding: 9px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 9px; letter-spacing: .07em; text-align: left; text-transform: uppercase; }
+    .list-table td { padding: 12px 10px; border-bottom: 1px solid #edf0f4; font-size: 11px; vertical-align: middle; }
+    .list-table tbody tr { cursor: pointer; } .list-table tbody tr:hover { background: var(--subtle); }
+    .list-title { max-width: 420px; font-weight: 670; }
+    .empty-state { min-height: 300px; padding: 40px; display: grid; place-items: center; text-align: center; }
+    .empty-state-mark { width: 48px; height: 48px; margin: 0 auto 13px; display: grid; place-items: center; border-radius: 14px; color: var(--blue); background: var(--blue-soft); font-size: 22px; }
+    .empty-state h3 { margin: 0; font-size: 15px; } .empty-state p { max-width: 380px; margin: 7px auto 16px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+    dialog { padding: 0; border: 0; border-radius: 16px; color: var(--ink); background: var(--surface); box-shadow: var(--shadow-md); }
+    dialog::backdrop { background: rgba(8,16,30,.55); backdrop-filter: blur(2px); }
+    .modal { width: min(560px,calc(100vw - 28px)); max-height: min(780px,calc(100vh - 28px)); overflow: auto; }
+    .modal.wide { width: min(760px,calc(100vw - 28px)); }
+    .modal-head { position: sticky; top: 0; z-index: 2; padding: 19px 21px 15px; display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; border-bottom: 1px solid var(--border); background: var(--surface); }
+    .modal-head h2 { margin: 0; font-size: 17px; letter-spacing: -.02em; } .modal-head p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+    .modal-body { padding: 19px 21px; }
+    .modal-actions { position: sticky; bottom: 0; padding: 13px 21px; display: flex; justify-content: flex-end; gap: 9px; border-top: 1px solid var(--border); background: var(--surface); }
+    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    .form-group { display: grid; gap: 6px; } .form-group.full { grid-column: 1/-1; }
+    .form-group label { color: #526174; font-size: 10px; font-weight: 750; letter-spacing: .055em; text-transform: uppercase; }
+    .form-group input, .form-group select, .form-group textarea { width: 100%; min-height: 40px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 8px; color: var(--ink); background: var(--surface); font-size: 12px; }
+    .form-group textarea { min-height: 90px; resize: vertical; }
+    .help-text { color: var(--muted); font-size: 10px; line-height: 1.45; }
+    .inline-alert { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #f3c9d0; border-radius: 8px; color: var(--red); background: var(--red-soft); font-size: 11px; }
+    .current-state { padding: 11px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); font-size: 12px; font-weight: 700; }
+    .drawer { width: min(520px,100vw); height: 100vh; max-height: 100vh; margin: 0 0 0 auto; border-radius: 0; }
+    .drawer[open] { display: flex; flex-direction: column; } .drawer .modal-head { flex: 0 0 auto; padding: 20px 22px; }
+    .drawer-body { flex: 1; overflow: auto; padding: 22px; }
+    .detail-key { margin: 0; color: var(--blue); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+    .detail-title { margin: 8px 0 10px; font-size: 21px; line-height: 1.3; letter-spacing: -.025em; }
+    .detail-description { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .detail-actions { margin: 20px 0; display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+    .detail-section { padding: 17px 0; border-top: 1px solid var(--border); }
+    .detail-section h3 { margin: 0 0 12px; font-size: 11px; letter-spacing: .07em; text-transform: uppercase; }
+    .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px 20px; }
+    .detail-field span { display: block; margin-bottom: 4px; color: var(--muted); font-size: 9px; font-weight: 700; letter-spacing: .055em; text-transform: uppercase; }
+    .detail-field strong { display: block; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+    .custom-list { display: grid; gap: 7px; }
+    .custom-row { padding: 8px 10px; display: grid; grid-template-columns: minmax(100px,.45fr) 1fr; gap: 12px; border-radius: 7px; background: var(--subtle); font-size: 10px; }
+    .custom-row span:first-child { color: var(--muted); font-weight: 700; overflow-wrap: anywhere; } .custom-row span:last-child { overflow-wrap: anywhere; white-space: pre-wrap; }
+    .policy-list { display: grid; gap: 8px; margin-bottom: 18px; }
+    .policy-row { padding: 10px 12px; display: grid; grid-template-columns: 1fr auto; gap: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); }
+    .policy-row strong { display: block; font-size: 11px; } .policy-row span { color: var(--muted); font-size: 10px; } .policy-metric { align-self: center; color: var(--ink) !important; font-weight: 750; text-align: right; }
+    .section-divider { margin: 19px 0 15px; padding-top: 17px; border-top: 1px solid var(--border); font-size: 11px; font-weight: 750; }
+    .lineage-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 18px; }
+    .lineage-chain { display: grid; gap: 7px; }
+    .lineage-node { padding: 12px; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 11px; border: 1px solid var(--border); border-radius: 9px; background: var(--subtle); }
+    .node-index { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 8px; color: var(--blue); background: var(--blue-soft); font-size: 10px; font-weight: 800; }
+    .lineage-node strong { display: block; font-size: 11px; } .lineage-node small { color: var(--muted); font-size: 9px; } .lineage-connector { padding-left: 14px; color: var(--muted); font-size: 9px; }
+    .confirm-copy { color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .toast-region { position: fixed; right: 18px; bottom: 18px; z-index: 2000; width: min(360px,calc(100vw - 36px)); display: grid; gap: 8px; }
+    .toast { padding: 12px 14px; border: 1px solid #c9d5e3; border-radius: 10px; color: var(--ink); background: #fff; box-shadow: var(--shadow-md); font-size: 11px; line-height: 1.45; }
+    .toast.success { border-color: #b9dfd1; background: #f2fbf7; } .toast.error { border-color: #f0bec7; background: #fff4f6; }
+    .mobile-scrim { display: none; }
+    [hidden] { display: none !important; }
+    @media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; } }
+    @media (max-width:1120px) { .app-shell { grid-template-columns:212px minmax(0,1fr); } .main-inner { padding-inline:24px; } .kpi-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .filters { grid-template-columns:minmax(200px,1fr) 150px 150px; } }
+    @media (max-width:820px) {
+      .app-shell { display:block; } .sidebar { position:fixed; left:0; width:244px; transform:translateX(-102%); transition:transform .2s ease; box-shadow:var(--shadow-md); } .sidebar.open { transform:translateX(0); }
+      .mobile-scrim { position:fixed; inset:0; z-index:40; border:0; background:rgba(8,16,30,.48); } .mobile-scrim.open { display:block; }
+      .mobile-header { position:sticky; top:0; z-index:35; padding:11px 16px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); background:rgba(255,255,255,.94); backdrop-filter:blur(10px); }
+      .mobile-brand { display:flex; align-items:center; gap:9px; font-size:14px; font-weight:750; } .mobile-brand .brand-mark { width:30px; height:30px; border-radius:9px; }
+      .main-inner { padding:22px 16px 38px; } .page-header { align-items:stretch; flex-direction:column; } .header-actions { justify-content:flex-start; } .sync-note { text-align:left; }
+      .filters { grid-template-columns:1fr 1fr; } .search-wrap { grid-column:1/-1; }
     }
-
-    header {
-      backdrop-filter: blur(16px);
-      background: rgba(15, 23, 42, 0.8);
-      border-bottom: 1px solid var(--card-border);
-      position: sticky;
-      top: 0;
-      z-index: 100;
-      padding: 16px 32px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-    }
-
-    .brand-logo {
-      width: 38px;
-      height: 38px;
-      background: linear-gradient(135deg, var(--primary), var(--accent-cyan));
-      border-radius: 10px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-family: 'Outfit', sans-serif;
-      font-weight: 800;
-      font-size: 20px;
-      color: white;
-      box-shadow: 0 0 16px var(--primary-glow);
-    }
-
-    .brand-title {
-      font-family: 'Outfit', sans-serif;
-      font-size: 20px;
-      font-weight: 700;
-      background: linear-gradient(90deg, #fff, #94a3b8);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
-    }
-
-    .brand-badge {
-      background: rgba(99, 102, 241, 0.2);
-      border: 1px solid rgba(99, 102, 241, 0.4);
-      color: #a5b4fc;
-      font-size: 11px;
-      padding: 3px 8px;
-      border-radius: 99px;
-      font-weight: 600;
-      letter-spacing: 0.5px;
-    }
-
-    .user-controls {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
-    .control-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      background: rgba(30, 41, 59, 0.6);
-      border: 1px solid var(--card-border);
-      padding: 6px 12px;
-      border-radius: 8px;
-      font-size: 13px;
-    }
-
-    .control-group label {
-      color: var(--text-muted);
-      font-weight: 500;
-    }
-
-    select, input, textarea {
-      background: #0f172a;
-      border: 1px solid rgba(255, 255, 255, 0.15);
-      color: var(--text-main);
-      padding: 6px 10px;
-      border-radius: 6px;
-      font-family: inherit;
-      font-size: 13px;
-      outline: none;
-    }
-
-    select:focus, input:focus, textarea:focus {
-      border-color: var(--primary);
-      box-shadow: 0 0 8px var(--primary-glow);
-    }
-
-    .container {
-      max-width: 1300px;
-      margin: 32px auto;
-      padding: 0 24px;
-    }
-
-    /* KPI Row */
-    .kpi-grid {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 20px;
-      margin-bottom: 32px;
-    }
-
-    .kpi-card {
-      background: var(--card-bg);
-      backdrop-filter: blur(12px);
-      border: 1px solid var(--card-border);
-      border-radius: 14px;
-      padding: 20px;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      transition: transform 0.2s;
-    }
-
-    .kpi-card:hover {
-      transform: translateY(-2px);
-      border-color: rgba(255, 255, 255, 0.15);
-    }
-
-    .kpi-val {
-      font-family: 'Outfit', sans-serif;
-      font-size: 32px;
-      font-weight: 800;
-      margin-top: 4px;
-    }
-
-    .kpi-lbl {
-      font-size: 12px;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.8px;
-      font-weight: 600;
-    }
-
-    /* Toolbar */
-    .toolbar {
-      background: var(--card-bg);
-      backdrop-filter: blur(12px);
-      border: 1px solid var(--card-border);
-      border-radius: 12px;
-      padding: 16px 24px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 28px;
-      flex-wrap: wrap;
-      gap: 12px;
-    }
-
-    .filters {
-      display: flex;
-      gap: 16px;
-      align-items: center;
-    }
-
-    .toolbar-actions {
-      display: flex;
-      gap: 12px;
-    }
-
-    .btn {
-      background: linear-gradient(135deg, var(--primary), #4f46e5);
-      color: white;
-      border: none;
-      padding: 8px 18px;
-      border-radius: 8px;
-      font-weight: 600;
-      font-size: 13px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      box-shadow: 0 4px 12px var(--primary-glow);
-      transition: opacity 0.2s, transform 0.1s;
-    }
-
-    .btn:hover {
-      opacity: 0.95;
-      transform: scale(1.02);
-    }
-
-    .btn-secondary {
-      background: rgba(30, 41, 59, 0.8);
-      border: 1px solid var(--card-border);
-      box-shadow: none;
-    }
-
-    .btn-secondary:hover {
-      background: rgba(51, 65, 85, 0.8);
-    }
-
-    .btn-dogfood {
-      background: linear-gradient(135deg, var(--accent-cyan), #0284c7);
-      color: white;
-    }
-
-    /* Items Grid */
-    .items-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(380px, 1fr));
-      gap: 24px;
-    }
-
-    .item-card {
-      background: var(--card-bg);
-      backdrop-filter: blur(12px);
-      border: 1px solid var(--card-border);
-      border-radius: 16px;
-      padding: 22px;
-      display: flex;
-      flex-direction: column;
-      gap: 16px;
-      transition: all 0.2s ease-in-out;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .item-card::before {
-      content: '';
-      position: absolute;
-      top: 0; left: 0; right: 0;
-      height: 3px;
-      background: linear-gradient(90deg, var(--primary), var(--accent-cyan));
-    }
-
-    .item-card.type-incident::before {
-      background: linear-gradient(90deg, var(--accent-rose), var(--accent-amber));
-    }
-
-    .item-card:hover {
-      border-color: rgba(99, 102, 241, 0.4);
-      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-    }
-
-    .card-head {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-    }
-
-    .item-key {
-      font-family: 'Outfit', sans-serif;
-      font-weight: 700;
-      font-size: 13px;
-      color: var(--text-muted);
-      letter-spacing: 0.5px;
-    }
-
-    .item-title {
-      font-size: 16px;
-      font-weight: 600;
-      color: #fff;
-      margin-top: 4px;
-      line-height: 1.4;
-    }
-
-    .badges {
-      display: flex;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-
-    .badge {
-      font-size: 11px;
-      font-weight: 600;
-      padding: 4px 10px;
-      border-radius: 6px;
-      display: inline-flex;
-      align-items: center;
-      gap: 4px;
-    }
-
-    .badge-story { background: rgba(99, 102, 241, 0.15); color: #818cf8; border: 1px solid rgba(99, 102, 241, 0.3); }
-    .badge-incident { background: rgba(244, 63, 94, 0.15); color: #fb7185; border: 1px solid rgba(244, 63, 94, 0.3); }
-    .badge-status { background: rgba(30, 41, 59, 0.8); color: #cbd5e1; border: 1px solid var(--card-border); }
-    
-    .aging-green { background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
-    .aging-amber { background: rgba(245, 158, 11, 0.15); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.3); }
-    .aging-red { background: rgba(244, 63, 94, 0.2); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.4); font-weight: 700; }
-
-    .custom-fields-box {
-      background: rgba(15, 23, 42, 0.5);
-      border: 1px dashed var(--card-border);
-      border-radius: 8px;
-      padding: 10px 12px;
-      font-size: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-    }
-
-    .custom-field-row {
-      display: flex;
-      justify-content: space-between;
-      color: var(--text-muted);
-    }
-
-    .custom-field-row span:last-child {
-      color: var(--text-main);
-      font-weight: 500;
-    }
-
-    .card-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 4px;
-      padding-top: 12px;
-      border-top: 1px solid var(--card-border);
-    }
-
-    .card-actions .btn {
-      flex: 1;
-      padding: 6px 10px;
-      font-size: 12px;
-      justify-content: center;
-    }
-
-    /* Modal Overlay */
-    .modal-overlay {
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0, 0, 0, 0.75);
-      backdrop-filter: blur(8px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-      opacity: 0;
-      pointer-events: none;
-      transition: opacity 0.2s ease;
-    }
-
-    .modal-overlay.active {
-      opacity: 1;
-      pointer-events: auto;
-    }
-
-    .modal {
-      background: #0f172a;
-      border: 1px solid var(--card-border);
-      border-radius: 18px;
-      width: 90%;
-      max-width: 560px;
-      padding: 28px;
-      box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-    }
-
-    .modal-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      border-bottom: 1px solid var(--card-border);
-      padding-bottom: 14px;
-    }
-
-    .modal-title {
-      font-family: 'Outfit', sans-serif;
-      font-size: 18px;
-      font-weight: 700;
-    }
-
-    .modal-close {
-      background: none;
-      border: none;
-      color: var(--text-muted);
-      font-size: 20px;
-      cursor: pointer;
-    }
-
-    .form-group {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    .form-group label {
-      font-size: 12px;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-    }
-
-    .alert-banner {
-      padding: 12px 16px;
-      border-radius: 8px;
-      font-size: 13px;
-      line-height: 1.4;
-      display: none;
-    }
-
-    .alert-banner.error {
-      display: block;
-      background: rgba(244, 63, 94, 0.15);
-      border: 1px solid rgba(244, 63, 94, 0.3);
-      color: #fb7185;
-    }
-
-    .alert-banner.success {
-      display: block;
-      background: rgba(16, 185, 129, 0.15);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-      color: #34d399;
-    }
-
-    /* Lineage Chain Visualizer */
-    .lineage-nodes {
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-      position: relative;
-    }
-
-    .lineage-node-card {
-      background: rgba(30, 41, 59, 0.7);
-      border: 1px solid var(--card-border);
-      border-radius: 10px;
-      padding: 12px 16px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .lineage-connector {
-      text-align: center;
-      color: var(--accent-cyan);
-      font-size: 14px;
-      font-weight: bold;
+    @media (max-width:600px) {
+      .main-inner { padding-inline:12px; } .kpi-grid { grid-template-columns:1fr 1fr; gap:8px; } .kpi-card { padding:13px; } .kpi-value { font-size:23px; } .kpi-context { display:none; }
+      .attention-bar { align-items:flex-start; flex-direction:column; } .workspace-head { padding:14px; } .workspace-title-row { align-items:flex-start; } .filters { grid-template-columns:1fr; } .search-wrap { grid-column:auto; }
+      .workspace-body { padding:10px; } .board { display:flex; flex-direction:column; overflow:visible; } .board-column { min-height:auto; } .action-label { display:none; }
+      .header-actions .button.secondary { width:38px; padding-inline:0; } .form-grid { grid-template-columns:1fr; } .form-group.full { grid-column:auto; } .detail-actions { grid-template-columns:1fr; } .drawer { width:100vw; } .list-table { min-width:680px; }
     }
   </style>
 </head>
 <body>
-
-  <header>
-    <div class="brand">
-      <div class="brand-logo">C</div>
-      <div class="brand-title">Cadena</div>
-      <div class="brand-badge">Phase 0 Pilot</div>
-    </div>
-
-    <div class="user-controls">
-      <div class="control-group">
-        <label for="tenantSelect">Tenant Org:</label>
-        <select id="tenantSelect" onchange="loadWorkItems()">
-          <option value="00000000-0000-0000-0000-000000000099">Org A (Primary Pilot)</option>
-          <option value="22222222-2222-2222-2222-222222222222">Org B (Isolated Tenant)</option>
-        </select>
+  <!-- CODEX UI IMPLEMENTATION — 2026-09-19 -->
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
+      <div class="brand"><div class="brand-mark" aria-hidden="true">C</div><div><div class="brand-name">Cadena</div><div class="brand-stage">Pilot workspace</div></div></div>
+      <div><div class="nav-label">Workspace</div><nav class="nav" aria-label="Workspace">
+        <button class="nav-button active" type="button"><span class="nav-glyph">⌂</span>Overview</button>
+        <button class="nav-button" type="button" data-coming-soon="My work"><span class="nav-glyph">✓</span>My work</button>
+        <button class="nav-button" type="button" data-coming-soon="Team board"><span class="nav-glyph">▦</span>Team board</button>
+        <button class="nav-button" type="button" data-filter-type="incident"><span class="nav-glyph">!</span>Incidents</button>
+        <button class="nav-button" type="button" data-coming-soon="Traceability"><span class="nav-glyph">⌁</span>Traceability</button>
+      </nav></div>
+      <div><div class="nav-label">Insights</div><nav class="nav" aria-label="Insights">
+        <button class="nav-button" type="button" data-coming-soon="Reports"><span class="nav-glyph">▥</span>Reports</button>
+        <button class="nav-button" type="button" id="openSlaFromNav"><span class="nav-glyph">⚙</span>SLA policies</button>
+      </nav></div>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-settings">
+        <div class="sidebar-field"><label for="tenantSelect">Active tenant</label><select id="tenantSelect"><option value="00000000-0000-0000-0000-000000000099">Org A · Primary pilot</option><option value="22222222-2222-2222-2222-222222222222">Org B · Isolated</option></select></div>
+        <div class="sidebar-field"><label for="roleSelect">Demo actor role</label><select id="roleSelect"><option value="developer">Developer</option><option value="incident_commander">Incident commander</option><option value="on_call">On-call engineer</option><option value="team_lead">Team lead</option><option value="cab_approver">CAB approver</option></select></div>
       </div>
-
-      <div class="control-group">
-        <label for="roleSelect">Actor Role (RBAC):</label>
-        <select id="roleSelect">
-          <option value="developer">Developer</option>
-          <option value="incident_commander">Incident Commander</option>
-          <option value="on_call">On-Call Engineer</option>
-          <option value="team_lead">Team Lead</option>
-          <option value="cab_approver">CAB Approver</option>
-        </select>
+      <div class="sidebar-user"><div class="avatar">KU</div><div><strong>Pilot user</strong><span>Platform team</span></div></div>
+    </aside>
+    <button class="mobile-scrim" id="mobileScrim" type="button" aria-label="Close navigation"></button>
+    <main class="main">
+      <div class="mobile-header"><div class="mobile-brand"><div class="brand-mark">C</div>Cadena</div><button class="icon-button" id="mobileMenuButton" type="button" aria-label="Open navigation" aria-expanded="false">☰</button></div>
+      <div class="main-inner">
+        <header class="page-header">
+          <div><p class="eyebrow">Team workspace</p><h1>Work health</h1><p class="page-description">See what is moving, what is aging, and where the team needs to act next.</p></div>
+          <div class="header-actions"><button class="button secondary" id="refreshButton" type="button"><span aria-hidden="true">↻</span><span class="action-label">Refresh</span></button><button class="button secondary" id="pilotActionsButton" type="button"><span aria-hidden="true">•••</span><span class="action-label">Pilot actions</span></button><button class="button" id="createButton" type="button"><span aria-hidden="true">＋</span>New work item</button><div class="sync-note" id="syncNote" aria-live="polite">Loading workspace…</div></div>
+        </header>
+        <section class="kpi-grid" aria-label="Work health summary">
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">Total work</span><span class="kpi-icon">#</span></div><div class="kpi-value" id="kpiTotal">—</div><div class="kpi-context">Across the active tenant</div></article>
+          <article class="kpi-card"><div class="kpi-top"><span class="kpi-label">In progress</span><span class="kpi-icon">→</span></div><div class="kpi-value" id="kpiActive">—</div><div class="kpi-context">Work currently moving</div></article>
+          <article class="kpi-card warning"><div class="kpi-top"><span class="kpi-label">At risk</span><span class="kpi-icon">!</span></div><div class="kpi-value" id="kpiAtRisk">—</div><div class="kpi-context">75–100% of SLA consumed</div></article>
+          <article class="kpi-card alert"><div class="kpi-top"><span class="kpi-label">Breached</span><span class="kpi-icon">×</span></div><div class="kpi-value" id="kpiBreached">—</div><div class="kpi-context">Immediate attention required</div></article>
+        </section>
+        <section class="attention-bar" id="attentionBar" aria-live="polite"><div class="attention-copy"><span class="attention-dot" aria-hidden="true"></span><div><strong id="attentionTitle">Checking SLA health…</strong><span id="attentionDescription">Cadena is calculating which work needs attention.</span></div></div><button class="button secondary" id="showAttentionButton" type="button">Show attention items</button></section>
+        <section class="workspace" aria-labelledby="workspaceTitle">
+          <div class="workspace-head">
+            <div class="workspace-title-row"><div><h2 class="workspace-title" id="workspaceTitle">Team board</h2><p class="workspace-subtitle" id="resultSummary">Loading work items…</p></div><div class="view-switch" aria-label="Choose work view"><button class="view-button active" id="boardViewButton" type="button" aria-pressed="true">Board</button><button class="view-button" id="listViewButton" type="button" aria-pressed="false">List</button></div></div>
+            <div class="filters"><div class="search-wrap"><input id="searchInput" type="search" placeholder="Search title, key, or description" aria-label="Search work items"></div><select id="typeFilter" aria-label="Filter by item type"><option value="">All types</option><option value="epic">Epics</option><option value="story">Stories</option><option value="incident">Incidents</option></select><select id="agingFilter" aria-label="Filter by SLA health"><option value="">All SLA health</option><option value="red">Breached</option><option value="amber">At risk</option><option value="green">On track</option><option value="none">No SLA policy</option></select></div>
+          </div>
+          <div class="workspace-body" id="workspaceBody" aria-live="polite"><div class="loading-grid" aria-label="Loading work items"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></div>
+        </section>
       </div>
-    </div>
-  </header>
-
-  <div class="container">
-    
-    <!-- KPI Row -->
-    <div class="kpi-grid">
-      <div class="kpi-card">
-        <div>
-          <div class="kpi-lbl">Total Work Items</div>
-          <div class="kpi-val" id="kpiTotal">0</div>
-        </div>
-        <div style="font-size: 28px;">📦</div>
-      </div>
-
-      <div class="kpi-card">
-        <div>
-          <div class="kpi-lbl">Delivery (Stories)</div>
-          <div class="kpi-val" id="kpiStories" style="color: #818cf8;">0</div>
-        </div>
-        <div style="font-size: 28px;">⚡</div>
-      </div>
-
-      <div class="kpi-card">
-        <div>
-          <div class="kpi-lbl">Operational (Incidents)</div>
-          <div class="kpi-val" id="kpiIncidents" style="color: #fb7185;">0</div>
-        </div>
-        <div style="font-size: 28px;">🚨</div>
-      </div>
-
-      <div class="kpi-card">
-        <div>
-          <div class="kpi-lbl">Aging Breaches (Red)</div>
-          <div class="kpi-val" id="kpiBreaches" style="color: #f43f5e;">0</div>
-        </div>
-        <div style="font-size: 28px;">🔥</div>
-      </div>
-    </div>
-
-    <!-- Toolbar -->
-    <div class="toolbar">
-      <div class="filters">
-        <div class="control-group">
-          <label>Type:</label>
-          <select id="filterType" onchange="loadWorkItems()">
-            <option value="">All Types</option>
-            <option value="story">Story</option>
-            <option value="incident">Incident</option>
-          </select>
-        </div>
-
-        <div class="control-group">
-          <label>Aging Bucket:</label>
-          <select id="filterAging" onchange="loadWorkItems()">
-            <option value="">All Buckets</option>
-            <option value="green">🟢 Green</option>
-            <option value="amber">🟡 Amber</option>
-            <option value="red">🔴 Red Breach</option>
-          </select>
-        </div>
-      </div>
-
-      <div class="toolbar-actions">
-        <button class="btn btn-secondary" onclick="openSlaModal()">
-          <span>⚙️</span> SLA Policies
-        </button>
-
-        <button class="btn btn-secondary" onclick="triggerAgingRecompute()">
-          <span>⏱️</span> Recompute Aging
-        </button>
-
-        <button class="btn btn-dogfood" onclick="importStageBDogfooding()">
-          <span>📥</span> Import 12-Epic Backlog (Stage B)
-        </button>
-
-        <button class="btn" onclick="openCreateModal()">
-          <span>➕</span> Create Work Item
-        </button>
-      </div>
-    </div>
-
-    <!-- Items Grid -->
-    <div class="items-grid" id="itemsGrid">
-      <!-- Dynamic WorkItem cards render here -->
-    </div>
-
+    </main>
   </div>
-
-  <!-- Create Item Modal -->
-  <div class="modal-overlay" id="createModal">
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title">Create Canonical WorkItem</div>
-        <button class="modal-close" onclick="closeModal('createModal')">✕</button>
-      </div>
-
-      <div class="form-group">
-        <label for="createType">Item Type</label>
-        <select id="createType" onchange="toggleTypeFields()">
-          <option value="story">Story (Delivery)</option>
-          <option value="incident">Incident (Operational)</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label for="createTitle">Title</label>
-        <input type="text" id="createTitle" placeholder="e.g. Implement OAuth login flow">
-      </div>
-
-      <div class="form-group">
-        <label for="createDesc">Description</label>
-        <textarea id="createDesc" rows="2" placeholder="Brief technical summary..."></textarea>
-      </div>
-
-      <div class="form-group">
-        <label for="createPriority">Priority</label>
-        <select id="createPriority">
-          <option value="P0">P0 (Critical)</option>
-          <option value="P1">P1 (High)</option>
-          <option value="P2" selected>P2 (Medium)</option>
-          <option value="P3">P3 (Low)</option>
-        </select>
-      </div>
-
-      <div class="form-group" id="severityGroup" style="display: none;">
-        <label for="createSeverity">Severity (Incidents Only)</label>
-        <select id="createSeverity">
-          <option value="SEV1">SEV1 (Outage)</option>
-          <option value="SEV2">SEV2 (Major Degradation)</option>
-          <option value="SEV3">SEV3 (Minor Impact)</option>
-        </select>
-      </div>
-
-      <button class="btn" onclick="submitCreateItem()">Create Item</button>
-    </div>
-  </div>
-
-  <!-- Transition Modal -->
-  <div class="modal-overlay" id="transitionModal">
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title">State Machine Transition</div>
-        <button class="modal-close" onclick="closeModal('transitionModal')">✕</button>
-      </div>
-
-      <div id="transAlert" class="alert-banner"></div>
-
-      <input type="hidden" id="transItemId">
-      
-      <div class="form-group">
-        <label>Current Status:</label>
-        <div id="transCurrentStatus" style="font-weight: 600; color: var(--accent-cyan);">--</div>
-      </div>
-
-      <div class="form-group">
-        <label for="transToState">Target State:</label>
-        <input type="text" id="transToState" placeholder="e.g. Investigating, Mitigated, Resolved, InReview">
-      </div>
-
-      <div class="form-group">
-        <label for="transMitigation">Mitigation Summary (Required for 'Mitigated' state):</label>
-        <input type="text" id="transMitigation" placeholder="e.g. Rolled back release v2.3.1">
-      </div>
-
-      <button class="btn" onclick="submitTransition()">Attempt Transition</button>
-    </div>
-  </div>
-
-  <!-- Link Modal -->
-  <div class="modal-overlay" id="linkModal">
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title">Create Typed Relationship Edge</div>
-        <button class="modal-close" onclick="closeModal('linkModal')">✕</button>
-      </div>
-
-      <div id="linkAlert" class="alert-banner"></div>
-
-      <input type="hidden" id="linkSourceId">
-
-      <div class="form-group">
-        <label for="linkTargetSelect">Target WorkItem:</label>
-        <select id="linkTargetSelect"></select>
-      </div>
-
-      <div class="form-group">
-        <label for="linkTypeSelect">Relationship Edge Type:</label>
-        <select id="linkTypeSelect">
-          <option value="caused_by">caused_by (Incident -> Problem/Story)</option>
-          <option value="fixed_by">fixed_by (Incident/Bug -> Story/PR)</option>
-          <option value="child_of">child_of (Story -> Epic)</option>
-          <option value="parent_of">parent_of (Epic -> Story)</option>
-          <option value="blocks">blocks</option>
-          <option value="relates_to">relates_to</option>
-          <option value="deployed_in">deployed_in (Story -> Release)</option>
-        </select>
-      </div>
-
-      <button class="btn" onclick="submitCreateLink()">Create Typed Edge</button>
-    </div>
-  </div>
-
-  <!-- Lineage Modal -->
-  <div class="modal-overlay" id="lineageModal">
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title">Upstream Lineage Chain Explorer</div>
-        <button class="modal-close" onclick="closeModal('lineageModal')">✕</button>
-      </div>
-
-      <div class="lineage-nodes" id="lineageChainContainer">
-        <!-- Rendered lineage nodes -->
-      </div>
-    </div>
-  </div>
-
-  <!-- SLA Policy Modal -->
-  <div class="modal-overlay" id="slaModal">
-    <div class="modal">
-      <div class="modal-header">
-        <div class="modal-title">SLA Policy Configuration</div>
-        <button class="modal-close" onclick="closeModal('slaModal')">✕</button>
-      </div>
-
-      <div id="slaPoliciesList" style="display: flex; flex-direction: column; gap: 8px; max-height: 200px; overflow-y: auto;">
-        <!-- Configured policies render here -->
-      </div>
-
-      <div style="border-top: 1px solid var(--card-border); padding-top: 14px; font-weight: 600; font-size: 13px;">Add / Update SLA Policy</div>
-
-      <div class="form-group">
-        <label for="slaItemType">Item Type</label>
-        <select id="slaItemType">
-          <option value="story">Story</option>
-          <option value="incident">Incident</option>
-          <option value="bug">Bug</option>
-          <option value="change_request">Change Request</option>
-        </select>
-      </div>
-
-      <div class="form-group">
-        <label for="slaState">State</label>
-        <input type="text" id="slaState" placeholder="e.g. In Review, Investigating, Triaged">
-      </div>
-
-      <div class="form-group">
-        <label for="slaThreshold">Threshold (Minutes)</label>
-        <input type="number" id="slaThreshold" placeholder="e.g. 60 (1 hr) or 960 (2 business days)">
-      </div>
-
-      <div class="form-group">
-        <label for="slaCalendar">Business Calendar</label>
-        <select id="slaCalendar">
-          <option value="5x8">5x8 (Mon-Fri 9am-5pm)</option>
-          <option value="24x7">24x7 (Continuous)</option>
-        </select>
-      </div>
-
-      <button class="btn" onclick="submitSlaPolicy()">Save SLA Policy</button>
-    </div>
-  </div>
-
+  <dialog class="drawer" id="itemDialog" aria-labelledby="detailTitle"><div class="modal-head"><div><p class="detail-key" id="detailKey">Work item</p><h2 id="detailTitle">Item details</h2></div><button class="icon-button" type="button" data-close-dialog="itemDialog" aria-label="Close item details">×</button></div><div class="drawer-body" id="detailBody"></div></dialog>
+  <dialog class="modal" id="createDialog" aria-labelledby="createDialogTitle"><form id="createForm"><div class="modal-head"><div><h2 id="createDialogTitle">Create work item</h2><p>Add delivery or operational work to the active tenant.</p></div><button class="icon-button" type="button" data-close-dialog="createDialog" aria-label="Close create work item">×</button></div><div class="modal-body"><div class="form-grid"><div class="form-group"><label for="createType">Type</label><select id="createType" required><option value="story">Story</option><option value="epic">Epic</option><option value="incident">Incident</option></select></div><div class="form-group"><label for="createPriority">Priority</label><select id="createPriority"><option value="P0">P0 · Critical</option><option value="P1">P1 · High</option><option value="P2" selected>P2 · Medium</option><option value="P3">P3 · Low</option><option value="P4">P4 · Lowest</option></select></div><div class="form-group full"><label for="createTitle">Title</label><input id="createTitle" maxlength="180" required placeholder="A clear, outcome-oriented title"></div><div class="form-group full"><label for="createDescription">Description</label><textarea id="createDescription" placeholder="What needs to happen, and why?"></textarea></div><div class="form-group" id="severityGroup" hidden><label for="createSeverity">Severity</label><select id="createSeverity"><option value="SEV1">SEV1 · Critical</option><option value="SEV2">SEV2 · Major</option><option value="SEV3">SEV3 · Minor</option><option value="SEV4">SEV4 · Low</option></select></div></div></div><div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="createDialog">Cancel</button><button class="button" type="submit">Create item</button></div></form></dialog>
+  <dialog class="modal" id="transitionDialog" aria-labelledby="transitionDialogTitle"><form id="transitionForm"><div class="modal-head"><div><h2 id="transitionDialogTitle">Move work item</h2><p>Available states come from the item’s versioned workflow.</p></div><button class="icon-button" type="button" data-close-dialog="transitionDialog" aria-label="Close transition dialog">×</button></div><div class="modal-body"><div class="inline-alert" id="transitionAlert" hidden></div><div class="form-grid"><div class="form-group full"><label>Current state</label><div class="current-state" id="transitionCurrentState">—</div></div><div class="form-group full"><label for="transitionTarget">Move to</label><select id="transitionTarget" required></select><span class="help-text" id="transitionHelp">Choose an allowed next state.</span></div><div class="form-group full" id="mitigationGroup" hidden><label for="transitionMitigation">Mitigation summary</label><textarea id="transitionMitigation" placeholder="Describe the action that reduced or removed impact"></textarea></div></div></div><div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="transitionDialog">Cancel</button><button class="button" id="transitionSubmit" type="submit">Move item</button></div></form></dialog>
+  <dialog class="modal" id="linkDialog" aria-labelledby="linkDialogTitle"><form id="linkForm"><div class="modal-head"><div><h2 id="linkDialogTitle">Link work items</h2><p>Create a typed traceability relationship.</p></div><button class="icon-button" type="button" data-close-dialog="linkDialog" aria-label="Close link dialog">×</button></div><div class="modal-body"><div class="form-grid"><div class="form-group full"><label for="linkTarget">Target item</label><select id="linkTarget" required></select></div><div class="form-group full"><label for="linkType">Relationship</label><select id="linkType"><option value="relates_to">Relates to</option><option value="child_of">Child of</option><option value="parent_of">Parent of</option><option value="blocks">Blocks</option><option value="blocked_by">Blocked by</option><option value="caused_by">Caused by</option><option value="fixed_by">Fixed by</option><option value="deployed_in">Deployed in</option><option value="affects">Affects</option><option value="duplicate_of">Duplicate of</option></select></div></div></div><div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="linkDialog">Cancel</button><button class="button" type="submit">Create relationship</button></div></form></dialog>
+  <dialog class="modal wide" id="lineageDialog" aria-labelledby="lineageDialogTitle"><div class="modal-head"><div><h2 id="lineageDialogTitle">Traceability</h2><p>Follow this item through its connected work.</p></div><button class="icon-button" type="button" data-close-dialog="lineageDialog" aria-label="Close traceability">×</button></div><div class="modal-body"><div class="lineage-controls"><label class="help-text" for="lineageDirection">Direction</label><select class="field" id="lineageDirection"><option value="up">Upstream causes and parents</option><option value="down">Downstream impact and children</option></select></div><div id="lineageContent"></div></div></dialog>
+  <dialog class="modal" id="slaDialog" aria-labelledby="slaDialogTitle"><form id="slaForm"><div class="modal-head"><div><h2 id="slaDialogTitle">SLA policies</h2><p>Configure time-in-state thresholds for this tenant.</p></div><button class="icon-button" type="button" data-close-dialog="slaDialog" aria-label="Close SLA policies">×</button></div><div class="modal-body"><div class="policy-list" id="policyList"></div><div class="section-divider">Add or update a policy</div><div class="form-grid"><div class="form-group"><label for="slaType">Item type</label><select id="slaType"><option value="story">Story</option><option value="epic">Epic</option><option value="incident">Incident</option></select></div><div class="form-group"><label for="slaState">State</label><select id="slaState"></select></div><div class="form-group"><label for="slaThreshold">Threshold in minutes</label><input id="slaThreshold" type="number" min="1" required placeholder="960"></div><div class="form-group"><label for="slaCalendar">Calendar</label><select id="slaCalendar"><option value="5x8">5×8 · Weekdays</option><option value="24x7">24×7 · Continuous</option></select></div></div></div><div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="slaDialog">Cancel</button><button class="button" type="submit">Save policy</button></div></form></dialog>
+  <dialog class="modal" id="pilotDialog" aria-labelledby="pilotDialogTitle"><div class="modal-head"><div><h2 id="pilotDialogTitle">Pilot actions</h2><p>Utilities for demonstrating and validating the pilot.</p></div><button class="icon-button" type="button" data-close-dialog="pilotDialog" aria-label="Close pilot actions">×</button></div><div class="modal-body"><div class="form-grid"><button class="button secondary" id="recomputeButton" type="button">↻ Recompute SLA aging</button><button class="button secondary" id="importButton" type="button">↓ Import 12-epic backlog</button></div><p class="help-text" style="margin:14px 0 0">Import creates the 12 epics and 38 user stories from the project backlog in the active tenant.</p></div></dialog>
+  <dialog class="modal" id="confirmImportDialog" aria-labelledby="confirmImportTitle"><div class="modal-head"><div><h2 id="confirmImportTitle">Import project backlog?</h2><p>This adds the full dogfooding dataset to the active tenant.</p></div><button class="icon-button" type="button" data-close-dialog="confirmImportDialog" aria-label="Cancel import">×</button></div><div class="modal-body"><p class="confirm-copy">Cadena will create 12 Epic work items, 38 Story work items, and their parent-child relationships. Repeating the import creates another copy of the dataset.</p></div><div class="modal-actions"><button class="button secondary" type="button" data-close-dialog="confirmImportDialog">Cancel</button><button class="button" id="confirmImportButton" type="button">Import backlog</button></div></dialog>
+  <div class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="true"></div>
   <script>
-    let currentWorkItems = [];
-
-    async function loadWorkItems() {
-      const orgId = document.getElementById('tenantSelect').value;
-      const type = document.getElementById('filterType').value;
-      const aging = document.getElementById('filterAging').value;
-
-      let url = `/workitems?org_id=${orgId}`;
-      if (type) url += `&type=${type}`;
-      if (aging) url += `&aging_bucket=${aging}`;
-
+    // CODEX IMPLEMENTATION: state-driven, tenant-aware, accessible pilot UI.
+    const PRIMARY_ORG = '00000000-0000-0000-0000-000000000099';
+    const TEAM_ID = '00000000-0000-0000-0000-000000000001';
+    const WORKFLOW_STATES = {
+      epic: ['Proposed','Planned','In Progress','In Review','Blocked','Done','Verified','Closed','Reopened'],
+      story: ['Proposed','Planned','In Progress','In Review','Blocked','Done','Verified','Closed','Reopened'],
+      incident: ['Triaged','Investigating','Mitigated','Resolved','Post-incident Review','Closed']
+    };
+    const state = { items: [], policies: [], view: 'board', loading: true, selectedItem: null, transitionOptions: [], lineageItemId: null, filters: { search: '', type: '', aging: '' } };
+    const $ = (id) => document.getElementById(id);
+    const refs = { tenant: $('tenantSelect'), role: $('roleSelect'), body: $('workspaceBody'), search: $('searchInput'), type: $('typeFilter'), aging: $('agingFilter'), sync: $('syncNote'), result: $('resultSummary'), itemDialog: $('itemDialog'), createDialog: $('createDialog'), transitionDialog: $('transitionDialog'), linkDialog: $('linkDialog'), lineageDialog: $('lineageDialog'), slaDialog: $('slaDialog'), pilotDialog: $('pilotDialog'), confirmImportDialog: $('confirmImportDialog'), toast: $('toastRegion') };
+    function orgId() { return refs.tenant.value || PRIMARY_ORG; }
+    function tenantHeaders(extra = {}) { return { 'x-org-id': orgId(), ...extra }; }
+    async function api(path, options = {}) {
+      const response = await fetch(path, { ...options, headers: tenantHeaders(options.headers || {}) });
+      const text = await response.text(); let data = null;
+      if (text) { try { data = JSON.parse(text); } catch { data = text; } }
+      if (!response.ok) { const reason = data?.reason || data?.message || data?.error || `Request failed (${response.status})`; throw new Error(Array.isArray(reason) ? reason.join(', ') : reason); }
+      return data;
+    }
+    function el(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined && text !== null) node.textContent = String(text); return node; }
+    function showToast(message, tone = 'success') { const toast = el('div', `toast ${tone}`, message); refs.toast.appendChild(toast); setTimeout(() => toast.remove(), 4200); }
+    function showDialog(dialog) { if (!dialog.open) dialog.showModal(); }
+    function closeDialog(dialog) { if (dialog?.open) dialog.close(); }
+    function formatType(type) { return ({ epic: 'Epic', story: 'Story', incident: 'Incident' })[type] || type; }
+    function shortKey(item) { const prefix = item.type === 'incident' ? 'INC' : item.type === 'epic' ? 'EPIC' : 'STORY'; return item.custom_fields?.epic_code || item.custom_fields?.user_story_id || `${prefix}-${item.id.slice(0,6).toUpperCase()}`; }
+    function formatDate(value) { return value ? new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—'; }
+    function policyFor(item) { return state.policies.find((policy) => policy.item_type === item.type && policy.state === item.status) || null; }
+    function healthFor(item) {
+      if (!policyFor(item)) return { key: 'none', label: 'No SLA policy', score: 0 };
+      const score = Number(item.aging_score || 0);
+      if (item.aging_bucket === 'red') return { key: 'red', label: `${score.toFixed(0)}% · breached`, score };
+      if (item.aging_bucket === 'amber') return { key: 'amber', label: `${score.toFixed(0)}% · at risk`, score };
+      return { key: 'green', label: `${score.toFixed(0)}% · on track`, score };
+    }
+    function ageLabel(item) { const minutes = Math.max(0,Math.floor((Date.now()-new Date(item.entered_state_at).getTime())/60000)); if (minutes < 60) return `${minutes}m in state`; const hours = Math.floor(minutes/60); return hours < 48 ? `${hours}h in state` : `${Math.floor(hours/24)}d in state`; }
+    function filteredItems() {
+      const search = state.filters.search.trim().toLowerCase();
+      return state.items.filter((item) => { const health = healthFor(item); const haystack = `${item.title} ${item.description || ''} ${shortKey(item)}`.toLowerCase(); return (!search || haystack.includes(search)) && (!state.filters.type || item.type === state.filters.type) && (!state.filters.aging || health.key === state.filters.aging); });
+    }
+    async function loadWorkspace({ quiet = false } = {}) {
+      if (!quiet) { state.loading = true; renderWorkspace(); }
       try {
-        const res = await fetch(url, {
-          headers: { 'x-org-id': orgId }
-        });
-        currentWorkItems = await res.json();
-        renderGrid();
-        updateKPIs();
-      } catch (err) {
-        console.error('Failed to load work items:', err);
-      }
+        const [items, policies] = await Promise.all([api(`/workitems?org_id=${encodeURIComponent(orgId())}`), api(`/sla-policies?org_id=${encodeURIComponent(orgId())}`)]);
+        state.items = Array.isArray(items) ? items : []; state.policies = Array.isArray(policies) ? policies : []; state.loading = false; renderAll(); refs.sync.textContent = `Updated ${new Intl.DateTimeFormat(undefined,{hour:'numeric',minute:'2-digit'}).format(new Date())}`;
+      } catch (error) { state.loading = false; renderError(error.message); refs.sync.textContent = 'Update failed'; }
     }
-
-    async function importStageBDogfooding() {
-      const orgId = document.getElementById('tenantSelect').value;
-      if (!confirm(`Import 12-Epic backlog (50 WorkItems & 38 Relationships) into Tenant Org '${orgId.slice(0, 8)}...'?`)) {
-        return;
-      }
-
-      try {
-        const res = await fetch('/workitems/import-backlog', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-org-id': orgId },
-          body: JSON.stringify({ org_id: orgId })
-        });
-        const data = await res.json();
-        alert(`🎉 Stage B Dogfooding Backlog Ingested Successfully!\n- Epics Imported: ${data.epicCount}\n- User Stories: ${data.storyCount}\n- Total WorkItems: ${data.totalImported}\n- Relationships: ${data.linkCount}`);
-        loadWorkItems();
-      } catch (err) {
-        alert(`❌ Import Failed: ${err.message}`);
-      }
+    function renderAll() { renderKPIs(); renderAttention(); renderWorkspace(); }
+    function renderKPIs() {
+      const active = state.items.filter((item) => !['Closed','Done','Verified','Resolved'].includes(item.status)).length;
+      $('kpiTotal').textContent = state.items.length; $('kpiActive').textContent = active; $('kpiAtRisk').textContent = state.items.filter((item) => healthFor(item).key === 'amber').length; $('kpiBreached').textContent = state.items.filter((item) => healthFor(item).key === 'red').length;
     }
-
-    function renderGrid() {
-      const grid = document.getElementById('itemsGrid');
-      grid.innerHTML = '';
-
-      if (currentWorkItems.length === 0) {
-        grid.innerHTML = '<div style="grid-column: 1/-1; text-align: center; color: var(--text-muted); padding: 40px;">No work items match the selected filter criteria. Click "Import 12-Epic Backlog" to load dogfood dataset!</div>';
-        return;
-      }
-
-      currentWorkItems.forEach(item => {
-        const card = document.createElement('div');
-        card.className = `item-card type-${item.type}`;
-
-        const isIncident = item.type === 'incident';
-        const typeBadgeClass = isIncident ? 'badge-incident' : 'badge-story';
-        const agingClass = `aging-${item.aging_bucket || 'green'}`;
-        const score = Number(item.aging_score || 0).toFixed(1);
-        const barWidth = Math.min(100, Math.max(0, score));
-
-        let customFieldsHtml = '';
-        if (item.custom_fields && Object.keys(item.custom_fields).length > 0) {
-          customFieldsHtml = '<div class="custom-fields-box">';
-          for (const [k, v] of Object.entries(item.custom_fields)) {
-            const valDisplay = typeof v === 'object' ? JSON.stringify(v) : v;
-            customFieldsHtml += `<div class="custom-field-row"><span>${k}:</span> <span>${valDisplay}</span></div>`;
-          }
-          customFieldsHtml += '</div>';
-        }
-
-        card.innerHTML = `
-          <div class="card-head">
-            <div>
-              <div class="item-key">${item.type.toUpperCase()} • ${item.id.slice(0, 8)}</div>
-              <div class="item-title">${escapeHtml(item.title)}</div>
-            </div>
-          </div>
-
-          <div class="badges">
-            <span class="badge ${typeBadgeClass}">${isIncident ? '🚨 Incident' : '⚡ Story'}</span>
-            <span class="badge badge-status">${item.status}</span>
-            <span class="badge badge-status">${item.priority}</span>
-            ${item.severity ? `<span class="badge badge-incident">${item.severity}</span>` : ''}
-            <span class="badge ${agingClass}">${(item.aging_bucket || 'green').toUpperCase()} (${score}%)</span>
-          </div>
-
-          <!-- SLA Runway Progress Bar -->
-          <div style="background: rgba(15, 23, 42, 0.6); border-radius: 6px; height: 6px; width: 100%; overflow: hidden; position: relative;">
-            <div style="height: 100%; width: ${barWidth}%; background: ${item.aging_bucket === 'red' ? '#f43f5e' : item.aging_bucket === 'amber' ? '#f59e0b' : '#10b981'}; transition: width 0.3s ease;"></div>
-          </div>
-
-          ${customFieldsHtml}
-
-          <div class="card-actions">
-            <button class="btn btn-secondary" onclick="openTransitionModal('${item.id}', '${item.status}')">🔄 Transition</button>
-            <button class="btn btn-secondary" onclick="openLinkModal('${item.id}')">🔗 Link</button>
-            <button class="btn btn-secondary" onclick="openLineageModal('${item.id}')">🌲 Lineage</button>
-          </div>
-        `;
-
-        grid.appendChild(card);
-      });
+    function renderAttention() {
+      const atRisk = state.items.filter((item) => ['amber','red'].includes(healthFor(item).key));
+      if (!atRisk.length) { $('attentionTitle').textContent = 'No SLA attention items'; $('attentionDescription').textContent = state.policies.length ? 'All governed work is currently within its threshold.' : 'Add SLA policies to begin monitoring time in state.'; $('showAttentionButton').textContent = state.policies.length ? 'View all work' : 'Configure policies'; $('showAttentionButton').dataset.action = state.policies.length ? 'all' : 'sla'; }
+      else { const breached = atRisk.filter((item) => healthFor(item).key === 'red').length; $('attentionTitle').textContent = `${atRisk.length} item${atRisk.length === 1 ? '' : 's'} need attention`; $('attentionDescription').textContent = breached ? `${breached} breached SLA; review the highest-risk work first.` : 'These items have consumed at least 75% of their SLA.'; $('showAttentionButton').textContent = 'Show attention items'; $('showAttentionButton').dataset.action = 'attention'; }
     }
-
-    async function triggerAgingRecompute() {
-      const orgId = document.getElementById('tenantSelect').value;
-      try {
-        const res = await fetch('/aging/recompute', {
-          method: 'POST',
-          headers: { 'x-org-id': orgId }
-        });
-        const data = await res.json();
-        alert(`⏱️ SLA Aging Recomputed Successfully!\n- Processed Items: ${data.summary.processedCount}\n- Updated Items: ${data.summary.updatedCount}\n- Warnings Emitted: ${data.summary.warningCount}\n- Breaches Emitted: ${data.summary.breachCount}`);
-        loadWorkItems();
-      } catch (err) {
-        alert(`❌ Recompute Failed: ${err.message}`);
-      }
+    function renderWorkspace() {
+      if (state.loading) { refs.body.replaceChildren(); const loading = el('div','loading-grid'); loading.setAttribute('aria-label','Loading work items'); for (let i=0;i<3;i+=1) loading.appendChild(el('div','skeleton')); refs.body.appendChild(loading); return; }
+      const rank = { red:3, amber:2, green:1, none:0 };
+      const items = filteredItems().sort((a,b) => rank[healthFor(b).key]-rank[healthFor(a).key] || Number(b.aging_score||0)-Number(a.aging_score||0));
+      refs.result.textContent = `${items.length} of ${state.items.length} work item${state.items.length === 1 ? '' : 's'}`; refs.body.replaceChildren();
+      if (!items.length) { const empty=el('div','empty-state'), wrap=el('div'); wrap.append(el('div','empty-state-mark','⌕'),el('h3','',state.items.length?'No work matches these filters':'This tenant has no work yet'),el('p','',state.items.length?'Clear or adjust the filters to bring work back into view.':'Create a work item or import the project backlog to start using the workspace.')); const button=el('button','button',state.items.length?'Clear filters':'Create work item'); button.type='button'; button.addEventListener('click',()=>state.items.length?clearFilters():showDialog(refs.createDialog)); wrap.appendChild(button); empty.appendChild(wrap); refs.body.appendChild(empty); return; }
+      state.view === 'list' ? renderList(items) : renderBoard(items);
     }
-
-    async function openSlaModal() {
-      const orgId = document.getElementById('tenantSelect').value;
-      try {
-        const res = await fetch(`/sla-policies?org_id=${orgId}`);
-        const policies = await res.json();
-        
-        const listDiv = document.getElementById('slaPoliciesList');
-        listDiv.innerHTML = '';
-        if (policies.length === 0) {
-          listDiv.innerHTML = '<div style="color: var(--text-muted); font-size: 12px;">No SLA policies defined yet for this tenant.</div>';
-        } else {
-          policies.forEach(p => {
-            const row = document.createElement('div');
-            row.style.cssText = 'background: rgba(30, 41, 59, 0.6); border: 1px solid var(--card-border); padding: 8px 12px; border-radius: 6px; display: flex; justify-content: space-between; font-size: 12px;';
-            row.innerHTML = `<span><strong>${p.item_type.toUpperCase()}</strong> (${p.state})</span> <span>${p.threshold_minutes}m [${p.calendar}]</span>`;
-            listDiv.appendChild(row);
-          });
-        }
-
-        document.getElementById('slaModal').classList.add('active');
-      } catch (err) {
-        console.error('Failed to load SLA policies:', err);
-      }
+    function renderBoard(items) {
+      const board=el('div','board'); const statuses=[...new Set(items.map((item)=>item.status))]; const preferred=['Triaged','Proposed','Planned','In Progress','Investigating','In Review','Blocked','Mitigated','Resolved','Done','Verified','Post-incident Review','Closed','Reopened'];
+      statuses.sort((a,b)=>{const ai=preferred.indexOf(a),bi=preferred.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)||a.localeCompare(b);});
+      statuses.forEach((status)=>{const columnItems=items.filter((item)=>item.status===status),column=el('section','board-column'),head=el('div','column-head'),title=el('div','column-title'); title.append(el('span','status-dot'),document.createTextNode(status)); head.append(title,el('span','column-count',columnItems.length)); const list=el('div','column-items'); columnItems.forEach((item)=>list.appendChild(createCard(item))); column.append(head,list); board.appendChild(column);}); refs.body.appendChild(board);
     }
-
-    async function submitSlaPolicy() {
-      const orgId = document.getElementById('tenantSelect').value;
-      const type = document.getElementById('slaItemType').value;
-      const state = document.getElementById('slaState').value.trim();
-      const threshold = parseInt(document.getElementById('slaThreshold').value, 10);
-      const calendar = document.getElementById('slaCalendar').value;
-
-      if (!state || isNaN(threshold) || threshold <= 0) {
-        alert('Please specify a valid state name and threshold in minutes (>0).');
-        return;
-      }
-
-      try {
-        await fetch('/sla-policies', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-org-id': orgId },
-          body: JSON.stringify({ item_type: type, state, threshold_minutes: threshold, calendar })
-        });
-        alert(`✅ SLA Policy Saved for (${type}, ${state}) -> ${threshold} mins [${calendar}]`);
-        openSlaModal();
-        triggerAgingRecompute();
-      } catch (err) {
-        alert(`❌ Failed to save SLA policy: ${err.message}`);
-      }
+    function createCard(item) {
+      const health=healthFor(item),card=el('article','work-card'),top=el('div','card-top'); top.append(el('span','item-key',shortKey(item)),el('span',`priority ${item.priority?.toLowerCase()||''}`,item.priority));
+      const open=el('button','card-open'); open.type='button'; open.setAttribute('aria-label',`Open ${item.title}`); open.append(el('div','card-title',item.title)); const tags=el('div','tag-row'); tags.appendChild(el('span',`tag ${item.type}`,formatType(item.type))); if(item.severity)tags.appendChild(el('span','tag incident',item.severity)); open.appendChild(tags); open.addEventListener('click',()=>openDetails(item));
+      const sla=el('div','sla-block'),line=el('div','sla-line'); line.append(el('span','','SLA runway'),el('span',`sla-value ${health.key}`,health.label)); const progress=el('div','progress'); progress.setAttribute('role','progressbar'); progress.setAttribute('aria-label',health.label); progress.setAttribute('aria-valuenow',String(Math.min(100,Math.max(0,health.score)))); const bar=el('div',`progress-bar ${health.key}`); bar.style.width=`${Math.min(100,Math.max(0,health.score))}%`; progress.appendChild(bar); sla.append(line,progress);
+      const footer=el('div','card-footer'),owner=el('div','owner'); owner.append(el('span','owner-avatar',item.owner_id?'OW':'—'),document.createTextNode(item.owner_id?'Assigned':'Unassigned')); const actions=el('div','card-actions'),move=el('button','card-action','Move'),more=el('button','card-action','Details'); move.type=more.type='button'; move.addEventListener('click',()=>openTransition(item)); more.addEventListener('click',()=>openDetails(item)); actions.append(move,more); footer.append(owner,actions); card.append(top,open,sla,footer); return card;
     }
-
-    function updateKPIs() {
-      document.getElementById('kpiTotal').innerText = currentWorkItems.length;
-      document.getElementById('kpiStories').innerText = currentWorkItems.filter(i => i.type === 'story').length;
-      document.getElementById('kpiIncidents').innerText = currentWorkItems.filter(i => i.type === 'incident').length;
-      document.getElementById('kpiBreaches').innerText = currentWorkItems.filter(i => i.aging_bucket === 'red').length;
+    function renderList(items) {
+      const scroll=el('div','list-scroll'),table=el('table','list-table'),head=document.createElement('thead'),header=document.createElement('tr'); ['Key','Title','Type','State','Priority','SLA health','Time in state'].forEach((label)=>header.appendChild(el('th','',label))); head.appendChild(header); const body=document.createElement('tbody');
+      items.forEach((item)=>{const row=document.createElement('tr'); row.tabIndex=0; row.setAttribute('role','button'); row.setAttribute('aria-label',`Open ${item.title}`); row.append(el('td','item-key',shortKey(item)),el('td','list-title',item.title),el('td','',formatType(item.type)),el('td','',item.status),el('td','',item.priority),el('td',`sla-value ${healthFor(item).key}`,healthFor(item).label),el('td','',ageLabel(item))); row.addEventListener('click',()=>openDetails(item)); row.addEventListener('keydown',(event)=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();openDetails(item);}}); body.appendChild(row);}); table.append(head,body); scroll.appendChild(table); refs.body.appendChild(scroll);
     }
-
-    function toggleTypeFields() {
-      const type = document.getElementById('createType').value;
-      document.getElementById('severityGroup').style.display = type === 'incident' ? 'flex' : 'none';
+    function renderError(message) { refs.body.replaceChildren(); const empty=el('div','empty-state'),wrap=el('div'); wrap.append(el('div','empty-state-mark','!'),el('h3','','Workspace could not be loaded'),el('p','',message)); const retry=el('button','button','Try again'); retry.type='button'; retry.addEventListener('click',()=>loadWorkspace()); wrap.appendChild(retry); empty.appendChild(wrap); refs.body.appendChild(empty); }
+    function clearFilters(){state.filters={search:'',type:'',aging:''};refs.search.value='';refs.type.value='';refs.aging.value='';renderWorkspace();}
+    function openDetails(item) {
+      state.selectedItem=item; $('detailKey').textContent=`${formatType(item.type)} · ${shortKey(item)}`; $('detailTitle').textContent=item.title; const body=$('detailBody'); body.replaceChildren(); body.appendChild(el('p','detail-description',item.description||'No description has been added yet.'));
+      const actions=el('div','detail-actions'),move=el('button','button','Move state'),link=el('button','button secondary','Link item'),lineage=el('button','button secondary','Trace lineage'); [move,link,lineage].forEach((button)=>button.type='button'); move.addEventListener('click',()=>{closeDialog(refs.itemDialog);openTransition(item);}); link.addEventListener('click',()=>{closeDialog(refs.itemDialog);openLink(item);}); lineage.addEventListener('click',()=>{closeDialog(refs.itemDialog);openLineage(item);}); actions.append(move,link,lineage); body.appendChild(actions);
+      const overview=el('section','detail-section'); overview.appendChild(el('h3','','Overview')); const grid=el('div','detail-grid'); [['Status',item.status],['Priority',item.priority],['SLA health',healthFor(item).label],['Time in state',ageLabel(item)],['Owner',item.owner_id||'Unassigned'],['Updated',formatDate(item.updated_at)]].forEach(([label,value])=>{const field=el('div','detail-field');field.append(el('span','',label),el('strong','',value));grid.appendChild(field);}); overview.appendChild(grid); body.appendChild(overview);
+      const entries=Object.entries(item.custom_fields||{}); if(entries.length){const custom=el('section','detail-section');custom.appendChild(el('h3','','Custom fields'));const list=el('div','custom-list');entries.forEach(([key,value])=>{const row=el('div','custom-row');row.append(el('span','',key.replaceAll('_',' ')),el('span','',typeof value==='object'?JSON.stringify(value,null,2):value));list.appendChild(row);});custom.appendChild(list);body.appendChild(custom);} showDialog(refs.itemDialog);
     }
-
-    function openCreateModal() {
-      document.getElementById('createModal').classList.add('active');
+    async function openTransition(item) {
+      state.selectedItem=item;$('transitionAlert').hidden=true;$('transitionCurrentState').textContent=item.status;$('transitionTarget').replaceChildren();$('transitionHelp').textContent='Loading available transitions…';$('transitionSubmit').disabled=true;showDialog(refs.transitionDialog);
+      try{const data=await api(`/workitems/${item.id}/available-transitions`);state.transitionOptions=data.transitions||[];if(!state.transitionOptions.length){$('transitionHelp').textContent='This item has no available next state.';const option=el('option','','No transitions available');option.value='';$('transitionTarget').appendChild(option);}else{state.transitionOptions.forEach((transition)=>{const option=el('option','',transition.to_state);option.value=transition.to_state;$('transitionTarget').appendChild(option);});$('transitionHelp').textContent=`${state.transitionOptions.length} allowed next state${state.transitionOptions.length===1?'':'s'}.`;$('transitionSubmit').disabled=false;}updateTransitionFields();}catch(error){showTransitionError(error.message);}
     }
-
-    function openTransitionModal(id, currentStatus) {
-      document.getElementById('transItemId').value = id;
-      document.getElementById('transCurrentStatus').innerText = currentStatus;
-      document.getElementById('transAlert').className = 'alert-banner';
-      document.getElementById('transAlert').innerText = '';
-      document.getElementById('transitionModal').classList.add('active');
-    }
-
-    function openLinkModal(sourceId) {
-      document.getElementById('linkSourceId').value = sourceId;
-      document.getElementById('linkAlert').className = 'alert-banner';
-      document.getElementById('linkAlert').innerText = '';
-
-      const targetSelect = document.getElementById('linkTargetSelect');
-      targetSelect.innerHTML = '';
-
-      currentWorkItems.filter(i => i.id !== sourceId).forEach(target => {
-        const opt = document.createElement('option');
-        opt.value = target.id;
-        opt.innerText = `[${target.type.toUpperCase()}] ${target.title}`;
-        targetSelect.appendChild(opt);
-      });
-
-      document.getElementById('linkModal').classList.add('active');
-    }
-
-    async function openLineageModal(id) {
-      const container = document.getElementById('lineageChainContainer');
-      container.innerHTML = '<div style="text-align: center; color: var(--text-muted);">Tracing upstream lineage...</div>';
-      document.getElementById('lineageModal').classList.add('active');
-
-      try {
-        const res = await fetch(`/workitems/${id}/lineage?direction=up`);
-        const data = await res.json();
-        
-        container.innerHTML = '';
-        if (!data.chain || data.chain.length === 0) {
-          container.innerHTML = '<div style="text-align: center; color: var(--text-muted);">No upstream lineage found for this item.</div>';
-          return;
-        }
-
-        data.chain.forEach((node, idx) => {
-          if (idx > 0) {
-            const conn = document.createElement('div');
-            conn.className = 'lineage-connector';
-            conn.innerText = '↑ linked via edge';
-            container.appendChild(conn);
-          }
-
-          const nodeCard = document.createElement('div');
-          nodeCard.className = 'lineage-node-card';
-          nodeCard.innerHTML = `
-            <div>
-              <div style="font-weight: 700; color: #fff;">${escapeHtml(node.title)}</div>
-              <div style="font-size: 12px; color: var(--text-muted);">${node.type.toUpperCase()} • ${node.status}</div>
-            </div>
-            <span class="badge ${node.type === 'incident' ? 'badge-incident' : 'badge-story'}">${node.type}</span>
-          `;
-          container.appendChild(nodeCard);
-        });
-      } catch (err) {
-        container.innerHTML = `<div class="alert-banner error">Failed to load lineage: ${err.message}</div>`;
-      }
-    }
-
-    async function submitCreateItem() {
-      const orgId = document.getElementById('tenantSelect').value;
-      const type = document.getElementById('createType').value;
-      const title = document.getElementById('createTitle').value;
-      const description = document.getElementById('createDesc').value;
-      const priority = document.getElementById('createPriority').value;
-      const severity = type === 'incident' ? document.getElementById('createSeverity').value : null;
-
-      if (!title) {
-        alert('Please enter a title');
-        return;
-      }
-
-      try {
-        const res = await fetch('/workitems', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-org-id': orgId },
-          body: JSON.stringify({
-            type, title, description, priority, severity,
-            team_id: '00000000-0000-0000-0000-000000000001',
-            org_id: orgId
-          })
-        });
-
-        if (res.ok) {
-          closeModal('createModal');
-          loadWorkItems();
-        } else {
-          const errData = await res.json();
-          alert(`Error: ${errData.message || 'Failed to create item'}`);
-        }
-      } catch (err) {
-        alert(`Error: ${err.message}`);
-      }
-    }
-
-    async function submitTransition() {
-      const id = document.getElementById('transItemId').value;
-      const toState = document.getElementById('transToState').value;
-      const mitigation = document.getElementById('transMitigation').value;
-      const role = document.getElementById('roleSelect').value;
-
-      const alertBanner = document.getElementById('transAlert');
-      alertBanner.className = 'alert-banner';
-      alertBanner.innerText = '';
-
-      if (!toState) {
-        alertBanner.className = 'alert-banner error';
-        alertBanner.innerText = 'Please specify a target state';
-        return;
-      }
-
-      const fields = {};
-      if (mitigation) fields.mitigation_summary = mitigation;
-
-      try {
-        const res = await fetch(`/workitems/${id}/transitions`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-actor-role': role
-          },
-          body: JSON.stringify({ to_state: toState, fields })
-        });
-
-        const data = await res.json();
-        if (res.ok) {
-          alertBanner.className = 'alert-banner success';
-          alertBanner.innerText = `✅ Successfully transitioned to state '${data.to_state}'!`;
-          setTimeout(() => {
-            closeModal('transitionModal');
-            loadWorkItems();
-          }, 1200);
-        } else {
-          alertBanner.className = 'alert-banner error';
-          alertBanner.innerText = `❌ ${data.error}: ${data.reason || data.message}`;
-        }
-      } catch (err) {
-        alertBanner.className = 'alert-banner error';
-        alertBanner.innerText = `❌ Error: ${err.message}`;
-      }
-    }
-
-    async function submitCreateLink() {
-      const sourceId = document.getElementById('linkSourceId').value;
-      const targetId = document.getElementById('linkTargetSelect').value;
-      const linkType = document.getElementById('linkTypeSelect').value;
-
-      const alertBanner = document.getElementById('linkAlert');
-      alertBanner.className = 'alert-banner';
-      alertBanner.innerText = '';
-
-      try {
-        const res = await fetch(`/workitems/${sourceId}/links`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ target_id: targetId, link_type: linkType })
-        });
-
-        const data = await res.json();
-        if (res.ok) {
-          alertBanner.className = 'alert-banner success';
-          alertBanner.innerText = `✅ Created typed edge link '${linkType}' successfully!`;
-          setTimeout(() => {
-            closeModal('linkModal');
-            loadWorkItems();
-          }, 1200);
-        } else {
-          alertBanner.className = 'alert-banner error';
-          alertBanner.innerText = `❌ ${data.error}: ${data.message}`;
-        }
-      } catch (err) {
-        alertBanner.className = 'alert-banner error';
-        alertBanner.innerText = `❌ Error: ${err.message}`;
-      }
-    }
-
-    function closeModal(modalId) {
-      document.getElementById(modalId).classList.remove('active');
-    }
-
-    function escapeHtml(str) {
-      return (str || '').replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-
-    // Initial load
-    loadWorkItems();
+    function updateTransitionFields(){const selected=state.transitionOptions.find((option)=>option.to_state===$('transitionTarget').value),needed=selected?.requires_fields?.includes('mitigation_summary');$('mitigationGroup').hidden=!needed;$('transitionMitigation').required=Boolean(needed);}
+    function showTransitionError(message){$('transitionAlert').textContent=message;$('transitionAlert').hidden=false;$('transitionSubmit').disabled=true;}
+    function openLink(item){state.selectedItem=item;const target=$('linkTarget');target.replaceChildren();state.items.filter((candidate)=>candidate.id!==item.id).forEach((candidate)=>{const option=el('option','',`${shortKey(candidate)} · ${candidate.title}`);option.value=candidate.id;target.appendChild(option);});showDialog(refs.linkDialog);}
+    async function openLineage(item){state.lineageItemId=item.id;$('lineageDialogTitle').textContent=`Traceability · ${shortKey(item)}`;showDialog(refs.lineageDialog);await loadLineage();}
+    async function loadLineage(){const content=$('lineageContent');content.replaceChildren(el('div','skeleton'));try{const direction=$('lineageDirection').value,data=await api(`/workitems/${state.lineageItemId}/lineage?direction=${direction}`);content.replaceChildren();const chain=el('div','lineage-chain');if(!data.chain?.length){content.appendChild(el('p','help-text','No connected work was found in this direction.'));return;}data.chain.forEach((node,index)=>{if(index)chain.appendChild(el('div','lineage-connector',direction==='up'?'↑ follows relationship':'↓ follows relationship'));const row=el('div','lineage-node'),copy=el('div');copy.append(el('strong','',node.title),el('small','',`${formatType(node.type)} · ${node.status}`));row.append(el('span','node-index',index+1),copy,el('span',`tag ${node.type}`,shortKey(node)));chain.appendChild(row);});content.appendChild(chain);}catch(error){content.replaceChildren(el('div','inline-alert',error.message));}}
+    function populateSlaStates(){const type=$('slaType').value,select=$('slaState');select.replaceChildren();(WORKFLOW_STATES[type]||[]).forEach((status)=>{const option=el('option','',status);option.value=status;select.appendChild(option);});}
+    function renderPolicies(){const list=$('policyList');list.replaceChildren();if(!state.policies.length){list.appendChild(el('p','help-text','No policies are configured for this tenant. Add the first policy below.'));return;}state.policies.forEach((policy)=>{const row=el('div','policy-row'),copy=el('div');copy.append(el('strong','',`${formatType(policy.item_type)} · ${policy.state}`),el('span','',policy.calendar==='24x7'?'Continuous calendar':'Weekdays, 9am–5pm UTC'));row.append(copy,el('span','policy-metric',`${policy.threshold_minutes} min`));list.appendChild(row);});}
+    function openSlaPolicies(){renderPolicies();populateSlaStates();showDialog(refs.slaDialog);}
+    async function recomputeAging(){try{const data=await api('/aging/recompute',{method:'POST'});closeDialog(refs.pilotDialog);showToast(`SLA refreshed: ${data.summary.updatedCount} item${data.summary.updatedCount===1?'':'s'} updated.`);await loadWorkspace({quiet:true});}catch(error){showToast(error.message,'error');}}
+    async function importBacklog(){$('confirmImportButton').disabled=true;try{const data=await api('/workitems/import-backlog',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({org_id:orgId(),team_id:TEAM_ID})});closeDialog(refs.confirmImportDialog);showToast(`Imported ${data.epicCount} epics, ${data.storyCount} stories, and ${data.linkCount} relationships.`);await loadWorkspace({quiet:true});}catch(error){showToast(error.message,'error');}finally{$('confirmImportButton').disabled=false;}}
+    document.querySelectorAll('[data-close-dialog]').forEach((button)=>button.addEventListener('click',()=>closeDialog($(button.dataset.closeDialog))));
+    document.querySelectorAll('dialog').forEach((dialog)=>dialog.addEventListener('click',(event)=>{if(event.target===dialog)dialog.close();}));
+    document.querySelectorAll('[data-coming-soon]').forEach((button)=>button.addEventListener('click',()=>showToast(`${button.dataset.comingSoon} is planned for the next UI milestone.`)));
+    document.querySelector('[data-filter-type="incident"]').addEventListener('click',()=>{state.filters.type='incident';refs.type.value='incident';renderWorkspace();closeMobileNav();});
+    $('createButton').addEventListener('click',()=>showDialog(refs.createDialog)); $('refreshButton').addEventListener('click',()=>loadWorkspace()); $('pilotActionsButton').addEventListener('click',()=>showDialog(refs.pilotDialog)); $('openSlaFromNav').addEventListener('click',()=>{openSlaPolicies();closeMobileNav();});
+    $('recomputeButton').addEventListener('click',recomputeAging); $('importButton').addEventListener('click',()=>{closeDialog(refs.pilotDialog);showDialog(refs.confirmImportDialog);}); $('confirmImportButton').addEventListener('click',importBacklog); $('lineageDirection').addEventListener('change',loadLineage); $('slaType').addEventListener('change',populateSlaStates); $('transitionTarget').addEventListener('change',updateTransitionFields); $('createType').addEventListener('change',()=>{$('severityGroup').hidden=$('createType').value!=='incident';});
+    $('boardViewButton').addEventListener('click',()=>setView('board')); $('listViewButton').addEventListener('click',()=>setView('list'));
+    function setView(view){state.view=view;$('boardViewButton').classList.toggle('active',view==='board');$('listViewButton').classList.toggle('active',view==='list');$('boardViewButton').setAttribute('aria-pressed',String(view==='board'));$('listViewButton').setAttribute('aria-pressed',String(view==='list'));renderWorkspace();}
+    refs.search.addEventListener('input',()=>{state.filters.search=refs.search.value;renderWorkspace();}); refs.type.addEventListener('change',()=>{state.filters.type=refs.type.value;renderWorkspace();}); refs.aging.addEventListener('change',()=>{state.filters.aging=refs.aging.value;renderWorkspace();}); refs.tenant.addEventListener('change',()=>{clearFilters();loadWorkspace();});
+    $('showAttentionButton').addEventListener('click',()=>{const action=$('showAttentionButton').dataset.action;if(action==='sla')openSlaPolicies();else{state.filters.aging=action==='attention'?'red':'';refs.aging.value=state.filters.aging;renderWorkspace();}});
+    $('createForm').addEventListener('submit',async(event)=>{event.preventDefault();const type=$('createType').value;try{await api('/workitems',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type,title:$('createTitle').value.trim(),description:$('createDescription').value.trim(),priority:$('createPriority').value,severity:type==='incident'?$('createSeverity').value:null,team_id:TEAM_ID,org_id:orgId()})});closeDialog(refs.createDialog);event.target.reset();$('severityGroup').hidden=true;showToast('Work item created.');await loadWorkspace({quiet:true});}catch(error){showToast(error.message,'error');}});
+    $('transitionForm').addEventListener('submit',async(event)=>{event.preventDefault();const item=state.selectedItem,targetState=$('transitionTarget').value,fields={};if(!$('mitigationGroup').hidden)fields.mitigation_summary=$('transitionMitigation').value.trim();try{await api(`/workitems/${item.id}/transitions`,{method:'POST',headers:{'Content-Type':'application/json','x-actor-role':refs.role.value},body:JSON.stringify({to_state:targetState,fields})});closeDialog(refs.transitionDialog);event.target.reset();showToast(`Moved ${shortKey(item)} to ${targetState}.`);await loadWorkspace({quiet:true});}catch(error){$('transitionAlert').textContent=error.message;$('transitionAlert').hidden=false;$('transitionSubmit').disabled=false;}});
+    $('linkForm').addEventListener('submit',async(event)=>{event.preventDefault();const item=state.selectedItem;try{await api(`/workitems/${item.id}/links`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({target_id:$('linkTarget').value,link_type:$('linkType').value})});closeDialog(refs.linkDialog);showToast('Relationship created.');}catch(error){showToast(error.message,'error');}});
+    $('slaForm').addEventListener('submit',async(event)=>{event.preventDefault();try{await api('/sla-policies',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({item_type:$('slaType').value,state:$('slaState').value,threshold_minutes:Number($('slaThreshold').value),calendar:$('slaCalendar').value})});showToast('SLA policy saved.');state.policies=await api(`/sla-policies?org_id=${encodeURIComponent(orgId())}`);renderPolicies();await recomputeAging();}catch(error){showToast(error.message,'error');}});
+    const sidebar=$('sidebar'),mobileScrim=$('mobileScrim'),mobileButton=$('mobileMenuButton'); mobileButton.addEventListener('click',()=>{const open=!sidebar.classList.contains('open');sidebar.classList.toggle('open',open);mobileScrim.classList.toggle('open',open);mobileButton.setAttribute('aria-expanded',String(open));}); mobileScrim.addEventListener('click',closeMobileNav); function closeMobileNav(){sidebar.classList.remove('open');mobileScrim.classList.remove('open');mobileButton.setAttribute('aria-expanded','false');}
+    loadWorkspace(); setInterval(()=>{if(!document.querySelector('dialog[open]'))loadWorkspace({quiet:true});},30000);
   </script>
 </body>
 </html>
