@@ -13,19 +13,24 @@ This document outlines the architecture, technical design, database schema, even
 #### Release and correctness stabilization
 
 - Corrected the TypeScript build layout by compiling only `src/` with `src` as `rootDir`, so the existing `npm start` command resolves the emitted `dist/server.js` entry point.
+- Moved incremental compiler metadata to `dist/tsconfig.tsbuildinfo` and excluded tests, build output, and dependencies from the production compilation boundary.
 - Fixed strict typing for the SLA team-lead query and the SLA test result rows.
 - Added `aging_score` to the canonical API type and corrected WorkItem mapping to return persisted `aging_bucket` and `aging_score` values written by the aging engine.
 - Removed the older API read-path behavior that inferred SLA health from `custom_fields`, making the SLA columns the single source of truth.
 - Added built-in, enforced workflows for Epic, Story, and Incident items. Items without a custom published workflow can no longer transition to arbitrary state names.
 - Added `GET /workitems/:id/available-transitions` so clients can render only workflow-permitted next states and required fields.
 - Scoped item detail, transition, relationship, and lineage operations to the active `x-org-id` tenant; cross-tenant links are explicitly rejected.
+- Enforced active-tenant/body-tenant agreement when creating work items and updating SLA policies, preventing request bodies from overriding the tenant header.
+- Added SLA policy request validation for supported item type, non-empty state, positive whole-minute threshold, and `5x8`/`24x7` calendar values, returning actionable 403/422 responses.
 - Corrected lineage traversal so upstream and downstream follow relationship semantics instead of returning the same traversal.
+- Seeded the primary pilot organization, team, and default Story/Incident SLA policies during application bootstrap so policy management works before a backlog import.
 
 #### Canonical model and dogfooding
 
 - Added `epic` as a first-class WorkItem type with the delivery workflow and valid Epic/Story relationship pairs.
 - Updated Stage B backlog import to create actual Epic items rather than Stories carrying an `is_epic` flag as their effective type.
 - Kept the original backlog counts intact: 12 Epics, 38 Stories, and 38 parent-child relationships.
+- Updated the initial demo dataset to create its parent as a true Epic, tenant-scope all seed relationships, and remove the legacy custom-field aging override from the sample Incident.
 
 #### Codex UI overhaul
 
@@ -40,6 +45,12 @@ This document outlines the architecture, technical design, database schema, even
 - Added 30-second background refresh, loading skeletons, retryable error states, responsive mobile navigation, reduced-motion support, and visible keyboard focus.
 - Removed dynamic `innerHTML` rendering of API data; user-controlled values now render through `textContent`/DOM nodes to prevent stored markup injection.
 
+#### Documentation reconciliation
+
+- Updated `README.md` to reflect Epic support, the implemented aging/SLA engine, the new pilot workspace, 22-test verification status, and the actual remaining Phase 1 work.
+- Added this dated Codex implementation record and preserved the original Gemini plan under a separately labeled historical-baseline section.
+- Added explicit Codex markers in the UI source and this document so ownership is identifiable without relying on Git history alone.
+
 #### Codex verification additions
 
 - Updated existing tests to pass tenant context on protected item routes.
@@ -49,25 +60,43 @@ This document outlines the architecture, technical design, database schema, even
 
 ### Primary files changed by Codex
 
+- `README.md`
+- `implementation_plan.md`
 - `public/index.html`
+- `src/modules/lineage/lineage.controller.ts`
+- `src/modules/lineage/lineage.service.ts`
+- `src/modules/lineage/lineage.types.ts`
+- `src/modules/sla/aging-engine.service.ts`
+- `src/modules/sla/sla.controller.ts`
 - `src/modules/work-items/work-item.types.ts`
 - `src/modules/work-items/work-item.service.ts`
 - `src/modules/work-items/work-item.controller.ts`
 - `src/modules/workflow/workflow.service.ts`
-- `src/modules/lineage/lineage.types.ts`
-- `src/modules/lineage/lineage.service.ts`
-- `src/modules/lineage/lineage.controller.ts`
-- `src/modules/sla/aging-engine.service.ts`
 - `src/scripts/import-backlog.ts`
 - `src/server.ts`
 - `tsconfig.json`
-- Acceptance and regression tests under `test/`
+- `test/stage-b-dogfooding.spec.ts`
+- `test/us1.1.spec.ts`
+- `test/us1.2.spec.ts`
+- `test/us10.3.spec.ts`
+- `test/us2.2.spec.ts`
+- `test/us3.2.spec.ts`
+- `test/us4.1.spec.ts`
+- `test/us4.2.spec.ts`
 
 ### Verification result
 
 - `npm run build`: **PASS**
 - Browser UI script parse check: **PASS**
 - `npm test`: **PASS — 12 test files, 22 tests**
+- `git diff --check`: **PASS**
+- Production entry artifact `dist/server.js`: **generated successfully**
+
+### Verification scope and limitations
+
+- Automated verification covers canonical work-item behavior, SLA calculations and read mapping, guarded workflows, tenant isolation, typed links, semantic upstream/downstream lineage, RBAC, and Stage B dogfooding.
+- The in-app browser backend was unavailable during this change, so screenshot-based visual QA was not performed. The UI received static JavaScript parsing, responsive/accessibility-oriented implementation review, and API-contract coverage.
+- No hosting or external deployment was performed; the requested scope was the local project implementation.
 
 ---
 
