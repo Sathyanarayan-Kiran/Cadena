@@ -18,6 +18,7 @@ export type EventHandler = (event: DomainEventEnvelope) => Promise<void> | void;
 export class InProcessEventBus {
   private static instance: InProcessEventBus;
   private handlers: Map<string, EventHandler[]> = new Map();
+  private wildcardHandlers: EventHandler[] = [];
   public emittedEvents: DomainEventEnvelope[] = [];
 
   public static getInstance(): InProcessEventBus {
@@ -25,6 +26,11 @@ export class InProcessEventBus {
       InProcessEventBus.instance = new InProcessEventBus();
     }
     return InProcessEventBus.instance;
+  }
+
+  /** Subscribes to every published event, whatever its type. Used by the event store. */
+  public subscribeAll(handler: EventHandler): void {
+    this.wildcardHandlers.push(handler);
   }
 
   public subscribe(eventType: string, handler: EventHandler): void {
@@ -50,6 +56,11 @@ export class InProcessEventBus {
     };
 
     this.emittedEvents.push(event);
+
+    // Wildcard handlers run first so the event is durable before any consumer acts on it.
+    for (const handler of this.wildcardHandlers) {
+      await handler(event);
+    }
 
     const handlers = this.handlers.get(eventType) || [];
     for (const handler of handlers) {

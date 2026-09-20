@@ -11,7 +11,7 @@
  * Writes public/status.html (a full document the pilot server serves at /status.html).
  * With --fragment it also writes the headless body used when publishing the page elsewhere.
  */
-import { readFileSync, writeFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { dirname, join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -409,8 +409,10 @@ function main() {
   const done = model.epics.reduce((n, e) => n + e.stories.filter((s) => s.status === 'done').length, 0);
   const partial = model.epics.reduce((n, e) => n + e.stories.filter((s) => s.status === 'partial').length, 0);
 
+  // Counted from disk so the page cannot claim a suite size the repo does not have.
+  const specFiles = readdirSync(join(ROOT, 'test')).filter((f) => f.endsWith('.spec.ts'));
   const body = page(model, {
-    tests: '23 spec files / 59 tests + 7 browser tests',
+    tests: `${specFiles.length} spec files, including a headless-browser smoke suite`,
     built: new Date().toISOString().slice(0, 10),
   });
 

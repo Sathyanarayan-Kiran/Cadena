@@ -14,7 +14,7 @@ import { CreateWorkItemDto } from './work-item.types';
 import { CustomFieldSchemaService, RegisterCustomFieldSchemaDto } from './custom-field-schema.service';
 import { WorkflowService, GuardFailedError, MissingRequiredFieldsError, InvalidTransitionError } from '../workflow/workflow.service';
 import { RbacService } from '../rbac/rbac.service';
-import { importBacklogDogfooding } from '../../scripts/import-backlog';
+import { importBacklogFixture } from '../../scripts/import-backlog';
 
 @Controller('workitems')
 export class WorkItemController {
@@ -32,7 +32,7 @@ export class WorkItemController {
     const orgId = headerOrgId || bodyOrgId || '00000000-0000-0000-0000-000000000099';
     const teamId = bodyTeamId || '00000000-0000-0000-0000-000000000001';
 
-    return importBacklogDogfooding(orgId, teamId);
+    return importBacklogFixture(orgId, teamId);
   }
 
   @Post()

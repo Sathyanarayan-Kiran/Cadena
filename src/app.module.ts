@@ -8,17 +8,19 @@ import { SlaModule } from './modules/sla/sla.module';
 import { IntegrationModule } from './modules/integrations/integration.module';
 import { ServiceRegistryModule } from './modules/services/service-registry.module';
 import { NotificationModule } from './modules/notifications/notification.module';
+import { MetricsModule } from './modules/metrics/metrics.module';
 
 @Module({
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
-      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*', '/services*', '/notifications*'],
+      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*', '/services*', '/notifications*', '/metrics*', '/events*'],
     }),
     SlaModule,
     IntegrationModule,
     ServiceRegistryModule,
     NotificationModule,
+    MetricsModule,
   ],
   controllers: [WorkItemController, WorkflowController, LineageController],
   providers: [],

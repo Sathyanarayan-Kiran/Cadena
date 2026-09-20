@@ -2,101 +2,442 @@
   "_comment": "Status overlay for the implementation tracker. backlog.json owns the stories and their acceptance criteria; this file owns delivery status, the abridged title shown in the tracker, and phase alignment. Regenerate the page with `npm run tracker`. test/tracker.spec.ts fails if the two files fall out of sync.",
   "source_of_truth": "repository",
   "spec_phases": [
-    { "id": 0, "name": "Foundation", "focus": "Canonical model, one shared state machine, basic RBAC" },
-    { "id": 1, "name": "Signal", "focus": "Aging and SLA engine, git and CI/CD integration, team dashboards" },
-    { "id": 2, "name": "Traceability", "focus": "Lineage graph, monitoring integration, notification and escalation" },
-    { "id": 3, "name": "Scale & governance", "focus": "CMDB federation, chatops, analytics suite, enterprise hardening" }
+    {
+      "id": 0,
+      "name": "Foundation",
+      "focus": "Canonical model, one shared state machine, basic RBAC"
+    },
+    {
+      "id": 1,
+      "name": "Signal",
+      "focus": "Aging and SLA engine, git and CI/CD integration, team dashboards"
+    },
+    {
+      "id": 2,
+      "name": "Traceability",
+      "focus": "Lineage graph, monitoring integration, notification and escalation"
+    },
+    {
+      "id": 3,
+      "name": "Scale & governance",
+      "focus": "CMDB federation, chatops, analytics suite, enterprise hardening"
+    }
   ],
-  "rollout_phases": ["Discovery", "Infrastructure", "Mapping", "AI Integration", "Enterprise Scaling"],
+  "rollout_phases": [
+    "Discovery",
+    "Infrastructure",
+    "Mapping",
+    "AI Integration",
+    "Enterprise Scaling"
+  ],
   "epics": {
-    "E1": { "rollout": "Discovery" },
-    "E2": { "rollout": "Discovery" },
-    "E3": { "rollout": "Mapping" },
-    "E4": { "rollout": "Mapping" },
-    "E5": { "rollout": "Enterprise Scaling" },
-    "E6": { "rollout": "Infrastructure" },
-    "E7": { "rollout": "Infrastructure" },
-    "E8": { "rollout": "Mapping" },
-    "E9": { "rollout": "Enterprise Scaling" },
-    "E10": { "rollout": "Infrastructure" },
-    "E11": { "rollout": "Enterprise Scaling" },
-    "E12": { "rollout": "Enterprise Scaling" },
-    "E13": { "rollout": "Mapping", "isNew": true },
-    "E14": { "rollout": "Mapping", "isNew": true },
-    "E15": { "rollout": "AI Integration", "isNew": true },
-    "E16": { "rollout": "Infrastructure", "isNew": true }
+    "E1": {
+      "rollout": "Discovery"
+    },
+    "E2": {
+      "rollout": "Discovery"
+    },
+    "E3": {
+      "rollout": "Mapping"
+    },
+    "E4": {
+      "rollout": "Mapping"
+    },
+    "E5": {
+      "rollout": "Enterprise Scaling"
+    },
+    "E6": {
+      "rollout": "Infrastructure"
+    },
+    "E7": {
+      "rollout": "Infrastructure"
+    },
+    "E8": {
+      "rollout": "Mapping"
+    },
+    "E9": {
+      "rollout": "Enterprise Scaling"
+    },
+    "E10": {
+      "rollout": "Infrastructure"
+    },
+    "E11": {
+      "rollout": "Enterprise Scaling"
+    },
+    "E12": {
+      "rollout": "Enterprise Scaling"
+    },
+    "E13": {
+      "rollout": "Mapping",
+      "isNew": true
+    },
+    "E14": {
+      "rollout": "Mapping",
+      "isNew": true
+    },
+    "E15": {
+      "rollout": "AI Integration",
+      "isNew": true
+    },
+    "E16": {
+      "rollout": "Infrastructure",
+      "isNew": true
+    }
   },
   "stories": {
-    "US1.1": { "name": "One shared WorkItem schema", "status": "done", "phase": 0, "note": "Verified by <code>test/us1.1.spec.ts</code> — four canonical types, stable keys, 422 on unknown type." },
-    "US1.2": { "name": "Filtered views, scoped to tenant", "status": "done", "phase": 0, "note": "Verified by <code>test/us1.2.spec.ts</code> — state and aging filters, cross-tenant reads denied." },
-    "US1.3": { "name": "Per-type custom fields", "status": "done", "phase": 0, "note": "Verified by <code>test/us1.3.spec.ts</code> — JSON-schema validation and documented defaults." },
-
-    "US2.1": { "name": "Configurable workflow definitions", "status": "done", "phase": 0, "note": "Verified by <code>test/us2.1.spec.ts</code> — versioned publish, in-flight items keep their version." },
-    "US2.2": { "name": "Role and required-field guards", "status": "done", "phase": 0, "note": "Verified by <code>test/us2.2.spec.ts</code> — 409 <code>guard_failed</code>, 400 on missing fields." },
-    "US2.3": { "name": "Integration-triggered transitions", "status": "done", "phase": 0, "note": "Verified by <code>test/us2.3.spec.ts</code> — a guard-rejected external transition is skipped and logged, never forced." },
-
-    "US3.1": { "name": "Business-calendar thresholds", "status": "done", "phase": 1, "note": "Verified by <code>test/us3.1.spec.ts</code> — 5×8 excludes weekends; no policy means no false alert." },
-    "US3.2": { "name": "Continuous aging score", "status": "done", "phase": 1, "note": "Verified by <code>test/us3.2.spec.ts</code> — green below 75%, amber to 100%, red beyond, on a 60-second tick." },
-    "US3.3": { "name": "Warning and breach events", "status": "done", "phase": 1, "note": "Verified by <code>test/us3.3.spec.ts</code> — SLAWarning at 75%, SLABreached at 100%, with recipients." },
-    "US3.4": { "name": "SLA clock suspension on hold", "status": "idle", "phase": 1, "isNew": true, "note": "New from research §3. Time in a hold state such as Waiting for Customer must not consume SLA budget." },
-
-    "US4.1": { "name": "Typed link creation", "status": "done", "phase": 2, "note": "Verified by <code>test/us4.1.spec.ts</code> — edges validated per type pair, invalid pairs rejected with the allowed list." },
-    "US4.2": { "name": "Upstream lineage query", "status": "done", "phase": 2, "note": "Verified by <code>test/us4.2.spec.ts</code> — upstream and downstream follow relationship semantics, not one traversal twice." },
-    "US4.3": { "name": "Service impact analysis", "status": "done", "phase": 2, "note": "Verified by <code>test/us4.3.spec.ts</code> — depth-bounded walk from a Service returning the edge chain implicating each item." },
-    "US4.4": { "name": "Exportable lineage report", "status": "idle", "phase": 2, "note": "No export endpoint exists. Lineage is queryable as JSON but cannot be emitted as an audit artefact." },
-
-    "US5.1": { "name": "Schema-registered domain events", "status": "partial", "phase": 3, "note": "Envelope conforms to spec §8.2, but the bus is in-process and events are never persisted, so the outbox guarantee is unmet." },
-    "US5.2": { "name": "Idempotent event processing", "status": "partial", "phase": 3, "note": "Enforced where it matters today — integration deliveries and notification dispatch — but there is no general consumer framework." },
-    "US5.3": { "name": "Dead-letter queue with alerting", "status": "idle", "phase": 3, "note": "No DLQ. A consumer failure is caught and logged, then lost." },
-    "US5.4": { "name": "HTTP 202 asynchronous ingestion", "status": "idle", "phase": 3, "isNew": true, "note": "New from research §4. Webhooks are processed synchronously today, the classic webhook-timeout failure mode at volume." },
-    "US5.5": { "name": "Dead-letter replay console", "status": "idle", "phase": 3, "isNew": true, "note": "New from research §8. Operators need to correct a malformed payload inline and re-inject it without re-triggering the source." },
-
-    "US6.1": { "name": "Commit and PR auto-linking", "status": "done", "phase": 1, "note": "Verified by <code>test/us6.1.spec.ts</code> — keys extracted from messages; unreferenced commits still stored." },
-    "US6.2": { "name": "Merged PR advances its story", "status": "done", "phase": 1, "note": "Verified by <code>test/us6.2.spec.ts</code> — runs through the workflow engine as an integration actor." },
-    "US6.3": { "name": "Deployment to release traceability", "status": "done", "phase": 1, "note": "Verified by <code>test/us6.3.spec.ts</code> — links stories and releases, advances the release, replays idempotently." },
-
-    "US7.1": { "name": "Alert-driven incident creation", "status": "done", "phase": 2, "note": "Verified by <code>test/us7.1.spec.ts</code> — SEV1–SEV4 mapping, Triaged on create, rolling dedupe window." },
-    "US7.2": { "name": "Affected-service linking", "status": "done", "phase": 2, "note": "Verified by <code>test/us7.2.spec.ts</code> — <code>affects</code> edge to the Service registry; Services are not WorkItems." },
-    "US7.3": { "name": "Mitigation proposed, never forced", "status": "done", "phase": 2, "note": "Verified by <code>test/us7.3.spec.ts</code> — walks to Mitigated one guarded step at a time; never Resolved or Closed." },
-
-    "US8.1": { "name": "SLA warning reaches the owner", "status": "partial", "phase": 2, "note": "Routing, preference and audit log verified by <code>test/us8.1.spec.ts</code>. Channel transports are declared pilot stubs, so nothing is literally delivered." },
-    "US8.2": { "name": "Breach and escalation routing", "status": "partial", "phase": 2, "note": "Owner plus team lead on breach, configured target at 150%, verified by <code>test/us8.2.spec.ts</code>. Same transport boundary." },
-    "US8.3": { "name": "Channel choice with email fallback", "status": "partial", "phase": 2, "note": "Preference, fallback and failure recording verified by <code>test/us8.3.spec.ts</code>. Same transport boundary." },
-
-    "US9.1": { "name": "Team aging heatmap", "status": "partial", "phase": 1, "note": "The board colours by aging bucket and sorts worst-first, and renders under browser test, but the ordering itself is not asserted." },
-    "US9.2": { "name": "Cross-team executive rollup", "status": "idle", "phase": 3, "note": "No SLA compliance, cycle time or aging distribution per team or business unit." },
-    "US9.3": { "name": "Interactive traceability explorer", "status": "idle", "phase": 3, "note": "Lineage renders as a linear chain, not an expandable graph." },
-    "US9.4": { "name": "DORA and ITIL metrics", "status": "idle", "phase": 3, "note": "Computable from data already captured — change failure rate falls out of <code>Incident caused_by Release</code> — but needs persisted event history first." },
-
-    "US10.1": { "name": "SSO login", "status": "idle", "phase": 3, "note": "Not implemented. The research playbook records this as complete; it is not." },
-    "US10.2": { "name": "SCIM provisioning", "status": "idle", "phase": 3, "note": "Not implemented. The research playbook records this as complete; it is not." },
-    "US10.3": { "name": "Role-gated transitions", "status": "done", "phase": 0, "note": "Verified by <code>test/us10.3.spec.ts</code> — role resolution against the people table gates every transition." },
-    "US10.4": { "name": "Audit-trail export", "status": "partial", "phase": 3, "note": "Every transition writes an immutable <code>audit_events</code> row, but no export endpoint exposes them." },
-    "US10.5": { "name": "Identity by immutable account id", "status": "idle", "phase": 3, "isNew": true, "note": "New from research §8. Email-based lookup breaks silently when profile visibility hides the address." },
-    "US10.6": { "name": "Deactivation via SCIM PATCH", "status": "idle", "phase": 3, "isNew": true, "note": "New from research §8. The target REST API has no deactivation endpoint, so deprovisioning must go through SCIM." },
-
-    "US11.1": { "name": "Federated Service/Asset source", "status": "idle", "phase": 3, "note": "The Service registry is local. Nothing reads from an authoritative external CMDB, and there is no staleness flag." },
-    "US11.2": { "name": "Incidents linked to the correct CI", "status": "partial", "phase": 3, "note": "Incidents link to Services with an owning team, but alert-discovered entries are local stubs flagged <code>monitoring_discovery</code>." },
-
-    "US12.1": { "name": "Query and update from chat", "status": "idle", "phase": 3, "note": "Not started." },
-    "US12.2": { "name": "Incident commands from chat", "status": "idle", "phase": 3, "note": "Not started." },
-    "US12.3": { "name": "CAB approvals from chat", "status": "idle", "phase": 3, "note": "Not started." },
-
-    "US13.1": { "name": "ITIL to Agile state matrix", "status": "idle", "phase": 3, "isNew": true, "note": "Configurable translation so each platform shows its own native lifecycle; an unmapped state holds for review rather than guessing." },
-    "US13.2": { "name": "Immutable correlation references", "status": "idle", "phase": 3, "isNew": true, "note": "Each side stores the other's immutable id, so the pair survives renames and re-indexing without summary-text matching." },
-    "US13.3": { "name": "Echo-loop suppression", "status": "idle", "phase": 3, "isNew": true, "note": "Self-originated webhooks identified by service-account identity plus payload hash, with content comparison as the fallback after a restart." },
-    "US13.4": { "name": "Work-note privacy in comment sync", "status": "idle", "phase": 3, "isNew": true, "note": "Comment sync opt-in by default; internal work notes never reach a customer-visible stream." },
-    "US13.5": { "name": "Resolution code write-back", "status": "idle", "phase": 3, "isNew": true, "note": "Closure metadata written back so ITIL records stay complete without manual re-entry." },
-
-    "US14.1": { "name": "Format-preserving transfer", "status": "idle", "phase": 3, "isNew": true, "note": "Parse source HTML to an intermediate tree, then serialise to the target's document format or wiki markup from the same representation." },
-    "US14.2": { "name": "Inline media and attachments", "status": "idle", "phase": 3, "isNew": true, "note": "Screenshots transfer as attachments referenced at their original positions; oversized files warn and link back rather than failing the record." },
-
-    "US15.1": { "name": "Incident-storm duplicate detection", "status": "idle", "phase": 3, "isNew": true, "note": "Embedding similarity above the configured threshold suppresses the duplicate and links it under a master incident." },
-    "US15.2": { "name": "Stack-trace entity extraction", "status": "idle", "phase": 3, "isNew": true, "note": "Component and affected version inferred from logs, flagged machine-derived, left unset below the confidence threshold." },
-    "US15.3": { "name": "CAB release risk scoring", "status": "idle", "phase": 3, "isNew": true, "note": "Score from historical velocity, prior change-failure rate and blast radius; high scores route to an elevated approval tier." },
-
-    "US16.1": { "name": "Adaptive rate governance", "status": "idle", "phase": 3, "isNew": true, "note": "Shape outbound calls inside each target's quota and honour <code>Retry-After</code> instead of failing at the boundary." },
-    "US16.2": { "name": "Indexed-query safety", "status": "idle", "phase": 3, "isNew": true, "note": "Reject queries against unindexed fields at configuration time; shed load rather than retrying into semaphore exhaustion." },
-    "US16.3": { "name": "Zero-inbound-port connectivity", "status": "idle", "phase": 3, "isNew": true, "note": "A relay behind the firewall long-polls over outbound HTTPS, so integrating never widens the attack surface." }
+    "US1.1": {
+      "name": "One shared WorkItem schema",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us1.1.spec.ts</code> — four canonical types, stable keys, 422 on unknown type."
+    },
+    "US1.2": {
+      "name": "Filtered views, scoped to tenant",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us1.2.spec.ts</code> — state and aging filters, cross-tenant reads denied."
+    },
+    "US1.3": {
+      "name": "Per-type custom fields",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us1.3.spec.ts</code> — JSON-schema validation and documented defaults."
+    },
+    "US2.1": {
+      "name": "Configurable workflow definitions",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us2.1.spec.ts</code> — versioned publish, in-flight items keep their version."
+    },
+    "US2.2": {
+      "name": "Role and required-field guards",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us2.2.spec.ts</code> — 409 <code>guard_failed</code>, 400 on missing fields."
+    },
+    "US2.3": {
+      "name": "Integration-triggered transitions",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us2.3.spec.ts</code> — a guard-rejected external transition is skipped and logged, never forced."
+    },
+    "US3.1": {
+      "name": "Business-calendar thresholds",
+      "status": "done",
+      "phase": 1,
+      "note": "Verified by <code>test/us3.1.spec.ts</code> — 5×8 excludes weekends; no policy means no false alert."
+    },
+    "US3.2": {
+      "name": "Continuous aging score",
+      "status": "done",
+      "phase": 1,
+      "note": "Verified by <code>test/us3.2.spec.ts</code> — green below 75%, amber to 100%, red beyond, on a 60-second tick."
+    },
+    "US3.3": {
+      "name": "Warning and breach events",
+      "status": "done",
+      "phase": 1,
+      "note": "Verified by <code>test/us3.3.spec.ts</code> — SLAWarning at 75%, SLABreached at 100%, with recipients."
+    },
+    "US3.4": {
+      "name": "SLA clock suspension on hold",
+      "status": "idle",
+      "phase": 1,
+      "isNew": true,
+      "note": "New from research §3. Time in a hold state such as Waiting for Customer must not consume SLA budget."
+    },
+    "US4.1": {
+      "name": "Typed link creation",
+      "status": "done",
+      "phase": 2,
+      "note": "Verified by <code>test/us4.1.spec.ts</code> — edges validated per type pair, invalid pairs rejected with the allowed list."
+    },
+    "US4.2": {
+      "name": "Upstream lineage query",
+      "status": "done",
+      "phase": 2,
+      "note": "Verified by <code>test/us4.2.spec.ts</code> — upstream and downstream follow relationship semantics, not one traversal twice."
+    },
+    "US4.3": {
+      "name": "Service impact analysis",
+      "status": "done",
+      "phase": 2,
+      "note": "Verified by <code>test/us4.3.spec.ts</code> — depth-bounded walk from a Service returning the edge chain implicating each item."
+    },
+    "US4.4": {
+      "name": "Exportable lineage report",
+      "status": "idle",
+      "phase": 2,
+      "note": "No export endpoint exists. Lineage is queryable as JSON but cannot be emitted as an audit artefact."
+    },
+    "US5.1": {
+      "name": "Schema-registered domain events",
+      "status": "partial",
+      "phase": 3,
+      "note": "Every published event is now persisted to <code>domain_events</code> and queryable at <code>GET /events</code>, and the schema change that added <code>org_id</code> to <code>WorkItemStateChanged</code> was additive. Still partial: the write happens just after the mutation rather than inside its transaction, so the outbox guarantee is not yet met."
+    },
+    "US5.2": {
+      "name": "Idempotent event processing",
+      "status": "partial",
+      "phase": 3,
+      "note": "Enforced where it matters today — integration deliveries and notification dispatch — and <code>domain_events</code> now gives a durable basis for an event-id seen-set. Still partial: there is no general consumer framework applying it."
+    },
+    "US5.3": {
+      "name": "Dead-letter queue with alerting",
+      "status": "idle",
+      "phase": 3,
+      "note": "No DLQ. A consumer failure is caught and logged, then lost."
+    },
+    "US5.4": {
+      "name": "HTTP 202 asynchronous ingestion",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "New from research §4. Webhooks are processed synchronously today, the classic webhook-timeout failure mode at volume."
+    },
+    "US5.5": {
+      "name": "Dead-letter replay console",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "New from research §8. Operators need to correct a malformed payload inline and re-inject it without re-triggering the source."
+    },
+    "US6.1": {
+      "name": "Commit and PR auto-linking",
+      "status": "done",
+      "phase": 1,
+      "note": "Verified by <code>test/us6.1.spec.ts</code> — keys extracted from messages; unreferenced commits still stored."
+    },
+    "US6.2": {
+      "name": "Merged PR advances its story",
+      "status": "done",
+      "phase": 1,
+      "note": "Verified by <code>test/us6.2.spec.ts</code> — runs through the workflow engine as an integration actor."
+    },
+    "US6.3": {
+      "name": "Deployment to release traceability",
+      "status": "done",
+      "phase": 1,
+      "note": "Verified by <code>test/us6.3.spec.ts</code> — links stories and releases, advances the release, replays idempotently."
+    },
+    "US7.1": {
+      "name": "Alert-driven incident creation",
+      "status": "done",
+      "phase": 2,
+      "note": "Verified by <code>test/us7.1.spec.ts</code> — SEV1–SEV4 mapping, Triaged on create, rolling dedupe window."
+    },
+    "US7.2": {
+      "name": "Affected-service linking",
+      "status": "done",
+      "phase": 2,
+      "note": "Verified by <code>test/us7.2.spec.ts</code> — <code>affects</code> edge to the Service registry; Services are not WorkItems."
+    },
+    "US7.3": {
+      "name": "Mitigation proposed, never forced",
+      "status": "done",
+      "phase": 2,
+      "note": "Verified by <code>test/us7.3.spec.ts</code> — walks to Mitigated one guarded step at a time; never Resolved or Closed."
+    },
+    "US8.1": {
+      "name": "SLA warning reaches the owner",
+      "status": "partial",
+      "phase": 2,
+      "note": "Routing, preference and audit log verified by <code>test/us8.1.spec.ts</code>. Channel transports are declared pilot stubs, so nothing is literally delivered."
+    },
+    "US8.2": {
+      "name": "Breach and escalation routing",
+      "status": "partial",
+      "phase": 2,
+      "note": "Owner plus team lead on breach, configured target at 150%, verified by <code>test/us8.2.spec.ts</code>. Same transport boundary."
+    },
+    "US8.3": {
+      "name": "Channel choice with email fallback",
+      "status": "partial",
+      "phase": 2,
+      "note": "Preference, fallback and failure recording verified by <code>test/us8.3.spec.ts</code>. Same transport boundary."
+    },
+    "US9.1": {
+      "name": "Team aging heatmap",
+      "status": "partial",
+      "phase": 1,
+      "note": "The board colours by aging bucket and sorts worst-first, and renders under browser test, but the ordering itself is not asserted."
+    },
+    "US9.2": {
+      "name": "Cross-team executive rollup",
+      "status": "idle",
+      "phase": 3,
+      "note": "No SLA compliance, cycle time or aging distribution per team or business unit."
+    },
+    "US9.3": {
+      "name": "Interactive traceability explorer",
+      "status": "idle",
+      "phase": 3,
+      "note": "Lineage renders as a linear chain, not an expandable graph."
+    },
+    "US9.4": {
+      "name": "DORA and ITIL metrics",
+      "status": "done",
+      "phase": 3,
+      "note": "Verified by <code>test/us9.4.spec.ts</code> — deployment frequency, lead time, change failure rate and time to restore, all derived from recorded history. Change failure rate comes from the <code>Incident caused_by Release</code> edge and ships with the deployment/incident pairs behind it."
+    },
+    "US10.1": {
+      "name": "SSO login",
+      "status": "idle",
+      "phase": 3,
+      "note": "Not implemented. The research playbook records this as complete; it is not."
+    },
+    "US10.2": {
+      "name": "SCIM provisioning",
+      "status": "idle",
+      "phase": 3,
+      "note": "Not implemented. The research playbook records this as complete; it is not."
+    },
+    "US10.3": {
+      "name": "Role-gated transitions",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us10.3.spec.ts</code> — role resolution against the people table gates every transition."
+    },
+    "US10.4": {
+      "name": "Audit-trail export",
+      "status": "partial",
+      "phase": 3,
+      "note": "Every transition writes an immutable <code>audit_events</code> row, but no export endpoint exposes them."
+    },
+    "US10.5": {
+      "name": "Identity by immutable account id",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "New from research §8. Email-based lookup breaks silently when profile visibility hides the address."
+    },
+    "US10.6": {
+      "name": "Deactivation via SCIM PATCH",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "New from research §8. The target REST API has no deactivation endpoint, so deprovisioning must go through SCIM."
+    },
+    "US11.1": {
+      "name": "Federated Service/Asset source",
+      "status": "idle",
+      "phase": 3,
+      "note": "The Service registry is local. Nothing reads from an authoritative external CMDB, and there is no staleness flag."
+    },
+    "US11.2": {
+      "name": "Incidents linked to the correct CI",
+      "status": "partial",
+      "phase": 3,
+      "note": "Incidents link to Services with an owning team, but alert-discovered entries are local stubs flagged <code>monitoring_discovery</code>."
+    },
+    "US12.1": {
+      "name": "Query and update from chat",
+      "status": "idle",
+      "phase": 3,
+      "note": "Not started."
+    },
+    "US12.2": {
+      "name": "Incident commands from chat",
+      "status": "idle",
+      "phase": 3,
+      "note": "Not started."
+    },
+    "US12.3": {
+      "name": "CAB approvals from chat",
+      "status": "idle",
+      "phase": 3,
+      "note": "Not started."
+    },
+    "US13.1": {
+      "name": "ITIL to Agile state matrix",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Configurable translation so each platform shows its own native lifecycle; an unmapped state holds for review rather than guessing."
+    },
+    "US13.2": {
+      "name": "Immutable correlation references",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Each side stores the other's immutable id, so the pair survives renames and re-indexing without summary-text matching."
+    },
+    "US13.3": {
+      "name": "Echo-loop suppression",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Self-originated webhooks identified by service-account identity plus payload hash, with content comparison as the fallback after a restart."
+    },
+    "US13.4": {
+      "name": "Work-note privacy in comment sync",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Comment sync opt-in by default; internal work notes never reach a customer-visible stream."
+    },
+    "US13.5": {
+      "name": "Resolution code write-back",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Closure metadata written back so ITIL records stay complete without manual re-entry."
+    },
+    "US14.1": {
+      "name": "Format-preserving transfer",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Parse source HTML to an intermediate tree, then serialise to the target's document format or wiki markup from the same representation."
+    },
+    "US14.2": {
+      "name": "Inline media and attachments",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Screenshots transfer as attachments referenced at their original positions; oversized files warn and link back rather than failing the record."
+    },
+    "US15.1": {
+      "name": "Incident-storm duplicate detection",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Embedding similarity above the configured threshold suppresses the duplicate and links it under a master incident."
+    },
+    "US15.2": {
+      "name": "Stack-trace entity extraction",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Component and affected version inferred from logs, flagged machine-derived, left unset below the confidence threshold."
+    },
+    "US15.3": {
+      "name": "CAB release risk scoring",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Score from historical velocity, prior change-failure rate and blast radius; high scores route to an elevated approval tier."
+    },
+    "US16.1": {
+      "name": "Adaptive rate governance",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Shape outbound calls inside each target's quota and honour <code>Retry-After</code> instead of failing at the boundary."
+    },
+    "US16.2": {
+      "name": "Indexed-query safety",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "Reject queries against unindexed fields at configuration time; shed load rather than retrying into semaphore exhaustion."
+    },
+    "US16.3": {
+      "name": "Zero-inbound-port connectivity",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "note": "A relay behind the firewall long-polls over outbound HTTPS, so integrating never widens the attack surface."
+    }
   }
 }

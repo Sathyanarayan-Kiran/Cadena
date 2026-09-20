@@ -4,19 +4,19 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
-import { importBacklogDogfooding } from '../src/scripts/import-backlog';
+import { importBacklogFixture } from '../src/scripts/import-backlog';
 import backlog from '../backlog.json';
 
-// Derived from backlog.json rather than hard-coded: the platform dogfoods its own backlog,
-// so adding requirements must grow the import rather than break this test.
+// Derived from backlog.json rather than hard-coded, so adding a requirement grows the
+// fixture instead of breaking this test.
 const EXPECTED_EPICS = backlog.epics.length;
 const EXPECTED_STORIES = backlog.epics.reduce((total, epic) => total + epic.stories.length, 0);
 
-describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
+describe('Backlog fixture — self-hosted backlog ingestion', () => {
   let app: INestApplication;
 
-  const dogfoodOrgId = '99999999-9999-9999-9999-999999999999';
-  const dogfoodTeamId = '88888888-8888-8888-8888-888888888888';
+  const fixtureOrgId = '99999999-9999-9999-9999-999999999999';
+  const fixtureTeamId = '88888888-8888-8888-8888-888888888888';
 
   beforeAll(async () => {
     await DatabaseService.getInstance().initialize();
@@ -28,9 +28,9 @@ describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
     await app.init();
   });
 
-  it('Stage B: ingests the whole backlog and preserves parent-child hierarchy', async () => {
-    // 1. Run Stage B Dogfooding import script
-    const result = await importBacklogDogfooding(dogfoodOrgId, dogfoodTeamId);
+  it('ingests the whole backlog and preserves parent-child hierarchy', async () => {
+    // 1. Import the project backlog as real work items
+    const result = await importBacklogFixture(fixtureOrgId, fixtureTeamId);
 
     expect(result.epicCount).toBe(EXPECTED_EPICS);
     expect(result.storyCount).toBe(EXPECTED_STORIES);
@@ -38,10 +38,10 @@ describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
     // Every story is linked to its parent epic, so links track stories exactly.
     expect(result.linkCount).toBe(EXPECTED_STORIES);
 
-    // 2. Fetch all work items for dogfoodOrgId via GET /workitems
+    // 2. Fetch all work items for fixtureOrgId via GET /workitems
     const res = await request(app.getHttpServer())
       .get('/workitems')
-      .set('x-org-id', dogfoodOrgId)
+      .set('x-org-id', fixtureOrgId)
       .expect(200);
 
     expect(res.body.length).toBe(EXPECTED_EPICS + EXPECTED_STORIES);
@@ -57,7 +57,7 @@ describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
     // 4. Query upstream lineage for US1.1
     const lineageRes = await request(app.getHttpServer())
       .get(`/workitems/${us11.id}/lineage?direction=up`)
-      .set('x-org-id', dogfoodOrgId)
+      .set('x-org-id', fixtureOrgId)
       .expect(200);
 
     expect(lineageRes.body.chain.length).toBeGreaterThanOrEqual(2);

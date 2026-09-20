@@ -21,7 +21,7 @@ export interface BacklogJson {
   epics: BacklogEpic[];
 }
 
-export async function importBacklogDogfooding(
+export async function importBacklogFixture(
   orgId: string = '00000000-0000-0000-0000-000000000099',
   teamId: string = '00000000-0000-0000-0000-000000000001',
 ): Promise<{ epicCount: number; storyCount: number; totalImported: number; linkCount: number }> {
@@ -109,9 +109,9 @@ export async function importBacklogDogfooding(
 }
 
 if (require.main === module) {
-  importBacklogDogfooding()
+  importBacklogFixture()
     .then((res) => {
-      console.log(`🎉 Stage B Dogfooding Backlog Import Successful!`);
+      console.log(`🎉 Backlog fixture imported.`);
       console.log(`   - Epics Imported: ${res.epicCount}`);
       console.log(`   - User Stories Imported: ${res.storyCount}`);
       console.log(`   - Total WorkItems: ${res.totalImported}`);

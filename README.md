@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's core thesis: **one canonical work-item model** and **one state-machine engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them.
 
-> **Current status (Codex update, 2026-09-20):** Phase 0, the Epic 3 aging/SLA engine, Stage B backlog dogfooding, the complete Epic 4 traceability graph including US4.3 service impact analysis, the Epic 8 notification and escalation service, and the Phase 1 integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. See `implementation_plan.md` for the clearly attributed Codex delivery records.
+> **Current status (Codex update, 2026-09-20):** Phase 0, the Epic 3 aging/SLA engine, Stage B backlog dogfooding, the complete Epic 4 traceability graph including US4.3 service impact analysis, the Epic 8 notification and escalation service, US9.4 DORA/ITIL flow metrics, and the Phase 1 integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. See `implementation_plan.md` for the clearly attributed Codex delivery records.
 
 ---
 
@@ -18,9 +18,10 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
+- **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA and ITIL flow metrics computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 59 automated tests across 23 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 71 automated tests across 25 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -28,7 +29,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 
 ### 1. Run Automated Test Suite (Single Command)
 
-To run the complete test suite covering Epics 1, 2, 3, 4, 6, 7, 8, and 10 plus Stage B dogfooding:
+To run the complete test suite covering Epics 1, 2, 3, 4, 6, 7, 8, 9, and 10 plus Stage B dogfooding:
 
 ```bash
 npm test
@@ -57,11 +58,13 @@ Expected output:
  ✓ test/us8.1.spec.ts (3 tests)
  ✓ test/us8.2.spec.ts (4 tests)
  ✓ test/us8.3.spec.ts (5 tests)
+ ✓ test/us9.4.spec.ts (7 tests)
+ ✓ test/tracker.spec.ts (5 tests)
  ✓ test/us10.3.spec.ts (1 test)
- ✓ test/stage-b-dogfooding.spec.ts (1 test)
+ ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  23 passed (23)
-      Tests  59 passed (59)
+ Test Files  25 passed (25)
+      Tests  71 passed (71)
 ```
 
 ### 2. Run Browser Smoke Tests
@@ -332,6 +335,45 @@ The channel adapters are stubs: **nothing actually leaves the process**, and the
 
 ---
 
+## Flow Metrics (US9.4)
+
+DORA and ITIL figures computed from recorded history, never hand-entered.
+
+```http
+GET /metrics/flow?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z
+x-org-id: 00000000-0000-0000-0000-000000000099
+```
+
+| Metric | Derived from |
+| --- | --- |
+| Deployment frequency | successful deployment artefacts from the Git/CI gateway |
+| Lead time for changes | earliest commit linked to what a deployment shipped, through to deploy time |
+| **Change failure rate** | `Incident caused_by Release` — the Epic 4 traceability edge |
+| Time to restore service | the incident's own transition history in `audit_events` |
+| ITIL counts | incidents opened/resolved, severity mix, auto-created share, SLA breaches, reopens |
+
+Change failure rate is the figure that pays for the traceability graph. In a two-tool setup it depends on someone tagging deployments by hand; here the edge already exists, so the rate needs no separate discipline. It is returned with the deployment/incident pairs behind it:
+
+```json
+"change_failure_rate": {
+  "deployments": 2, "failed_deployments": 1, "rate": 0.5,
+  "failures": [
+    { "deployment": "deploy-5.0.0", "release_key": "REL-5E5DFF18",
+      "incident_key": "INC-D3220784", "severity": "SEV1" }
+  ]
+}
+```
+
+The response also reports coverage, because a metric computed over partial evidence should say so: lead time counts only deployments whose work items also carry a linked commit, and time to restore counts only incidents with a recorded resolution.
+
+### Durable event history
+
+`GET /events` exposes the `domain_events` table, which records every event the platform publishes, filterable by type, work item and time range. It is what makes the metrics computable from history rather than from current state.
+
+**Boundary:** this is durable history, not yet the transactional outbox US5.1 asks for. The write lands immediately after the mutation rather than inside its transaction, so a crash in that gap still loses an event.
+
+---
+
 ## Production Boundaries
 
 The pilot is deliberately explicit about what is not production-ready:
@@ -344,7 +386,7 @@ The pilot is deliberately explicit about what is not production-ready:
 2. **Integration identity is not authenticated.** Tenant identity arrives in a header rather than from an authenticated integration credential, and `automation_actor_role` grants a workflow role by configuration rather than by binding to a real RBAC principal. Guards still evaluate that role — it is not a bypass — but the binding is US10.3 hardening work.
 3. **Delivery durability stops at the datastore.** Deduplication and recorded results are durable, but transport retries, a transactional outbox, Kafka, and a dead-letter queue remain Epic 5 work.
 4. **No notification actually leaves the process.** Channel adapters are stubs; the `notifications` table is the delivery record. Routing, fallback and idempotency are real and tested, but SES/SendGrid, the Slack Web API and Microsoft Graph are not wired in.
-5. **The Service registry is not a CMDB.** Auto-registered entries are lightweight stubs flagged `monitoring_discovery`. Live federation, staleness flagging, and authoritative ownership are Epic 11 (US11.1, US11.2).
+6. **The Service registry is not a CMDB.** Auto-registered entries are lightweight stubs flagged `monitoring_discovery`. Live federation, staleness flagging, and authoritative ownership are Epic 11 (US11.1, US11.2).
 
 ---
 
@@ -361,9 +403,8 @@ The aging engine, team workspace, workflow automation, traceability graph, Git/C
 3. **CMDB Federation (Epic 11)**:
    - Replace pilot-discovered Service stubs with a federated read from the authoritative CMDB, including staleness flagging and owning-team resolution.
 
-4. **Production Analytics & Executive UI (Epic 9)**:
-   - Back team and executive dashboards with analytics materialized views.
-   - Promote the pilot lineage chain into a full interactive graph and add cross-team reporting.
+4. **Remaining Analytics & Executive UI (Epic 9)**:
+   - US9.4 flow metrics are implemented. Still open: the cross-team executive rollup (US9.2), the interactive graph explorer (US9.3), and analytics materialized views so reporting load never contends with the workflow engine.
 
 ---
 
@@ -422,5 +463,10 @@ The aging engine, team workspace, workflow automation, traceability graph, Git/C
 | **US8.3** | Falls back to email when the preferred channel is unavailable | `test/us8.3.spec.ts` | **PASS** |
 | **US8.3** | Records a failure when the fallback channel is also unavailable | `test/us8.3.spec.ts` | **PASS** |
 | **US8.3** | Defaults to email and rejects an unknown channel | `test/us8.3.spec.ts` | **PASS** |
+| **US9.4** | Derives deployment frequency and lead time from delivery artefacts | `test/us9.4.spec.ts` | **PASS** |
+| **US9.4** | Computes change failure rate from the `Incident caused_by Release` edge | `test/us9.4.spec.ts` | **PASS** |
+| **US9.4** | Computes time to restore from incident state history | `test/us9.4.spec.ts` | **PASS** |
+| **US9.4** | Reports ITIL operational counts and honours the requested window | `test/us9.4.spec.ts` | **PASS** |
+| **US9.4** | Keeps a durable, queryable domain-event history | `test/us9.4.spec.ts` | **PASS** |
 | **US10.3** | Enforces RBAC role permissions on workflow state transitions | `test/us10.3.spec.ts` | **PASS** |
-| **Stage B** | Imports 12 true Epic items, 38 Stories, and their hierarchy | `test/stage-b-dogfooding.spec.ts` | **PASS** |
+| **Backlog fixture** | Imports every epic and story from the backlog with its parent-child hierarchy | `test/backlog-fixture.spec.ts` | **PASS** |

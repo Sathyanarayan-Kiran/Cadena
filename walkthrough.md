@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot, Stage B backlog dogfooding, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 6 (Git/CI), Epic 7 (monitoring/APM), and Epic 8 (notification & escalation) are implemented and verified.
-**Verification:** 59 automated tests across 23 test files, plus 7 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified.
+**Verification:** 71 automated tests across 25 test files, plus 7 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,48 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-20 — Durable event history and flow metrics (US9.4)
+
+The change failure rate is the number that justifies the traceability graph. In a two-tool world it is a manual tagging exercise nobody keeps accurate; here it falls out of the `Incident caused_by Release` edge that Epic 4 already stores.
+
+**Added**
+
+- `domain_events` table plus `EventStoreService`, subscribing to every published event through a new `subscribeAll` on the bus. The in-memory `emittedEvents` array is no longer the only record.
+- `GET /events` — the durable history, filterable by type, work item and time range.
+- `MetricsService` and `GET /metrics/flow?from=&to=` computing all four DORA metrics plus ITIL operational counts, entirely from recorded artefacts.
+- `test/us9.4.spec.ts` — 7 acceptance tests over a real delivery history.
+- UI: the nav's "Reports" placeholder is now a working **Flow metrics** view.
+
+**Where each number comes from**
+
+| Metric | Derived from |
+| --- | --- |
+| Deployment frequency | Epic 6 deployment artefacts, successful only |
+| Lead time for changes | earliest commit linked to what a deployment shipped |
+| Change failure rate | `Incident caused_by Release`, the Epic 4 edge |
+| Time to restore | the incident's own transition history in `audit_events` |
+| ITIL counts | incident severity, auto-created tags, `SLABreached` events, reopen transitions |
+
+The change failure rate ships with the deployment/incident pairs behind it, so the figure can be audited rather than trusted. Coverage is reported too: lead time only counts deployments whose work items also carry a commit, and restore time only counts incidents with a recorded resolution.
+
+**A contract gap this turned up.** `WorkItemStateChanged` carried no tenant, so a consumer could not tell which org a transition belonged to and the events fell out of every tenant-scoped query. `org_id` and `item_type` were added to the payload — additive, exactly as US5.1 requires — and the event store also resolves a tenant from the work item as a fallback, so no event is ever orphaned.
+
+**Verified live** on the seeded tenant:
+
+```
+ deployment frequency: 1 in 30d, 0.23/week, {production: 1}
+ change failure rate : 1 / 1 = 1.0
+     evidence: INC-D3220784 caused_by REL-5E5DFF18 via live-deploy-6.0.0 SEV1
+ events stored       : WorkItemCreated 2, IntegrationDeliveryProcessed 2,
+                       WorkItemStateChanged 2, LinkCreated 1
+```
+
+### 2026-09-20 — Backlog import renamed from dogfooding to a fixture
+
+The Stage B import was described as dogfooding, but the imported items never transition, never age, carry no owners, and no commit ever links to them. It is a realistic data fixture, not the team running its work through the tool. The code now says so: `importBacklogFixture`, `test/backlog-fixture.spec.ts`, and a UI label that states what it is for.
+
+Real dogfooding stays blocked on persistence — PGlite runs in-memory, so the backlog would evaporate on every restart. Historical records in `implementation_plan.md` keep the original wording.
 
 ### 2026-09-20 — Browser smoke tests (QA limitation removed)
 
@@ -155,7 +197,7 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 59 tests across 23 files
+npm test        # 71 tests across 25 files
 npm run test:ui # 7 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
@@ -228,8 +270,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  23 passed (23)
-      Tests  59 passed (59)
+ Test Files  25 passed (25)
+      Tests  71 passed (71)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -247,9 +289,10 @@ npm run test:ui
 | Aging & SLA across both calendars | `us3.1`, `us3.2`, `us3.3` |
 | Typed links, lineage, **service impact** | `us4.1`, `us4.2`, **`us4.3`** |
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
+| **DORA & ITIL flow metrics** | **`us9.4`** |
 | **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
-| RBAC, backlog dogfooding | `us10.3`, `stage-b-dogfooding` |
+| RBAC, backlog fixture | `us10.3`, `backlog-fixture` |
 
 **QA coverage:** UI work is now verified in headless Chrome against the built server, including console-error and responsive checks. Not covered: visual regression (no screenshot baselines), cross-browser behaviour (Chrome only), and accessibility auditing beyond the keyboard and ARIA attributes already in the markup.
 
@@ -264,4 +307,4 @@ Named plainly so nobody mistakes the pilot for a product:
 - **US10.3 hardening** — no real authentication. Tenant and actor role arrive in headers.
 - **Epic 11** — no CMDB federation. Alert-discovered Services are lightweight stubs flagged `monitoring_discovery`.
 - **Webhook signature verification** — both gateways trust the normalized body. See README *Production Boundaries*.
-- **Epic 9** — no analytics materialized views or executive dashboards. Escalated items are queryable via `escalated_at` and the Escalated filter, but the executive aging dashboard named in US8.2 is not built.
+- **Epic 9** — US9.4 flow metrics are built, but there are no analytics materialized views, no cross-team executive rollup (US9.2), and no interactive graph explorer (US9.3). Metrics are computed per request. Escalated items are queryable via `escalated_at` and the Escalated filter, but the executive aging dashboard named in US8.2 is not built.

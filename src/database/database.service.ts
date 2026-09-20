@@ -231,6 +231,18 @@ export class DatabaseService {
         UNIQUE(event_id, recipient_id)
       );
 
+      CREATE TABLE IF NOT EXISTS domain_events (
+        event_id UUID PRIMARY KEY,
+        org_id UUID,
+        event_type TEXT NOT NULL,
+        schema_version INT NOT NULL DEFAULT 1,
+        work_item_id TEXT,
+        actor_type TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        payload JSONB NOT NULL DEFAULT '{}',
+        occurred_at TIMESTAMP WITH TIME ZONE NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS sla_policies (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),
@@ -246,6 +258,10 @@ export class DatabaseService {
     // Safe migration for pilot databases created before stable work-item keys existed.
     await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS item_key TEXT;`);
     await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`
+      CREATE INDEX IF NOT EXISTS domain_events_org_time ON domain_events (org_id, occurred_at);
+      CREATE INDEX IF NOT EXISTS domain_events_type_time ON domain_events (event_type, occurred_at);
+    `);
     await this.db.exec(`
       UPDATE work_items
       SET item_key = CASE

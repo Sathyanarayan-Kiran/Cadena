@@ -2,6 +2,118 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex US9.4 flow metrics update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections, with their original wording preserved even where terminology has since changed.
+
+**Status:** Implemented and covered by automated acceptance tests for US9.4, with durable event history advancing US5.1 and US5.2 without completing either.
+
+### Why this slice
+
+Change failure rate is the figure that pays for the traceability graph. In a two-tool estate it depends on someone tagging each deployment by hand, and it is therefore usually wrong. Here it falls out of the `Incident caused_by Release` edge that Epic 4 already stores, so it needs no separate discipline. The rest of the DORA set was computable from artefacts the platform had been capturing since Epic 6 and simply never aggregating.
+
+### Scope delivered by Codex
+
+#### Durable event history
+
+- Added a `domain_events` table and `EventStoreService`, which subscribes to every published event through a new `subscribeAll` hook on the bus and persists the full envelope.
+- Wildcard handlers run before typed handlers, so an event is durable before any consumer acts on it.
+- A failed history write is caught and logged; losing history must never break the mutation that produced the event.
+- Added `GET /events`, filterable by event type, work item and time range, with the tenant scoping every other read already has.
+- Added indexes on `(org_id, occurred_at)` and `(event_type, occurred_at)`, the two access patterns the metrics use.
+
+#### DORA metrics
+
+- **Deployment frequency** from successful deployment artefacts in the window, broken down by environment and normalised to a weekly rate.
+- **Lead time for changes** from the earliest commit linked to any work item a deployment shipped, through to the deployment timestamp, reported as median, p90 and mean.
+- **Change failure rate** from `Incident caused_by Release` where the release was shipped by a deployment in the window, returned with the deployment/incident pairs behind it so the number can be audited rather than trusted.
+- **Time to restore service** from the incident's own first recorded transition into a resolved state.
+
+#### ITIL metrics
+
+- Incidents opened and resolved, severity mix, the share that were auto-created by the Epic 7 gateway, SLA breaches drawn from persisted `SLABreached` events, and reopen transitions out of a resolved state.
+
+#### Honest coverage reporting
+
+- The response carries a `coverage` block naming what each metric could and could not see: lead time counts only deployments whose work items also carry a linked commit, and time to restore counts only incidents with a recorded resolution. A metric computed over partial evidence says so rather than implying completeness.
+
+#### Event contract fix
+
+- `WorkItemStateChanged` carried no tenant, so a consumer could not tell which organisation a transition belonged to and the events fell out of every tenant-scoped query. `org_id` and `item_type` were added to the payload. The change is additive, which is exactly what US5.1's second acceptance criterion requires, and no existing consumer needed modifying.
+- The event store additionally resolves a tenant from the referenced work item when a payload omits one, so no event is orphaned even if another event type forgets.
+
+#### UI changes
+
+- Replaced the nav's "Reports" coming-soon placeholder with a working **Flow metrics** view carrying a window selector, the four DORA figures with their denominators, the failed-change evidence list, the ITIL counts, and the coverage note.
+
+### Design decisions
+
+- **Metrics are computed per request, not materialised.** Spec §14 wants dashboards reading from materialised views so reporting never contends with the workflow engine. At pilot volume a live query is simpler and always correct; the view layer is Epic 9 hardening and is recorded as such rather than pretended away.
+- **Every metric ships its denominator.** A rate without the count behind it invites misreading, so `change_failure_rate` returns `deployments`, `failed_deployments` and the pairs, not just the ratio.
+- **An unresolved incident is excluded, never assumed.** Time to restore counts only incidents with a recorded resolution rather than treating open incidents as instant or infinite.
+- **Durable history is not the outbox.** The event write lands immediately after the mutation rather than inside its transaction. That is a real improvement on an in-memory array but does not satisfy US5.1, so US5.1 stays Partial with the remaining gap named.
+
+### Terminology change
+
+The Stage B backlog import was described throughout as dogfooding. The imported items never transition, never age, carry no owners, and no commit ever links to them, so the label overstated what it was: a realistic data fixture. The function is now `importBacklogFixture`, the spec file is `test/backlog-fixture.spec.ts`, and the UI states what the import is for. Real dogfooding remains blocked on persistence, since PGlite runs in memory and a restart would discard the backlog. Historical sections below keep their original wording.
+
+### Verification added by Codex
+
+- `test/us9.4.spec.ts` (7 tests) over a constructed delivery history of two releases, two commits, two production deployments and two incidents, one of which was caused by a release:
+  - deployment frequency and lead time derived from artefacts, with lead time landing in the expected 48-hour band;
+  - change failure rate of exactly 0.5, with the failing deployment, release and incident returned as evidence;
+  - time to restore counting the resolved incident and excluding the open one;
+  - ITIL counts including severity mix and auto-created share;
+  - window honoured, invalid and reversed ranges rejected with 422;
+  - every metric scoped to the calling tenant, missing tenant rejected;
+  - durable event history queryable and filterable, with envelope fields surviving the round trip.
+
+### Files added by Codex in this increment
+
+- `src/modules/events/event-store.service.ts`
+- `src/modules/metrics/metrics.service.ts`
+- `src/modules/metrics/metrics.controller.ts`
+- `src/modules/metrics/metrics.module.ts`
+- `test/us9.4.spec.ts`
+
+### Files updated by Codex in this increment
+
+- `src/app.module.ts`
+- `src/database/database.service.ts`
+- `src/modules/events/event-bus.ts`
+- `src/modules/workflow/workflow.service.ts`
+- `src/modules/work-items/work-item.controller.ts`
+- `src/scripts/import-backlog.ts`
+- `src/server.ts`
+- `public/index.html`
+- `implementation-status.json`
+- `scripts/build-tracker.mjs`
+- `test/backlog-fixture.spec.ts` (renamed from `test/stage-b-dogfooding.spec.ts`)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Deliberate boundaries
+
+- Metrics are computed live per request with one query per deployment and per incident. Correct and tenant-safe, but not optimised; materialised views are the scaling path.
+- Lead time measures first commit to deployment. It does not model review time, queue time, or multiple commits per change separately.
+- Change failure rate depends on someone recording the `caused_by` edge. The platform makes that edge cheap and auditable, but it does not infer causation.
+- No trend series: figures are computed for one window, not bucketed over time, so the UI shows a value rather than a direction.
+- US9.2's cross-team rollup and US9.3's interactive graph explorer remain unbuilt; this slice covers US9.4 only.
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused suite (`test/us9.4.spec.ts`): **PASS — 7 tests**
+- Full regression suite: **PASS — 25 test files, 71 tests**
+- Tracker drift guard (`test/tracker.spec.ts`): **PASS**
+- UI JavaScript parse check: **PASS**
+- `git diff --check`: **PASS**
+- Live verification on the seeded tenant: deployment frequency, a change failure rate of 1/1 with `INC-D3220784 caused_by REL-5E5DFF18 via live-deploy-6.0.0`, and seven events persisted across four event types: **PASS**
+- Browser screenshot/interaction QA of the new Flow metrics view: **not run; the browser smoke suite covers the board, incident drawer, service impact, notifications and transitions, and was not extended to this view in this increment**
+
+---
+
 ## Codex browser QA update — 2026-09-20
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections.

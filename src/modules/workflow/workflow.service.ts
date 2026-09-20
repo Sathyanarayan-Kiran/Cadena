@@ -341,6 +341,9 @@ export class WorkflowService {
       to_state: ctx.toState,
       fields: suppliedFields,
     };
+    // Additive per US5.1: consumers need the tenant to route or aggregate a transition,
+    // and the spec §8.2 envelope has no org field, so it travels in the payload.
+    const eventPayload = { ...auditPayload, org_id: ctx.orgId, item_type: itemType };
 
     await this.dbService.db.query(
       `INSERT INTO audit_events (id, event_type, work_item_id, actor_id, payload, timestamp)
@@ -353,7 +356,7 @@ export class WorkflowService {
       'WorkItemStateChanged',
       ctx.workItemId,
       { type: ctx.actorType || 'user', id: ctx.actorId },
-      auditPayload,
+      eventPayload,
     );
 
     return {
