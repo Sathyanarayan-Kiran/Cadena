@@ -3,7 +3,7 @@
 A running record of what is built, how to try it, and what changed when.
 
 **Current state:** Phase 0 pilot, Stage B backlog dogfooding, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 6 (Git/CI), Epic 7 (monitoring/APM), and Epic 8 (notification & escalation) are implemented and verified.
-**Verification:** 59 automated tests across 23 test files passing.
+**Verification:** 59 automated tests across 23 test files, plus 7 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,36 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-20 — Browser smoke tests (QA limitation removed)
+
+Every prior record in this file carried the caveat "no browser backend was available, so UI work is verified by static parse checking only." That caveat was inherited and never re-tested. Chrome is installed on this machine, so it was never true.
+
+**Added**
+
+- `puppeteer-core` as a devDependency. It uses a browser already on the machine, so there is no Chromium download.
+- `test/ui-smoke.spec.ts` — 7 tests driving the real page in headless Chrome.
+- `npm run test:ui`, which builds and then runs the smoke suite. `npm test` excludes it, so the fast suite stays fast.
+
+**What it covers**
+
+| Test | Asserts |
+| --- | --- |
+| Board renders | work cards, KPI totals, workflow columns, result summary |
+| Incident drawer | Monitoring evidence section, affected service, SEV1, provider, Delivery evidence |
+| Service impact | edge chains rendered, release reached two hops out, depth=1 narrows correctly |
+| Notification log | `slack → email (fallback)` routing and status visible |
+| Transition dialog | offers only workflow-permitted next states |
+| Escalated filter | escalated work surfaces through the SLA health filter |
+| Responsive | no horizontal overflow at 390px, mobile menu visible, **zero console errors** |
+
+**Notes**
+
+- It drives the **built server** (`dist/server.js`), not a Nest testing module. `ServeStaticModule` does not serve `public/` under vitest's transform — the root 404s — so an in-process app would test a page that never loads. Driving the real artifact is also more faithful.
+- The suite skips rather than fails when no browser or no build is present, since both are environment gaps rather than product defects.
+- It takes ~140 seconds, most of it waiting for a real SLA to age. `SlaCalculatorService` floors elapsed time to whole minutes, so a 1-minute threshold reads exactly 100% anywhere from 60 to 119 seconds; the seed waits past two minutes to cross the breach and escalation thresholds.
+
+**Two bugs it caught — both in the tests, not the product.** Assertions compared against `innerText`, which returns *rendered* text, and `.column-title` and `.detail-section h3` are styled `text-transform: uppercase`. The UI was correct throughout; no product defect was found.
 
 ### 2026-09-20 — Epic 8: Notification & escalation service
 
@@ -125,7 +155,8 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 47 tests across 20 files
+npm test        # 59 tests across 23 files
+npm run test:ui # 7 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
 
@@ -201,6 +232,14 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
       Tests  59 passed (59)
 ```
 
+Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
+
+```
+npm run test:ui
+ Test Files  1 passed (1)
+      Tests  7 passed (7)
+```
+
 | Area | Tests |
 | --- | --- |
 | Canonical model, custom fields, tenant isolation | `us1.1`, `us1.2`, `us1.3` |
@@ -212,7 +251,7 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
 | RBAC, backlog dogfooding | `us10.3`, `stage-b-dogfooding` |
 
-**Known QA limitation:** no browser backend has been available in this environment, so UI work is verified by static JavaScript parse checking and API-contract coverage, not by screenshot or interaction testing.
+**QA coverage:** UI work is now verified in headless Chrome against the built server, including console-error and responsive checks. Not covered: visual regression (no screenshot baselines), cross-browser behaviour (Chrome only), and accessibility auditing beyond the keyboard and ARIA attributes already in the markup.
 
 ---
 

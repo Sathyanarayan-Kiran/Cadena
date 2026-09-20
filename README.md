@@ -20,7 +20,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 59 automated tests across 23 test files.
+- **Testing**: Vitest + NestJS Testing + Supertest running 59 automated tests across 23 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -64,7 +64,17 @@ Expected output:
       Tests  59 passed (59)
 ```
 
-### 2. Run Development Server
+### 2. Run Browser Smoke Tests
+
+Drives the real page in headless Chrome against the built server. Uses a browser already installed on the machine, so there is no Chromium download; the suite skips if none is found.
+
+```bash
+npm run test:ui
+```
+
+It covers board rendering, the Incident monitoring-evidence drawer, Service impact edge chains, the notification delivery log including Slack-to-email fallback, workflow-permitted transitions, the escalated filter, console errors, and phone-width layout.
+
+### 3. Run Development Server
 
 ```bash
 npm run dev

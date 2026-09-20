@@ -4,11 +4,12 @@
   "description": "Unified SDLC & ITSM Platform - Pilot Build",
   "main": "dist/server.js",
   "scripts": {
-    "test": "vitest run",
+    "test": "vitest run --exclude test/ui-smoke.spec.ts --exclude \"**/node_modules/**\"",
     "test:watch": "vitest",
     "build": "tsc",
     "dev": "tsx watch src/server.ts",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "test:ui": "tsc && vitest run test/ui-smoke.spec.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.14",
@@ -27,6 +28,7 @@
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.2",
     "@types/supertest": "^7.2.1",
+    "puppeteer-core": "^25.11.0",
     "supertest": "^7.2.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

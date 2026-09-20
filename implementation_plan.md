@@ -2,6 +2,74 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex browser QA update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections.
+
+**Status:** Implemented. Supersedes the "browser screenshot/interaction QA: not run" caveat recorded in every prior Codex section.
+
+### Correction to prior records
+
+Every earlier Codex verification block in this document states that browser QA was "not run because no browser backend was available in the current environment." That claim was inherited from the first such record and carried forward without being re-tested. It was wrong: Chrome is installed on this machine, and a headless browser was available the whole time. The caveat should have been verified before being repeated.
+
+### Scope delivered by Codex
+
+- Added `puppeteer-core` as a devDependency. It drives a browser already present on the machine, so no Chromium download is required and CI images need only a system browser.
+- Added `test/ui-smoke.spec.ts`, seven tests driving the real page in headless Chrome.
+- Added `npm run test:ui`, which compiles and then runs the smoke suite. `npm test` now excludes it so the fast suite stays fast.
+
+### Coverage
+
+| Test | Asserts |
+| --- | --- |
+| Board renders | work cards present, KPI totals non-zero, workflow columns include Triaged, result summary rendered |
+| Incident drawer | Monitoring evidence section, affected service `SVC-CHECKOUT-API`, SEV1, provider name, Delivery evidence section |
+| Service impact | summary and edge chains render, Release reached two hops out via `caused_by`, depth=1 correctly narrows to the directly affected Incident |
+| Notification log | `slack -> email (fallback)` routing, `fallback sent` status, recipient role |
+| Transition dialog | offers exactly the workflow-permitted next states for a Triaged Incident |
+| Escalated filter | escalated work surfaces through the SLA health filter |
+| Responsive and clean | no horizontal overflow at 390px, mobile menu visible, zero console errors across the whole session |
+
+### Design decisions
+
+- **The suite drives the built server, not a Nest testing module.** `ServeStaticModule` does not serve `public/` under vitest's transform: a diagnostic showed the root returning `404 Cannot GET /`. An in-process app would therefore test a page that never loads. Spawning `dist/server.js` also exercises the artifact people actually run, including real bootstrap seeding.
+- **It skips rather than fails** when no browser or no build is present, because both are environment gaps rather than product defects.
+- **It is excluded from `npm test`.** The suite takes about 140 seconds, most of it waiting for a real SLA to age, which does not belong in the fast feedback loop.
+- **The SLA wait is deliberate, not arbitrary.** `SlaCalculatorService` floors elapsed time to whole minutes, so a 1-minute threshold reads exactly 100% anywhere between 60 and 119 seconds. The seed crosses two minutes to reach 200%, clearing both the breach and the lowered escalation threshold.
+
+### What it found
+
+Two defects, both in the test code rather than the product: assertions compared against `innerText`, which returns *rendered* text, while `.column-title` and `.detail-section h3` are styled `text-transform: uppercase`. The application markup and behaviour were correct in every case. No product defect was found, which is a meaningful result given the UI had never been executed in a browser under test.
+
+### Files added by Codex in this increment
+
+- `test/ui-smoke.spec.ts`
+
+### Files updated by Codex in this increment
+
+- `package.json`
+- `package-lock.json`
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Deliberate boundaries
+
+- Chrome only. No cross-browser matrix.
+- No visual regression: there are no screenshot baselines, so a purely cosmetic change would pass.
+- No accessibility audit beyond asserting the keyboard and ARIA attributes already present; no axe-core or similar.
+- The suite asserts rendered text and DOM state, not pixel layout beyond a horizontal-overflow check.
+- It depends on a system-installed browser. A CI image without one will skip the suite rather than fail, which means a silent gap if nobody checks that it ran.
+
+### Verification result
+
+- `npm run build`: **PASS**
+- `npm run test:ui`: **PASS - 1 test file, 7 tests, headless Chrome**
+- Full regression suite: **PASS - 23 test files, 59 tests**
+- `git diff --check`: **PASS**
+
+---
+
 ## Codex Epic 8 notification update — 2026-09-20
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20 as the Epic 8 slice. The earlier Codex records and the original Gemini plan remain below as prior-history sections.
