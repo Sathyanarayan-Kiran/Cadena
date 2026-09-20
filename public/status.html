@@ -1,0 +1,535 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  :root { color-scheme: light dark; padding-top: env(safe-area-inset-top, 0px); padding-bottom: env(safe-area-inset-bottom, 0px); }
+  body { margin: 0; font: 14px system-ui, sans-serif; background: #fafaf9; }
+  img { max-width: 100%; }
+  [hidden] { display: none !important; }
+</style>
+<title>Cadena Delivery Ledger</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Serif:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+  :root {
+    --ground: #f4f6f5;
+    --surface: #ffffff;
+    --surface-2: #eef2f1;
+    --ink: #16201f;
+    --ink-2: #4a5755;
+    --ink-3: #6e7b79;
+    --line: #dce3e1;
+    --line-strong: #c5cfcd;
+    --accent: #0e7c86;
+    --accent-soft: #dff0f1;
+    --done: #2f6b3a;
+    --done-soft: #e2f0e4;
+    --partial: #a96a12;
+    --partial-soft: #f8ebd7;
+    --idle: #6e7b79;
+    --idle-soft: #e6ebea;
+    --risk: #a63a3a;
+    --risk-soft: #f7e4e4;
+    --sans: "IBM Plex Sans", ui-sans-serif, -apple-system, "Segoe UI", sans-serif;
+    --serif: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+    --mono: "IBM Plex Mono", ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0e1514;
+      --surface: #151e1d;
+      --surface-2: #1c2726;
+      --ink: #e6edeb;
+      --ink-2: #a9b6b4;
+      --ink-3: #7d8a88;
+      --line: #263432;
+      --line-strong: #354643;
+      --accent: #3fb3bd;
+      --accent-soft: #11322f;
+      --done: #6fcb86;
+      --done-soft: #15291c;
+      --partial: #e0a950;
+      --partial-soft: #2e2313;
+      --idle: #8a9795;
+      --idle-soft: #1e2827;
+      --risk: #e07a7a;
+      --risk-soft: #2e1818;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0e1514;
+    --surface: #151e1d;
+    --surface-2: #1c2726;
+    --ink: #e6edeb;
+    --ink-2: #a9b6b4;
+    --ink-3: #7d8a88;
+    --line: #263432;
+    --line-strong: #354643;
+    --accent: #3fb3bd;
+    --accent-soft: #11322f;
+    --done: #6fcb86;
+    --done-soft: #15291c;
+    --partial: #e0a950;
+    --partial-soft: #2e2313;
+    --idle: #8a9795;
+    --idle-soft: #1e2827;
+    --risk: #e07a7a;
+    --risk-soft: #2e1818;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 0 20px; }
+  .wrap.page { padding-block: 40px 72px; }
+
+  /* ---------- masthead ---------- */
+  .masthead { border-bottom: 2px solid var(--ink); padding-bottom: 18px; margin-bottom: 26px; }
+  .eyebrow {
+    font-family: var(--mono); font-size: 11px; font-weight: 500;
+    letter-spacing: .14em; text-transform: uppercase; color: var(--accent);
+    margin: 0 0 10px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 600; font-size: clamp(30px, 5vw, 46px);
+    line-height: 1.04; letter-spacing: -.02em; margin: 0 0 12px; text-wrap: balance;
+  }
+  .standfirst {
+    font-family: var(--serif); font-size: 17px; line-height: 1.55; color: var(--ink-2);
+    max-width: 62ch; margin: 0 0 16px;
+  }
+  .provenance {
+    display: flex; flex-wrap: wrap; gap: 8px 22px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3);
+  }
+  .provenance b { color: var(--ink-2); font-weight: 500; }
+
+  /* ---------- tallies ---------- */
+  .tally-band { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; background: var(--line); border: 1px solid var(--line); margin-bottom: 8px; }
+  .tally { background: var(--surface); padding: 16px 18px; }
+  .tally-n { font-family: var(--mono); font-size: 30px; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+  .tally-l { font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); margin-top: 7px; font-weight: 600; }
+  .tally.done .tally-n { color: var(--done); }
+  .tally.partial .tally-n { color: var(--partial); }
+  .tally.idle .tally-n { color: var(--ink-3); }
+
+  .meter { display: flex; height: 10px; border: 1px solid var(--line); border-top: 0; overflow: hidden; margin-bottom: 34px; }
+  .meter span { display: block; }
+  .meter .s-done { background: var(--done); }
+  .meter .s-partial { background: var(--partial); }
+  .meter .s-idle { background: var(--idle-soft); }
+
+  /* ---------- section headers ---------- */
+  .sec-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 0 0 14px; }
+  h2 { font-family: var(--serif); font-size: 21px; font-weight: 600; letter-spacing: -.01em; margin: 0; }
+  .sec-note { font-size: 13px; color: var(--ink-3); max-width: 54ch; }
+
+  /* ---------- phase rail ---------- */
+  .phases { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 34px; }
+  .phase { background: var(--surface); border: 1px solid var(--line); padding: 15px 16px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .phase-top { display: flex; align-items: baseline; gap: 9px; }
+  .phase-n { font-family: var(--mono); font-size: 11px; font-weight: 600; color: var(--surface); background: var(--ink); padding: 2px 6px; letter-spacing: .04em; }
+  .phase-name { font-weight: 600; font-size: 14px; }
+  .phase-focus { font-size: 12.5px; color: var(--ink-3); line-height: 1.45; flex: 1; }
+  .phase-bar { height: 5px; background: var(--idle-soft); display: flex; }
+  .phase-bar i { display: block; background: var(--done); }
+  .phase-bar i.p { background: var(--partial); }
+  .phase-count { font-family: var(--mono); font-size: 11.5px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+  /* ---------- callout ---------- */
+  .callout { border: 1px solid var(--line); border-left: 3px solid var(--risk); background: var(--surface); padding: 16px 18px; margin-bottom: 34px; }
+  .callout h3 { margin: 0 0 8px; font-size: 14px; font-weight: 700; color: var(--risk); }
+  .callout p { margin: 0 0 10px; font-size: 13.5px; color: var(--ink-2); max-width: 74ch; line-height: 1.55; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout ul { margin: 0 0 10px; padding-left: 18px; font-size: 13.5px; color: var(--ink-2); }
+  .callout li { margin-bottom: 5px; }
+  .callout code, .prose code { font-family: var(--mono); font-size: .89em; background: var(--surface-2); padding: 1px 5px; border-radius: 2px; }
+
+  /* ---------- controls ---------- */
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 12px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: 26px; position: sticky; top: env(safe-area-inset-top, 0px); background: var(--ground); z-index: 5; }
+  .ctl-label { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-3); margin-right: 2px; }
+  .chip { font: inherit; font-size: 12.5px; font-weight: 500; padding: 6px 12px; border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-2); cursor: pointer; border-radius: 999px; }
+  .chip:hover { border-color: var(--ink-3); color: var(--ink); }
+  .chip[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--ground); }
+  .spacer { flex: 1 1 24px; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+  /* ---------- epic blocks ---------- */
+  .group-title { font-family: var(--mono); font-size: 11.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); margin: 30px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+  .group-title:first-child { margin-top: 0; }
+
+  .epic { background: var(--surface); border: 1px solid var(--line); margin-bottom: 12px; }
+  .epic-head { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .epic-id { font-family: var(--mono); font-size: 12px; font-weight: 600; color: var(--surface); background: var(--accent); padding: 2px 7px; }
+  .epic-title { font-weight: 600; font-size: 15px; flex: 1 1 260px; }
+  .epic-new { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .08em; color: var(--accent); border: 1px solid var(--accent); padding: 1px 5px; }
+  .epic-ratio { font-family: var(--mono); font-size: 12px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+  .epic-bar { width: 74px; height: 5px; background: var(--idle-soft); display: flex; flex: 0 0 auto; }
+  .epic-bar i { display: block; background: var(--done); }
+  .epic-bar i.p { background: var(--partial); }
+
+  .story { display: grid; grid-template-columns: 62px minmax(0, 1fr) 110px 128px; gap: 12px; align-items: start; padding: 11px 16px; border-bottom: 1px solid var(--line); }
+  .story:last-child { border-bottom: 0; }
+  .story-id { font-family: var(--mono); font-size: 12px; font-weight: 500; color: var(--ink-3); padding-top: 1px; }
+  .story-name { font-size: 14px; font-weight: 500; }
+  .story-note { font-size: 12.5px; color: var(--ink-3); margin-top: 3px; line-height: 1.45; }
+  .story-note code { font-family: var(--mono); font-size: 11.5px; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: 0 0 auto; }
+  .pill.done { color: var(--done); background: var(--done-soft); }
+  .pill.partial { color: var(--partial); background: var(--partial-soft); }
+  .pill.idle { color: var(--idle); background: var(--idle-soft); }
+  .phase-tag { font-family: var(--mono); font-size: 11px; color: var(--ink-3); line-height: 1.4; }
+  .phase-tag b { display: block; color: var(--ink-2); font-weight: 500; }
+
+  .empty { padding: 34px 16px; text-align: center; color: var(--ink-3); font-size: 14px; border: 1px dashed var(--line-strong); }
+
+  /* ---------- prose footer ---------- */
+  .prose { margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--line); }
+  .prose h2 { margin-bottom: 10px; }
+  .prose p { font-size: 13.5px; color: var(--ink-2); max-width: 74ch; line-height: 1.6; margin: 0 0 10px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 14px 0 0; font-size: 12.5px; color: var(--ink-2); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+
+  @media (max-width: 860px) {
+    .tally-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .phases { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 620px) {
+    .story { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .story-id { padding-top: 0; }
+    .phase-tag b { display: inline; }
+    .tally-band { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .phases { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="wrap page">
+  <header class="masthead">
+    <p class="eyebrow">Unified SDLC &amp; ITSM Platform &middot; Pilot</p>
+    <h1>Cadena Delivery Ledger</h1>
+    <p class="standfirst">Every epic and user story in the backlog, its verified status in the repository, and where it sits in both the specification roadmap and the research playbook's five-phase rollout.</p>
+    <div class="provenance">
+      <span><b>Source of truth</b> repository @ <code style="font-family:var(--mono)">94200ef</code></span>
+      <span><b>Backlog</b> Backlog.md &middot; backlog.json</span>
+      <span><b>Verification</b> 23 spec files / 59 tests + 7 browser tests</span>
+      <span><b>Compiled</b> 20 Sep 2026</span>
+    </div>
+  </header>
+
+  <section aria-labelledby="tally-h">
+    <h2 id="tally-h" class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Totals</h2>
+    <div class="tally-band">
+      <div class="tally"><div class="tally-n" id="t-total">0</div><div class="tally-l">Stories across 16 epics</div></div>
+      <div class="tally done"><div class="tally-n" id="t-done">0</div><div class="tally-l">Done &amp; test-verified</div></div>
+      <div class="tally partial"><div class="tally-n" id="t-partial">0</div><div class="tally-l">Partial, gap named</div></div>
+      <div class="tally idle"><div class="tally-n" id="t-idle">0</div><div class="tally-l">Not started</div></div>
+    </div>
+    <div class="meter" id="meter" role="img" aria-label="Overall delivery progress"></div>
+  </section>
+
+  <section aria-labelledby="phase-h">
+    <div class="sec-head">
+      <h2 id="phase-h">Specification roadmap</h2>
+      <p class="sec-note">Phases from &sect;15 of the technical specification. Each is independently shippable.</p>
+    </div>
+    <div class="phases" id="phases"></div>
+  </section>
+
+  <section class="callout">
+    <h3>The research playbook's status table disagrees with the repository</h3>
+    <p><em>Cadena Research.docx</em> &sect;7 records a backlog execution status that does not match what the code and tests show. The repository is treated as authoritative throughout this page; the divergences are listed here rather than silently reconciled.</p>
+    <ul>
+      <li><b>Epic 2 is understated.</b> The playbook marks US2.1&ndash;US2.3 <em>In Progress</em>. All three are implemented and covered by <code>us2.1</code>&ndash;<code>us2.3</code>.</li>
+      <li><b>Epic 10 is overstated, and it matters.</b> The playbook marks US10.1&ndash;US10.2 (SSO and SCIM provisioning) <em>Completed</em>. Neither exists: identity is a header-based stub. The story that <em>is</em> complete is US10.3, role-gated transitions.</li>
+      <li><b>Epic 4 is fairly described</b> as in progress &mdash; US4.1&ndash;US4.3 are done, US4.4 has not been started.</li>
+    </ul>
+    <p>Treating the playbook's table as a delivery signal would credit the platform with an enterprise identity posture it does not have.</p>
+  </section>
+
+  <section aria-labelledby="ledger-h">
+    <div class="sec-head">
+      <h2 id="ledger-h">Epic ledger</h2>
+      <p class="sec-note">Story titles are abridged; the full role&ndash;goal&ndash;benefit statements and acceptance criteria live in <code>Backlog.md</code>.</p>
+    </div>
+
+    <div class="controls">
+      <span class="ctl-label">Group</span>
+      <button class="chip" type="button" data-group="epic" aria-pressed="true">Epic</button>
+      <button class="chip" type="button" data-group="phase" aria-pressed="false">Spec phase</button>
+      <button class="chip" type="button" data-group="rollout" aria-pressed="false">Rollout phase</button>
+      <span class="spacer"></span>
+      <span class="ctl-label">Status</span>
+      <button class="chip" type="button" data-status="all" aria-pressed="true">All</button>
+      <button class="chip" type="button" data-status="done" aria-pressed="false">Done</button>
+      <button class="chip" type="button" data-status="partial" aria-pressed="false">Partial</button>
+      <button class="chip" type="button" data-status="idle" aria-pressed="false">Not started</button>
+      <button class="chip" type="button" data-status="new" aria-pressed="false">New from research</button>
+    </div>
+
+    <div id="ledger"></div>
+  </section>
+
+  <section class="prose">
+    <h2>How status was decided</h2>
+    <p><b>Done</b> means implemented and covered by an automated acceptance test whose assertions match the story's criteria. <b>Partial</b> means the capability exists but a named part of the acceptance criteria is not met &mdash; most often a deliberate pilot boundary, such as notification transports that record rather than send. <b>Not started</b> means no implementation exists.</p>
+    <p>Eight stories sit at Partial for reasons that are declared boundaries rather than defects: the in-process event bus cannot satisfy the outbox guarantee in US5.1, and the stubbed channel adapters in Epic 8 cannot literally deliver a message. Both are recorded in the specification as pilot stubs, and both keep their stories out of the Done column here.</p>
+    <p>Eighteen stories were added from <em>Cadena Research.docx</em>: five into existing epics, and four new epics covering bidirectional ServiceNow&ndash;Jira synchronization, rich-text fidelity, the agentic AI subsystem, and integration resilience. They are marked <b>New</b> in the ledger.</p>
+    <div class="legend">
+      <span><span class="pill done">Done</span> verified by test</span>
+      <span><span class="pill partial">Partial</span> gap named in the row</span>
+      <span><span class="pill idle">Not started</span> no implementation</span>
+    </div>
+  </section>
+</div>
+
+<script>
+  const SPEC_PHASES = [
+    { id: 0, name: "Foundation", focus: "Canonical model, one shared state machine, basic RBAC" },
+    { id: 1, name: "Signal", focus: "Aging and SLA engine, git and CI/CD integration, team dashboards" },
+    { id: 2, name: "Traceability", focus: "Lineage graph, monitoring integration, notification and escalation" },
+    { id: 3, name: "Scale & governance", focus: "CMDB federation, chatops, analytics suite, enterprise hardening" }
+  ];
+
+  const ROLLOUT = ["Discovery", "Infrastructure", "Mapping", "AI Integration", "Enterprise Scaling"];
+
+  const EPICS = [
+    { id: "E1", n: 1, title: "Canonical work item model & core service", rollout: "Discovery", stories: [
+      { id: "US1.1", name: "One shared WorkItem schema", status: "done", phase: 0, note: "Verified by <code>test/us1.1.spec.ts</code> — four canonical types, stable keys, 422 on unknown type." },
+      { id: "US1.2", name: "Filtered views, scoped to tenant", status: "done", phase: 0, note: "Verified by <code>test/us1.2.spec.ts</code> — state and aging filters, cross-tenant reads denied." },
+      { id: "US1.3", name: "Per-type custom fields", status: "done", phase: 0, note: "Verified by <code>test/us1.3.spec.ts</code> — JSON-schema validation and documented defaults." }
+    ]},
+    { id: "E2", n: 2, title: "Workflow & state machine engine", rollout: "Discovery", stories: [
+      { id: "US2.1", name: "Configurable workflow definitions", status: "done", phase: 0, note: "Verified by <code>test/us2.1.spec.ts</code> — versioned publish, in-flight items keep their version." },
+      { id: "US2.2", name: "Role and required-field guards", status: "done", phase: 0, note: "Verified by <code>test/us2.2.spec.ts</code> — 409 <code>guard_failed</code>, 400 on missing fields." },
+      { id: "US2.3", name: "Integration-triggered transitions", status: "done", phase: 0, note: "Verified by <code>test/us2.3.spec.ts</code> — a guard-rejected external transition is skipped and logged, never forced." }
+    ]},
+    { id: "E3", n: 3, title: "Aging & SLA engine", rollout: "Mapping", stories: [
+      { id: "US3.1", name: "Business-calendar thresholds", status: "done", phase: 1, note: "Verified by <code>test/us3.1.spec.ts</code> — 5&times;8 excludes weekends; no policy means no false alert." },
+      { id: "US3.2", name: "Continuous aging score", status: "done", phase: 1, note: "Verified by <code>test/us3.2.spec.ts</code> — green below 75%, amber to 100%, red beyond, on a 60-second tick." },
+      { id: "US3.3", name: "Warning and breach events", status: "done", phase: 1, note: "Verified by <code>test/us3.3.spec.ts</code> — SLAWarning at 75%, SLABreached at 100%, with recipients." },
+      { id: "US3.4", name: "SLA clock suspension on hold", status: "idle", phase: 1, isNew: true, note: "New from research §3. Time in a hold state such as Waiting for Customer must not consume SLA budget." }
+    ]},
+    { id: "E4", n: 4, title: "Traceability graph service", rollout: "Mapping", stories: [
+      { id: "US4.1", name: "Typed link creation", status: "done", phase: 2, note: "Verified by <code>test/us4.1.spec.ts</code> — edges validated per type pair, invalid pairs rejected with allowed list." },
+      { id: "US4.2", name: "Upstream lineage query", status: "done", phase: 2, note: "Verified by <code>test/us4.2.spec.ts</code> — upstream and downstream follow relationship semantics, not one traversal twice." },
+      { id: "US4.3", name: "Service impact analysis", status: "done", phase: 2, note: "Verified by <code>test/us4.3.spec.ts</code> — depth-bounded walk from a Service returning the edge chain implicating each item." },
+      { id: "US4.4", name: "Exportable lineage report", status: "idle", phase: 2, note: "No export endpoint exists. Lineage is queryable as JSON but cannot be emitted as an audit artefact." }
+    ]},
+    { id: "E5", n: 5, title: "Event bus & event model", rollout: "Enterprise Scaling", stories: [
+      { id: "US5.1", name: "Schema-registered domain events", status: "partial", phase: 3, note: "Envelope conforms to spec §8.2, but the bus is in-process and events are never persisted, so the outbox guarantee is unmet." },
+      { id: "US5.2", name: "Idempotent event processing", status: "partial", phase: 3, note: "Enforced where it matters today — integration deliveries and notification dispatch — but there is no general consumer framework." },
+      { id: "US5.3", name: "Dead-letter queue with alerting", status: "idle", phase: 3, note: "No DLQ. A consumer failure is caught and logged, then lost." },
+      { id: "US5.4", name: "HTTP 202 asynchronous ingestion", status: "idle", phase: 3, isNew: true, note: "New from research §4. Webhooks are processed synchronously today, which is the classic webhook-timeout failure mode at volume." },
+      { id: "US5.5", name: "Dead-letter replay console", status: "idle", phase: 3, isNew: true, note: "New from research §8. Operators need to correct a malformed payload inline and re-inject it without re-triggering the source." }
+    ]},
+    { id: "E6", n: 6, title: "Git & CI/CD integration", rollout: "Infrastructure", stories: [
+      { id: "US6.1", name: "Commit and PR auto-linking", status: "done", phase: 1, note: "Verified by <code>test/us6.1.spec.ts</code> — keys extracted from messages; unreferenced commits still stored." },
+      { id: "US6.2", name: "Merged PR advances its story", status: "done", phase: 1, note: "Verified by <code>test/us6.2.spec.ts</code> — runs through the workflow engine as an integration actor." },
+      { id: "US6.3", name: "Deployment to release traceability", status: "done", phase: 1, note: "Verified by <code>test/us6.3.spec.ts</code> — links stories and releases, advances the release, replays idempotently." }
+    ]},
+    { id: "E7", n: 7, title: "Monitoring/APM integration & auto-incident creation", rollout: "Infrastructure", stories: [
+      { id: "US7.1", name: "Alert-driven incident creation", status: "done", phase: 2, note: "Verified by <code>test/us7.1.spec.ts</code> — SEV1–SEV4 mapping, Triaged on create, rolling dedupe window." },
+      { id: "US7.2", name: "Affected-service linking", status: "done", phase: 2, note: "Verified by <code>test/us7.2.spec.ts</code> — <code>affects</code> edge to the Service registry; Services are not WorkItems." },
+      { id: "US7.3", name: "Mitigation proposed, never forced", status: "done", phase: 2, note: "Verified by <code>test/us7.3.spec.ts</code> — walks to Mitigated one guarded step at a time; never Resolved or Closed." }
+    ]},
+    { id: "E8", n: 8, title: "Notification & escalation service", rollout: "Mapping", stories: [
+      { id: "US8.1", name: "SLA warning reaches the owner", status: "partial", phase: 2, note: "Routing, preference and audit log verified by <code>test/us8.1.spec.ts</code>. Channel transports are declared pilot stubs, so nothing is literally delivered." },
+      { id: "US8.2", name: "Breach and escalation routing", status: "partial", phase: 2, note: "Owner plus team lead on breach, configured target at 150%, verified by <code>test/us8.2.spec.ts</code>. Same transport boundary." },
+      { id: "US8.3", name: "Channel choice with email fallback", status: "partial", phase: 2, note: "Preference, fallback and failure recording verified by <code>test/us8.3.spec.ts</code>. Same transport boundary." }
+    ]},
+    { id: "E9", n: 9, title: "Dashboards & reporting", rollout: "Enterprise Scaling", stories: [
+      { id: "US9.1", name: "Team aging heatmap", status: "partial", phase: 1, note: "The board colours by aging bucket and sorts worst-first, and renders under browser test, but the ordering itself is not asserted." },
+      { id: "US9.2", name: "Cross-team executive rollup", status: "idle", phase: 3, note: "No SLA compliance, cycle time or aging distribution per team or business unit." },
+      { id: "US9.3", name: "Interactive traceability explorer", status: "idle", phase: 3, note: "Lineage renders as a linear chain, not an expandable graph." },
+      { id: "US9.4", name: "DORA and ITIL metrics", status: "idle", phase: 3, note: "Computable from data already captured — change failure rate falls out of <code>Incident caused_by Release</code> — but needs persisted event history first." }
+    ]},
+    { id: "E10", n: 10, title: "RBAC, identity & audit", rollout: "Infrastructure", stories: [
+      { id: "US10.1", name: "SSO login", status: "idle", phase: 3, note: "Not implemented. The research playbook records this as complete; it is not." },
+      { id: "US10.2", name: "SCIM provisioning", status: "idle", phase: 3, note: "Not implemented. The research playbook records this as complete; it is not." },
+      { id: "US10.3", name: "Role-gated transitions", status: "done", phase: 0, note: "Verified by <code>test/us10.3.spec.ts</code> — role resolution against the people table gates every transition." },
+      { id: "US10.4", name: "Audit-trail export", status: "partial", phase: 3, note: "Every transition writes an immutable <code>audit_events</code> row, but no export endpoint exposes them." },
+      { id: "US10.5", name: "Identity by immutable account id", status: "idle", phase: 3, isNew: true, note: "New from research §8. Email-based lookup breaks silently when profile visibility hides the address." },
+      { id: "US10.6", name: "Deactivation via SCIM PATCH", status: "idle", phase: 3, isNew: true, note: "New from research §8. The target REST API has no deactivation endpoint, so deprovisioning must go through SCIM." }
+    ]},
+    { id: "E11", n: 11, title: "CMDB federation", rollout: "Enterprise Scaling", stories: [
+      { id: "US11.1", name: "Federated Service/Asset source", status: "idle", phase: 3, note: "The Service registry is local. Nothing reads from an authoritative external CMDB, and there is no staleness flag." },
+      { id: "US11.2", name: "Incidents linked to the correct CI", status: "partial", phase: 3, note: "Incidents link to Services with an owning team, but alert-discovered entries are local stubs flagged <code>monitoring_discovery</code>." }
+    ]},
+    { id: "E12", n: 12, title: "ChatOps integration", rollout: "Enterprise Scaling", stories: [
+      { id: "US12.1", name: "Query and update from chat", status: "idle", phase: 3, note: "Not started." },
+      { id: "US12.2", name: "Incident commands from chat", status: "idle", phase: 3, note: "Not started." },
+      { id: "US12.3", name: "CAB approvals from chat", status: "idle", phase: 3, note: "Not started." }
+    ]},
+    { id: "E13", n: 13, title: "ServiceNow / Jira bidirectional synchronization", rollout: "Mapping", isNew: true, stories: [
+      { id: "US13.1", name: "ITIL to Agile state matrix", status: "idle", phase: 3, isNew: true, note: "Configurable translation so each platform shows its own native lifecycle; an unmapped state holds for review rather than guessing." },
+      { id: "US13.2", name: "Immutable correlation references", status: "idle", phase: 3, isNew: true, note: "Each side stores the other's immutable id, so the pair survives renames and re-indexing without summary-text matching." },
+      { id: "US13.3", name: "Echo-loop suppression", status: "idle", phase: 3, isNew: true, note: "Self-originated webhooks identified by service-account identity plus payload hash, with content comparison as the fallback after a restart." },
+      { id: "US13.4", name: "Work-note privacy in comment sync", status: "idle", phase: 3, isNew: true, note: "Comment sync opt-in by default; internal work notes never reach a customer-visible stream." },
+      { id: "US13.5", name: "Resolution code write-back", status: "idle", phase: 3, isNew: true, note: "Closure metadata written back so ITIL records stay complete without manual re-entry." }
+    ]},
+    { id: "E14", n: 14, title: "Rich-text fidelity & AST transformer", rollout: "Mapping", isNew: true, stories: [
+      { id: "US14.1", name: "Format-preserving transfer", status: "idle", phase: 3, isNew: true, note: "Parse source HTML to an intermediate tree, then serialise to the target's document format or wiki markup from the same representation." },
+      { id: "US14.2", name: "Inline media and attachments", status: "idle", phase: 3, isNew: true, note: "Screenshots transfer as attachments referenced at their original positions; oversized files warn and link back rather than failing the record." }
+    ]},
+    { id: "E15", n: 15, title: "Agentic AI subsystem", rollout: "AI Integration", isNew: true, stories: [
+      { id: "US15.1", name: "Incident-storm duplicate detection", status: "idle", phase: 3, isNew: true, note: "Embedding similarity above the configured threshold suppresses the duplicate and links it under a master incident." },
+      { id: "US15.2", name: "Stack-trace entity extraction", status: "idle", phase: 3, isNew: true, note: "Component and affected version inferred from logs, flagged machine-derived, left unset below the confidence threshold." },
+      { id: "US15.3", name: "CAB release risk scoring", status: "idle", phase: 3, isNew: true, note: "Score from historical velocity, prior change-failure rate and blast radius; high scores route to an elevated approval tier." }
+    ]},
+    { id: "E16", n: 16, title: "Integration resilience & network topology", rollout: "Infrastructure", isNew: true, stories: [
+      { id: "US16.1", name: "Adaptive rate governance", status: "idle", phase: 3, isNew: true, note: "Shape outbound calls inside each target's quota and honour <code>Retry-After</code> instead of failing at the boundary." },
+      { id: "US16.2", name: "Indexed-query safety", status: "idle", phase: 3, isNew: true, note: "Reject queries against unindexed fields at configuration time; shed load rather than retrying into semaphore exhaustion." },
+      { id: "US16.3", name: "Zero-inbound-port connectivity", status: "idle", phase: 3, isNew: true, note: "A relay behind the firewall long-polls over outbound HTTPS, so integrating never widens the attack surface." }
+    ]}
+  ];
+
+  const ALL = EPICS.flatMap(e => e.stories.map(s => ({ ...s, epic: e })));
+  const LABEL = { done: "Done", partial: "Partial", idle: "Not started" };
+  const state = { group: "epic", status: "all" };
+
+  const el = (tag, cls, html) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (html !== undefined) node.innerHTML = html;
+    return node;
+  };
+  const count = (list, status) => list.filter(s => s.status === status).length;
+
+  function renderTallies() {
+    document.getElementById("t-total").textContent = ALL.length;
+    document.getElementById("t-done").textContent = count(ALL, "done");
+    document.getElementById("t-partial").textContent = count(ALL, "partial");
+    document.getElementById("t-idle").textContent = count(ALL, "idle");
+
+    const meter = document.getElementById("meter");
+    meter.replaceChildren();
+    [["done", count(ALL, "done")], ["partial", count(ALL, "partial")], ["idle", count(ALL, "idle")]]
+      .forEach(([k, n]) => {
+        const seg = el("span", "s-" + k);
+        seg.style.width = (n / ALL.length * 100) + "%";
+        meter.appendChild(seg);
+      });
+  }
+
+  function renderPhases() {
+    const host = document.getElementById("phases");
+    host.replaceChildren();
+    SPEC_PHASES.forEach(p => {
+      const list = ALL.filter(s => s.phase === p.id);
+      const d = count(list, "done"), pa = count(list, "partial");
+      const card = el("div", "phase");
+      const top = el("div", "phase-top");
+      top.append(el("span", "phase-n", "P" + p.id), el("span", "phase-name", p.name));
+      const bar = el("div", "phase-bar");
+      const bd = el("i"); bd.style.width = (d / list.length * 100) + "%";
+      const bp = el("i", "p"); bp.style.width = (pa / list.length * 100) + "%";
+      bar.append(bd, bp);
+      card.append(top, el("p", "phase-focus", p.focus), bar,
+        el("div", "phase-count", d + " done &middot; " + pa + " partial &middot; " + (list.length - d - pa) + " open"));
+      host.appendChild(card);
+    });
+  }
+
+  function storyRow(s) {
+    const row = el("div", "story");
+    const mid = el("div");
+    const name = el("div", "story-name", s.name + (s.isNew ? ' <span class="epic-new">NEW</span>' : ""));
+    mid.append(name, el("div", "story-note", s.note));
+    const tag = el("div", "phase-tag", "<b>Phase " + s.phase + "</b>" + s.epic.rollout);
+    row.append(el("div", "story-id", s.id), mid, el("div", "", '<span class="pill ' + s.status + '">' + LABEL[s.status] + "</span>"), tag);
+    return row;
+  }
+
+  function epicBlock(epic, stories) {
+    const block = el("div", "epic");
+    const head = el("div", "epic-head");
+    const d = count(stories, "done"), pa = count(stories, "partial");
+    const bar = el("div", "epic-bar");
+    const bd = el("i"); bd.style.width = (d / stories.length * 100) + "%";
+    const bp = el("i", "p"); bp.style.width = (pa / stories.length * 100) + "%";
+    bar.append(bd, bp);
+    head.append(
+      el("span", "epic-id", epic.id),
+      el("span", "epic-title", epic.title + (epic.isNew ? ' <span class="epic-new">NEW</span>' : "")),
+      bar,
+      el("span", "epic-ratio", d + "/" + stories.length)
+    );
+    block.appendChild(head);
+    stories.forEach(s => block.appendChild(storyRow(s)));
+    return block;
+  }
+
+  function render() {
+    const host = document.getElementById("ledger");
+    host.replaceChildren();
+    const match = s => state.status === "all" ? true
+      : state.status === "new" ? Boolean(s.isNew)
+      : s.status === state.status;
+
+    if (state.group === "epic") {
+      let shown = 0;
+      EPICS.forEach(epic => {
+        // Draw from ALL, whose entries carry the back-reference storyRow needs.
+        const stories = ALL.filter(s => s.epic.id === epic.id).filter(match);
+        if (!stories.length) return;
+        shown++;
+        host.appendChild(epicBlock(epic, stories));
+      });
+      if (!shown) host.appendChild(el("div", "empty", "No stories match this filter."));
+      return;
+    }
+
+    const keys = state.group === "phase" ? SPEC_PHASES.map(p => p.id) : ROLLOUT;
+    let shown = 0;
+    keys.forEach(key => {
+      const inGroup = ALL.filter(s => (state.group === "phase" ? s.phase : s.epic.rollout) === key).filter(match);
+      if (!inGroup.length) return;
+      shown++;
+      const label = state.group === "phase"
+        ? "Phase " + key + " — " + SPEC_PHASES[key].name
+        : "Rollout — " + key;
+      host.appendChild(el("h3", "group-title", label + " · " + inGroup.length + " stories"));
+      const byEpic = new Map();
+      inGroup.forEach(s => {
+        if (!byEpic.has(s.epic.id)) byEpic.set(s.epic.id, { epic: s.epic, stories: [] });
+        byEpic.get(s.epic.id).stories.push(s);
+      });
+      byEpic.forEach(v => host.appendChild(epicBlock(v.epic, v.stories)));
+    });
+    if (!shown) host.appendChild(el("div", "empty", "No stories match this filter."));
+  }
+
+  document.querySelectorAll("[data-group]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.group = btn.dataset.group;
+      document.querySelectorAll("[data-group]").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+      render();
+    });
+  });
+  document.querySelectorAll("[data-status]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.status = btn.dataset.status;
+      document.querySelectorAll("[data-status]").forEach(b => b.setAttribute("aria-pressed", String(b === btn)));
+      render();
+    });
+  });
+
+  renderTallies();
+  renderPhases();
+  render();
+</script>
+
+</body>
+</html>

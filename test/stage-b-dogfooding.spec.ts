@@ -5,6 +5,12 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
 import { importBacklogDogfooding } from '../src/scripts/import-backlog';
+import backlog from '../backlog.json';
+
+// Derived from backlog.json rather than hard-coded: the platform dogfoods its own backlog,
+// so adding requirements must grow the import rather than break this test.
+const EXPECTED_EPICS = backlog.epics.length;
+const EXPECTED_STORIES = backlog.epics.reduce((total, epic) => total + epic.stories.length, 0);
 
 describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
   let app: INestApplication;
@@ -22,14 +28,15 @@ describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
     await app.init();
   });
 
-  it('Stage B: ingests full 12-Epic backlog and preserves parent-child hierarchy', async () => {
+  it('Stage B: ingests the whole backlog and preserves parent-child hierarchy', async () => {
     // 1. Run Stage B Dogfooding import script
     const result = await importBacklogDogfooding(dogfoodOrgId, dogfoodTeamId);
 
-    expect(result.epicCount).toBe(12);
-    expect(result.storyCount).toBe(38);
-    expect(result.totalImported).toBe(50);
-    expect(result.linkCount).toBe(38);
+    expect(result.epicCount).toBe(EXPECTED_EPICS);
+    expect(result.storyCount).toBe(EXPECTED_STORIES);
+    expect(result.totalImported).toBe(EXPECTED_EPICS + EXPECTED_STORIES);
+    // Every story is linked to its parent epic, so links track stories exactly.
+    expect(result.linkCount).toBe(EXPECTED_STORIES);
 
     // 2. Fetch all work items for dogfoodOrgId via GET /workitems
     const res = await request(app.getHttpServer())
@@ -37,7 +44,7 @@ describe('Stage B Dogfooding — Self-Host Backlog Ingestion', () => {
       .set('x-org-id', dogfoodOrgId)
       .expect(200);
 
-    expect(res.body.length).toBe(50);
+    expect(res.body.length).toBe(EXPECTED_EPICS + EXPECTED_STORIES);
 
     // 3. Verify Epic 1 and US1.1 exist and are linked
     const epic1 = res.body.find((item: any) => item.title.includes('[E1]'));
