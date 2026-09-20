@@ -1,4 +1,4 @@
-export const VALID_WORK_ITEM_TYPES = ['epic', 'story', 'incident'] as const;
+export const VALID_WORK_ITEM_TYPES = ['epic', 'story', 'incident', 'release'] as const;
 export type WorkItemType = (typeof VALID_WORK_ITEM_TYPES)[number];
 
 export const VALID_PRIORITIES = ['P0', 'P1', 'P2', 'P3', 'P4'] as const;
@@ -11,10 +11,12 @@ export const DEFAULT_STATUS: Record<WorkItemType, string> = {
   epic: 'Proposed',
   story: 'Proposed',
   incident: 'Triaged',
+  release: 'Draft',
 };
 
 export interface WorkItem {
   id: string;
+  key: string;
   type: WorkItemType;
   title: string;
   description: string;

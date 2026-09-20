@@ -53,6 +53,17 @@ const BUILT_IN_WORKFLOWS: Record<string, WorkflowDefinition> = {
       { from: 'Post-incident Review', to: 'Closed' },
     ],
   },
+  release: {
+    type: 'release',
+    states: ['Draft', 'Ready', 'Deployed', 'Closed'],
+    initial_state: 'Draft',
+    terminal_states: ['Closed'],
+    transitions: [
+      { from: 'Draft', to: 'Ready' },
+      { from: 'Ready', to: 'Deployed' },
+      { from: 'Deployed', to: 'Closed' },
+    ],
+  },
 };
 
 export class InvalidWorkflowDefinitionError extends Error {
@@ -93,6 +104,7 @@ export interface TransitionContext {
   toState: string;
   actorId: string;
   actorRole: string;
+  actorType?: 'user' | 'system' | 'integration';
   fields?: Record<string, any>;
 }
 
@@ -340,7 +352,7 @@ export class WorkflowService {
     await this.eventBus.publish(
       'WorkItemStateChanged',
       ctx.workItemId,
-      { type: 'user', id: ctx.actorId },
+      { type: ctx.actorType || 'user', id: ctx.actorId },
       auditPayload,
     );
 

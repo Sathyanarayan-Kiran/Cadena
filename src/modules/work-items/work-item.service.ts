@@ -64,6 +64,7 @@ export class WorkItemService {
     const initialStatus = activeWorkflow?.definition?.initial_state || DEFAULT_STATUS[type];
 
     const id = randomUUID();
+    const itemKey = this.createItemKey(type, id);
     const now = new Date().toISOString();
     const priority = dto.priority || 'P2';
     const severity = dto.severity || null;
@@ -74,10 +75,11 @@ export class WorkItemService {
 
     await this.dbService.db.query(
       `INSERT INTO work_items (
-        id, type, title, description, status, workflow_version, priority, severity, owner_id, team_id, org_id, entered_state_at, custom_fields, tags, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+        id, item_key, type, title, description, status, workflow_version, priority, severity, owner_id, team_id, org_id, entered_state_at, custom_fields, tags, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
       [
         id,
+        itemKey,
         type,
         dto.title,
         description,
@@ -102,6 +104,7 @@ export class WorkItemService {
 
     const item: WorkItem = {
       id,
+      key: itemKey,
       type,
       title: dto.title,
       description,
@@ -197,6 +200,7 @@ export class WorkItemService {
 
     return {
       id: row.id,
+      key: row.item_key || this.createItemKey(row.type as WorkItemType, row.id),
       type: row.type as WorkItemType,
       title: row.title,
       description: row.description,
@@ -215,5 +219,15 @@ export class WorkItemService {
       aging_bucket: agingBucket,
       aging_score: agingScore,
     };
+  }
+
+  private createItemKey(type: WorkItemType, id: string): string {
+    const prefix: Record<WorkItemType, string> = {
+      epic: 'EPIC',
+      story: 'STORY',
+      incident: 'INC',
+      release: 'REL',
+    };
+    return `${prefix[type]}-${id.replace(/-/g, '').slice(0, 8).toUpperCase()}`;
   }
 }

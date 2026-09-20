@@ -72,6 +72,7 @@ export class DatabaseService {
 
       CREATE TABLE IF NOT EXISTS work_items (
         id UUID PRIMARY KEY,
+        item_key TEXT,
         type TEXT NOT NULL,
         title TEXT NOT NULL,
         description TEXT DEFAULT '',
@@ -108,6 +109,45 @@ export class DatabaseService {
         timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS external_artifacts (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        provider TEXT NOT NULL,
+        artifact_type TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        url TEXT,
+        status TEXT,
+        payload JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(org_id, provider, artifact_type, external_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS external_artifact_links (
+        id UUID PRIMARY KEY,
+        artifact_id UUID NOT NULL REFERENCES external_artifacts(id),
+        work_item_id UUID NOT NULL REFERENCES work_items(id),
+        link_type TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(artifact_id, work_item_id, link_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_deliveries (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        provider TEXT NOT NULL,
+        delivery_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        payload JSONB NOT NULL,
+        result JSONB,
+        error TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        processed_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE(org_id, provider, delivery_id)
+      );
+
       CREATE TABLE IF NOT EXISTS sla_policies (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),
@@ -118,6 +158,23 @@ export class DatabaseService {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(org_id, item_type, state)
       );
+    `);
+
+    // Safe migration for pilot databases created before stable work-item keys existed.
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS item_key TEXT;`);
+    await this.db.exec(`
+      UPDATE work_items
+      SET item_key = CASE
+        WHEN type = 'epic' THEN 'EPIC-'
+        WHEN type = 'incident' THEN 'INC-'
+        WHEN type = 'release' THEN 'REL-'
+        ELSE 'STORY-'
+      END || UPPER(SUBSTRING(REPLACE(id::text, '-', '') FROM 1 FOR 8))
+      WHERE item_key IS NULL;
+    `);
+    await this.db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS work_items_org_key_unique
+        ON work_items (org_id, item_key);
     `);
 
     this.initialized = true;

@@ -1,6 +1,98 @@
-# Implementation Plan — Epic 3: Aging & SLA Engine
+# Implementation Plan and Delivery Record
 
-This document outlines the architecture, technical design, database schema, event model, and execution plan for **Epic 3 — Aging & SLA Engine** (US3.1, US3.2, US3.3).
+This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
+
+## Codex Phase 1 integration update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The 2026-09-19 Codex record and the original Gemini plan remain below as prior-history sections.
+
+**Status:** Implemented and covered by automated acceptance tests for US2.3 and US6.1–US6.3.
+
+### Scope delivered by Codex
+
+#### Stable references and Release work items
+
+- Added immutable, tenant-unique human-readable keys to every work item (`EPIC-*`, `STORY-*`, `INC-*`, and `REL-*`).
+- Added `release` as a canonical work-item type with a built-in `Draft → Ready → Deployed → Closed` workflow.
+- Added Release-compatible traceability edge rules and exposed stable keys through the API and UI.
+- Added a safe startup migration that backfills keys for work items created by earlier pilot builds.
+
+#### Git and CI/CD integration gateway
+
+- Added `POST /integrations/git/webhooks` for normalized `push`, `pull_request`, and `deployment` events.
+- Added support for `x-delivery-id` and GitHub's `x-github-delivery` header, with tenant/provider/delivery uniqueness preventing duplicate side effects.
+- Added persistent external artifacts for commits, pull requests, and deployments without incorrectly modelling those provider-owned objects as canonical WorkItems.
+- Added work-item key extraction from commit messages, PR title/body/branch, deployment description, release key, and explicit deployment work-item keys.
+- Stored commits even when no work-item key is present, satisfying the unlinked-artifact path without returning an error.
+- Added tenant-scoped external-artifact links using `fixed_by` for commit/PR evidence and `deployed_in` for deployments.
+- Added `GET /workitems/:id/external-links` so delivery evidence can be queried from the work item.
+- Added `GET /integrations/git/deliveries/:deliveryId` for inspecting the status and recorded result of a delivery.
+
+#### Automatic transitions
+
+- Implemented PR-merge automation from Story `In Progress` to `In Review` through the existing workflow engine.
+- Implemented successful-deployment automation from Release `Ready` to `Deployed`.
+- Runs automation as an `integration` actor and preserves the standard guard and required-field evaluation path.
+- Records rejected automation as an `IntegrationAutoTransitionSkipped` event and returns a structured skipped result; guards are never bypassed.
+- Stores complete delivery results so duplicate deliveries return the original outcome without replaying transitions or links.
+
+#### UI changes
+
+- Added Release to creation, filtering, workflow ordering, SLA policy configuration, type badges, and detail views.
+- Switched displayed work-item references to the API's stable keys.
+- Added a tenant-scoped “Delivery evidence” section to the item drawer for linked commits, pull requests, and deployments.
+- Restricted rendered artifact links to HTTP(S) URLs and continued using DOM/text rendering for external values.
+
+#### Verification added by Codex
+
+- `test/us2.3.spec.ts`: verifies a guard-rejected external transition is skipped, logged, and leaves state unchanged.
+- `test/us6.1.spec.ts`: verifies referenced commit linking and storage of unreferenced commits.
+- `test/us6.2.spec.ts`: verifies a merged PR advances its linked Story.
+- `test/us6.3.spec.ts`: verifies deployment links, Release advancement, and delivery idempotency.
+- Updated `test/us1.1.spec.ts` for the expanded canonical type contract.
+
+### Files added by Codex in this increment
+
+- `src/modules/integrations/integration.types.ts`
+- `src/modules/integrations/integration.service.ts`
+- `src/modules/integrations/integration.controller.ts`
+- `src/modules/integrations/integration.module.ts`
+- `test/us2.3.spec.ts`
+- `test/us6.1.spec.ts`
+- `test/us6.2.spec.ts`
+- `test/us6.3.spec.ts`
+
+### Files updated by Codex in this increment
+
+- `src/app.module.ts`
+- `src/database/database.service.ts`
+- `src/modules/lineage/lineage.types.ts`
+- `src/modules/work-items/work-item.service.ts`
+- `src/modules/work-items/work-item.types.ts`
+- `src/modules/workflow/workflow.service.ts`
+- `public/index.html`
+- `test/us1.1.spec.ts`
+- `README.md`
+- `implementation_plan.md`
+
+### Deliberate boundaries
+
+- The endpoint accepts a documented normalized provider payload; provider-specific signature verification and raw GitHub/GitLab payload adapters remain production-hardening work.
+- Delivery deduplication is durable within the configured datastore, but transport retries, a transactional event outbox, Kafka, and a dead-letter queue remain Epic 5 work.
+- Deployment membership is supplied by the CI/CD callback through `work_item_keys`; automated release-manifest discovery is not yet implemented.
+- Git/CI integration is implemented; monitoring/APM ingestion and alert-driven Incident creation remain the next integration slice (Epic 7).
+
+### Verification result
+
+- `npm run build`: **PASS**
+- UI JavaScript parse check: **PASS**
+- Focused integration suite: **PASS — 5 test files, 7 tests**
+- Full regression suite: **PASS — 16 test files, 27 tests**
+- `git diff --check`: **PASS**
+- Local production startup and route registration on an alternate port: **PASS**
+- Browser screenshot/interaction QA: **not run because no browser backend was available in the current environment**
+
+---
 
 ## Codex implementation update — 2026-09-19
 

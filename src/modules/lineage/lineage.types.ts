@@ -36,4 +36,11 @@ export const ALLOWED_EDGES_BY_PAIR: Record<string, LinkType[]> = {
   'story:incident': ['parent_of', 'child_of', 'blocks', 'blocked_by', 'relates_to', 'caused_by', 'fixed_by', 'affects'],
   'incident:story': ['parent_of', 'child_of', 'blocks', 'blocked_by', 'relates_to', 'caused_by', 'fixed_by', 'affects'],
   'incident:incident': ['parent_of', 'child_of', 'blocks', 'blocked_by', 'relates_to', 'caused_by', 'duplicate_of', 'affects'],
+  'release:release': ['parent_of', 'child_of', 'blocks', 'blocked_by', 'relates_to'],
+  'release:story': ['parent_of', 'relates_to'],
+  'story:release': ['child_of', 'relates_to', 'deployed_in'],
+  'release:epic': ['child_of', 'relates_to'],
+  'epic:release': ['parent_of', 'relates_to', 'deployed_in'],
+  'release:incident': ['relates_to', 'caused_by', 'affects'],
+  'incident:release': ['relates_to', 'caused_by', 'affects'],
 };
