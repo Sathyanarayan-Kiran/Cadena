@@ -43,7 +43,7 @@ export interface ExternalArtifact {
   id: string;
   org_id: string;
   provider: string;
-  artifact_type: 'commit' | 'pull_request' | 'deployment';
+  artifact_type: 'commit' | 'pull_request' | 'deployment' | 'alert';
   external_id: string;
   title: string;
   url?: string | null;

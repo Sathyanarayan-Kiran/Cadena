@@ -148,6 +148,43 @@ export class DatabaseService {
         UNIQUE(org_id, provider, delivery_id)
       );
 
+      CREATE TABLE IF NOT EXISTS services (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        service_key TEXT NOT NULL,
+        name TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        owner_team_id UUID,
+        environment TEXT,
+        source TEXT NOT NULL DEFAULT 'internal',
+        external_ref TEXT,
+        aliases TEXT[] DEFAULT '{}',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(org_id, service_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS work_item_service_links (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        work_item_id UUID NOT NULL REFERENCES work_items(id),
+        service_id UUID NOT NULL REFERENCES services(id),
+        link_type TEXT NOT NULL DEFAULT 'affects',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(work_item_id, service_id, link_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS monitoring_settings (
+        org_id UUID PRIMARY KEY,
+        min_severity TEXT NOT NULL DEFAULT 'SEV3',
+        dedupe_window_minutes INT NOT NULL DEFAULT 60,
+        default_team_id UUID,
+        automation_actor_role TEXT NOT NULL DEFAULT 'on_call',
+        auto_register_services BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS sla_policies (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),

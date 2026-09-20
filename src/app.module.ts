@@ -6,15 +6,17 @@ import { WorkflowController } from './modules/workflow/workflow.controller';
 import { LineageController } from './modules/lineage/lineage.controller';
 import { SlaModule } from './modules/sla/sla.module';
 import { IntegrationModule } from './modules/integrations/integration.module';
+import { ServiceRegistryModule } from './modules/services/service-registry.module';
 
 @Module({
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
-      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*'],
+      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*', '/services*'],
     }),
     SlaModule,
     IntegrationModule,
+    ServiceRegistryModule,
   ],
   controllers: [WorkItemController, WorkflowController, LineageController],
   providers: [],

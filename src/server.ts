@@ -4,6 +4,8 @@ import { DatabaseService } from './database/database.service';
 import { WorkItemService } from './modules/work-items/work-item.service';
 import { WorkflowService } from './modules/workflow/workflow.service';
 import { LineageService } from './modules/lineage/lineage.service';
+import { ServiceRegistryService } from './modules/services/service-registry.service';
+import { MonitoringIntegrationService } from './modules/integrations/monitoring.service';
 import { randomUUID } from 'crypto';
 
 async function bootstrap() {
@@ -13,6 +15,8 @@ async function bootstrap() {
   const itemService = new WorkItemService();
   const workflowService = new WorkflowService();
   const lineageService = new LineageService();
+  const serviceRegistry = new ServiceRegistryService();
+  const monitoringService = new MonitoringIntegrationService();
 
   const orgId = '00000000-0000-0000-0000-000000000099';
   const teamId = '00000000-0000-0000-0000-000000000001';
@@ -39,6 +43,22 @@ async function bootstrap() {
        ON CONFLICT (org_id, item_type, state) DO NOTHING`,
       [randomUUID(), orgId, policy.type, policy.state, policy.minutes, policy.calendar],
     );
+  }
+
+  // Monitoring/APM defaults (Epic 7) so alert ingestion has an owning team before any import.
+  await monitoringService.updateSettings(orgId, {
+    min_severity: 'SEV3',
+    dedupe_window_minutes: 60,
+    default_team_id: teamId,
+    automation_actor_role: 'on_call',
+  });
+
+  const seedServices = [
+    { name: 'Checkout API', service_key: 'checkout-api', environment: 'production', aliases: ['checkout', 'checkout-api'] },
+    { name: 'Primary Postgres', service_key: 'primary-postgres', environment: 'production', aliases: ['postgres', 'db-eu-west-1'] },
+  ];
+  for (const service of seedServices) {
+    await serviceRegistry.registerService(orgId, { ...service, owner_team_id: teamId, source: 'internal' });
   }
 
   const existingItems = await itemService.listWorkItems({}, orgId);
