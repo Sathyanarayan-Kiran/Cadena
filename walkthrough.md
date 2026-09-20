@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot, Stage B backlog dogfooding, Epic 3 (aging/SLA), Epic 4 (traceability graph, now complete), Epic 6 (Git/CI), and Epic 7 (monitoring/APM) are implemented and verified.
-**Verification:** 47 automated tests across 20 test files passing.
+**Current state:** Phase 0 pilot, Stage B backlog dogfooding, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 6 (Git/CI), Epic 7 (monitoring/APM), and Epic 8 (notification & escalation) are implemented and verified.
+**Verification:** 59 automated tests across 23 test files passing.
 
 ---
 
@@ -16,6 +16,44 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-20 — Epic 8: Notification & escalation service
+
+Until now the aging engine emitted `SLAWarning` and `SLABreached` and **nothing listened** — there were no event-bus subscribers anywhere in the codebase. Epic 8 makes those events reach people.
+
+**Added**
+
+- `src/modules/notifications/` — `NotificationService` subscribes to `SLAWarning`, `SLABreached` and the new `SLAEscalated`, resolving recipients and dispatching per person.
+- `notification_preferences`, `notification_settings`, `team_escalation_targets`, `notifications` tables. The last is both the delivery audit log and the idempotency key: a unique constraint on `(event_id, recipient_id)` means a replayed event notifies nobody twice.
+- `SLAEscalated` emission in the aging engine at a configurable threshold (default 150%), plus an `escalated_at` marker on the work item.
+- `GET /notifications`, `GET|POST /notifications/settings`, `GET|POST /notifications/preferences`, `POST /notifications/escalation-targets/:teamId`.
+- `test/us8.1.spec.ts`, `test/us8.2.spec.ts`, `test/us8.3.spec.ts` — 12 acceptance tests.
+- UI: a **Notifications** nav view showing the delivery log with routing and failure reasons, an **Escalated** option in the SLA health filter, and an Escalated badge on cards.
+- Pilot seed now creates three people with notification preferences, so the flow is demonstrable out of the box.
+
+**Routing rules**
+
+| Event | Recipients |
+| --- | --- |
+| `SLAWarning` (75%) | owner |
+| `SLABreached` (>100%) | owner + team lead |
+| `SLAEscalated` (>=150%) | configured escalation target, falling back to an `on_call` then `team_lead` member of the team; owner stays on the thread so an escalation is never silent |
+
+**Design notes**
+
+- Channel adapters are pilot stubs — Spec §18.3 keeps external transports out of the pilot, so nothing is actually sent and the `notifications` table *is* the delivery record. Swapping in SES/Slack/Graph means replacing one `transmit` method; routing, fallback and audit are transport-independent.
+- Two real failure modes drive the US8.3 email fallback: a person who chose a channel they have no address for, and a tenant-level `unavailable_channels` setting that simulates a transport outage.
+- A notification failure can never break the aging tick that emitted it — the subscriber catches and logs.
+
+**Verified live** on the seeded tenant, with Slack marked unavailable:
+
+```
+SLAWarning     owner              slack  -> email  [fallback_sent]
+SLABreached    owner              slack  -> email  [fallback_sent]
+SLABreached    team_lead          email  -> email  [sent]
+SLAEscalated   escalation_target  teams  -> teams  [sent]
+SLAEscalated   owner              slack  -> email  [fallback_sent]
+```
 
 ### 2026-09-20 — US4.3: Service impact analysis (Epic 4 complete)
 
@@ -139,17 +177,28 @@ Pick `SVC-CHECKOUT-API`, set depth to 3–4, and the view lists every implicated
 
 **Pilot actions → Import 12-epic backlog** creates 12 epics, 38 stories and 38 parent-child relationships. Filter by **Epics**, open any story, and **Trace lineage → Upstream** walks the `child_of` edge to its parent epic.
 
-### 5. Watch SLA aging bite
+### 5. Watch SLA aging bite, and see who gets told
 
-SLA badges read green on a fresh boot because nothing has aged. Open **SLA policies**, set `incident` / `Triaged` to a 1-minute threshold, save (it auto-recomputes), wait a minute, then **Pilot actions → Recompute SLA aging**. Cards flip amber then red, and the KPI and attention bar follow.
+Open **SLA policies**, set `story` / `In Review` to a 1-minute threshold and save. Create a story owned by Ada Owner, move it to In Review, then wait and use **Pilot actions → Recompute SLA aging**. Cards flip amber then red then pick up an Escalated badge past 150%.
+
+Open **Notifications** to see the resulting delivery log. To watch the US8.3 fallback, mark Slack unavailable first — Ada prefers Slack, so her notifications will route `slack -> email` and say why:
+
+```bash
+curl -X POST http://localhost:3000/notifications/settings \
+  -H "x-org-id: 00000000-0000-0000-0000-000000000099" \
+  -H "Content-Type: application/json" \
+  -d '{"unavailable_channels":["slack"]}'
+```
+
+Note that SLA badges read green on a fresh boot because nothing has aged yet, so the tight threshold is what makes this visible quickly.
 
 ---
 
 ## Verification status
 
 ```
- Test Files  20 passed (20)
-      Tests  47 passed (47)
+ Test Files  23 passed (23)
+      Tests  59 passed (59)
 ```
 
 | Area | Tests |
@@ -159,6 +208,7 @@ SLA badges read green on a fresh boot because nothing has aged. Open **SLA polic
 | Aging & SLA across both calendars | `us3.1`, `us3.2`, `us3.3` |
 | Typed links, lineage, **service impact** | `us4.1`, `us4.2`, **`us4.3`** |
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
+| **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
 | RBAC, backlog dogfooding | `us10.3`, `stage-b-dogfooding` |
 
@@ -171,8 +221,8 @@ SLA badges read green on a fresh boot because nothing has aged. Open **SLA polic
 Named plainly so nobody mistakes the pilot for a product:
 
 - **Epic 5** — no durable event bus. `InProcessEventBus` has the right envelope but no outbox, no Kafka, no dead-letter queue.
-- **Epic 8** — events are emitted and dropped. Nothing routes `SLAWarning`, `SLABreached` or `IncidentAutoCreated` to email, Slack or Teams.
+- **Epic 8 transports** — routing, fallback and the delivery log are real, but no message actually leaves the process. The channel adapters are stubs awaiting SES/SendGrid, the Slack Web API and Microsoft Graph. `IncidentAutoCreated` is also not yet routed; only the three SLA events are.
 - **US10.3 hardening** — no real authentication. Tenant and actor role arrive in headers.
 - **Epic 11** — no CMDB federation. Alert-discovered Services are lightweight stubs flagged `monitoring_discovery`.
 - **Webhook signature verification** — both gateways trust the normalized body. See README *Production Boundaries*.
-- **Epic 9** — no analytics materialized views or executive dashboards.
+- **Epic 9** — no analytics materialized views or executive dashboards. Escalated items are queryable via `escalated_at` and the Escalated filter, but the executive aging dashboard named in US8.2 is not built.

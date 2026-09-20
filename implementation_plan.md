@@ -2,6 +2,117 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex Epic 8 notification update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20 as the Epic 8 slice. The earlier Codex records and the original Gemini plan remain below as prior-history sections.
+
+**Status:** Implemented and covered by automated acceptance tests for US8.1, US8.2, and US8.3.
+
+### Why this slice was chosen next
+
+A grep for `.subscribe(` across `src/` and `test/` returned nothing. The aging engine had been publishing `SLAWarning` and `SLABreached` since Epic 3 with fully-formed recipient payloads, and no consumer existed — the events were emitted and dropped. Epic 8 makes the platform's own governance signal actually reach a person, which is the difference between measuring aging and managing it.
+
+### Scope delivered by Codex
+
+#### Event consumption
+
+- Added `NotificationService`, the platform's first event-bus subscriber, listening on `SLAWarning`, `SLABreached`, and the new `SLAEscalated`.
+- Subscription is guarded by a `WeakSet` keyed on the bus instance so a second application instance, as the test suite creates, cannot double-subscribe.
+- A dispatch failure is caught and logged rather than propagated, so a notification problem can never break the aging tick that emitted the event.
+
+#### Routing (US8.1, US8.2)
+
+- `SLAWarning` notifies the owner; `SLABreached` notifies the owner and the team lead; `SLAEscalated` notifies the configured escalation target.
+- Escalation target resolution falls back in order: the team's configured `escalation_person_id`, then a team member holding `on_call`, then one holding `team_lead`.
+- The owner is kept on an escalation thread so an escalation with no configured target is never silent.
+- Added `SLAEscalated` emission to the aging engine at a per-tenant threshold, default 150%, deduplicated per state entry exactly as the existing warning and breach emissions are.
+- Added an `escalated_at` marker on the work item, so escalated work is queryable ahead of the Epic 9 executive dashboard.
+
+#### Channels and fallback (US8.3)
+
+- Added per-person channel preference across `email`, `slack`, and `teams`, defaulting to email for anyone who has not chosen.
+- A failed delivery falls back to email, and both attempts are recorded on the notification with per-attempt reasons.
+- Status is `sent` when the preferred channel worked, `fallback_sent` when email rescued it, and `failed` when neither did.
+- Two genuine failure modes drive the fallback: a person who selected a channel they have no address for, and a tenant-level `unavailable_channels` setting that simulates a transport outage.
+
+#### Persistence and idempotency
+
+- Added `notification_preferences`, `notification_settings`, `team_escalation_targets`, and `notifications` tables, all tenant-scoped.
+- The `notifications` table is both the delivery audit log and the idempotency key: a unique constraint on `(event_id, recipient_id)` means a replayed event notifies nobody twice, so the 60-second aging tick cannot spam a recipient.
+
+#### API
+
+- `GET /notifications` with `recipient_id`, `work_item_id`, `event_type`, and `limit` filters.
+- `GET`/`POST /notifications/settings`, `GET`/`POST /notifications/preferences`, and `POST /notifications/escalation-targets/:teamId`, each validating input and returning an actionable 422.
+
+#### UI changes
+
+- Added a **Notifications** nav view rendering the delivery log with recipient role, routing (including `slack -> email (fallback)`), status, and failure reason.
+- Added an **Escalated** option to the SLA health filter and an Escalated badge on work cards.
+- Exposed `escalated_at` through the work-item API so the workspace can filter and badge on it.
+
+#### Pilot seeding
+
+- Seeded three people with distinct roles and notification preferences (Slack, email, Teams) plus a team escalation target, so the whole routing path is demonstrable on a fresh boot.
+
+### Design decisions
+
+- **Channel adapters are stubs, and the delivery log is the delivery record.** Spec §18.3 keeps external transports out of the pilot. The adapter contract isolates transport from routing, so swapping in SES/SendGrid, the Slack Web API, or Microsoft Graph means replacing one `transmit` method while routing, fallback, idempotency, and audit stay as tested.
+- **`unavailable_channels` is explicit pilot tooling.** Testing the US8.3 fallback needs a delivery failure that is not merely a configuration gap. Naming it plainly in the schema and README is more honest than hiding a test hook inside an adapter.
+- **Escalation notifies, it does not act.** It routes to a person and flags the item; it never transitions work. That stays consistent with the guard discipline established in US2.3 and US7.3.
+- **The controller instantiates its service directly.** Vitest's esbuild transform does not emit decorator metadata, so Nest cannot inject by type under test. Every other controller in this codebase already works this way; matching it keeps the suite green without a bespoke test harness. The module still registers the service as a provider, which is what triggers the subscription lifecycle hook.
+
+### Verification added by Codex
+
+- `test/us8.1.spec.ts` (3 tests): owner notified on their chosen channel at 75%, dispatch inside the emitting tick, no double notification across three consecutive recomputes, nothing recorded for an unowned item, and tenant isolation on the log.
+- `test/us8.2.spec.ts` (4 tests): owner and team lead both notified on breach with nothing escalated below threshold, escalation to the configured manager at 150% with `escalated_at` set, fallback to an `on_call` member when no target is configured, and validation of the threshold and target.
+- `test/us8.3.spec.ts` (5 tests): delivery on the chosen channel for Slack and Teams, email fallback for a missing address, email fallback for an unavailable channel, a recorded failure when the fallback is also unavailable, and default-to-email plus unknown-channel rejection.
+
+### Files added by Codex in this increment
+
+- `src/modules/notifications/notification.types.ts`
+- `src/modules/notifications/notification-channels.ts`
+- `src/modules/notifications/notification.service.ts`
+- `src/modules/notifications/notification.controller.ts`
+- `src/modules/notifications/notification.module.ts`
+- `test/us8.1.spec.ts`
+- `test/us8.2.spec.ts`
+- `test/us8.3.spec.ts`
+
+### Files updated by Codex in this increment
+
+- `src/app.module.ts`
+- `src/database/database.service.ts`
+- `src/modules/sla/aging-engine.service.ts`
+- `src/modules/work-items/work-item.service.ts`
+- `src/modules/work-items/work-item.types.ts`
+- `src/server.ts`
+- `public/index.html`
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Deliberate boundaries
+
+- **No message leaves the process.** The adapters record and return success; there is no SMTP, Slack, or Graph call.
+- Only the three SLA events are routed. `IncidentAutoCreated`, `SLAWarning` for incidents specifically, and the Epic 6/7 integration events are not yet subscribed.
+- Delivery is synchronous inside the aging tick. A slow real transport would stretch that tick; production wants a queue between emission and delivery, which is Epic 5 work.
+- There is no digest, quiet-hours, or rate-limiting behaviour; one qualifying event produces one notification per recipient.
+- Escalation surfaces through `escalated_at` and a UI filter. The executive aging dashboard named in US8.2's second criterion is Epic 9 and is not built.
+- No `POST /people` endpoint exists, so recipients are seeded or created through `RbacService`. Identity management remains US10.3 hardening work.
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused Epic 8 suite (`test/us8.1`, `us8.2`, `us8.3`): **PASS — 3 test files, 12 tests**
+- Full regression suite: **PASS — 23 test files, 59 tests**
+- UI JavaScript parse check: **PASS**
+- `git diff --check`: **PASS**
+- Live end-to-end on the seeded tenant with Slack marked unavailable: warning to owner, breach to owner and team lead, escalation to the configured on-call target, every Slack-preferring recipient falling back to email with the reason recorded: **PASS**
+- Browser screenshot/interaction QA: **not run because no browser backend was available in the current environment**
+
+---
+
 ## Codex US4.3 impact analysis update — 2026-09-20
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20 as the US4.3 slice, completing Epic 4. The earlier Codex records and the original Gemini plan remain below as prior-history sections.

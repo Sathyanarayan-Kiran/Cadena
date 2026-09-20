@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's core thesis: **one canonical work-item model** and **one state-machine engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them.
 
-> **Current status (Codex update, 2026-09-20):** Phase 0, the Epic 3 aging/SLA engine, Stage B backlog dogfooding, the complete Epic 4 traceability graph including US4.3 service impact analysis, and the Phase 1 integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. See `implementation_plan.md` for the clearly attributed Codex delivery records.
+> **Current status (Codex update, 2026-09-20):** Phase 0, the Epic 3 aging/SLA engine, Stage B backlog dogfooding, the complete Epic 4 traceability graph including US4.3 service impact analysis, the Epic 8 notification and escalation service, and the Phase 1 integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. See `implementation_plan.md` for the clearly attributed Codex delivery records.
 
 ---
 
@@ -18,8 +18,9 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
-- **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, and monitoring evidence on Incidents.
-- **Testing**: Vitest + NestJS Testing + Supertest running 47 automated tests across 20 test files.
+- **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
+- **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
+- **Testing**: Vitest + NestJS Testing + Supertest running 59 automated tests across 23 test files.
 
 ---
 
@@ -27,7 +28,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 
 ### 1. Run Automated Test Suite (Single Command)
 
-To run the complete test suite covering Epics 1, 2, 3, 4, 6, 7, and 10 plus Stage B dogfooding:
+To run the complete test suite covering Epics 1, 2, 3, 4, 6, 7, 8, and 10 plus Stage B dogfooding:
 
 ```bash
 npm test
@@ -53,11 +54,14 @@ Expected output:
  ✓ test/us7.1.spec.ts (7 tests)
  ✓ test/us7.2.spec.ts (3 tests)
  ✓ test/us7.3.spec.ts (4 tests)
+ ✓ test/us8.1.spec.ts (3 tests)
+ ✓ test/us8.2.spec.ts (4 tests)
+ ✓ test/us8.3.spec.ts (5 tests)
  ✓ test/us10.3.spec.ts (1 test)
  ✓ test/stage-b-dogfooding.spec.ts (1 test)
 
- Test Files  20 passed (20)
-      Tests  47 passed (47)
+ Test Files  23 passed (23)
+      Tests  59 passed (59)
 ```
 
 ### 2. Run Development Server
@@ -256,6 +260,68 @@ POST /services/:id/work-items
 
 ---
 
+## Notification & Escalation (Epic 8)
+
+The aging engine has always published `SLAWarning` and `SLABreached`. Until Epic 8 nothing subscribed to them, so they went nowhere. The notification service is the platform's first event-bus consumer.
+
+### Routing
+
+| Event | Fires at | Recipients |
+| --- | --- | --- |
+| `SLAWarning` | 75% of threshold | owner |
+| `SLABreached` | over 100% | owner + team lead |
+| `SLAEscalated` | tenant threshold, default 150% | configured escalation target, plus the owner |
+
+The escalation target resolves in order: the team's configured `escalation_person_id`, then a team member with the `on_call` role, then one with `team_lead`. The owner stays on an escalation thread so it is never silent.
+
+### Channels and fallback (US8.3)
+
+Each person picks a channel; delivery that fails falls back to email, and both attempts are recorded.
+
+```http
+POST /notifications/preferences
+x-org-id: 00000000-0000-0000-0000-000000000099
+
+{ "person_id": "...", "channel": "slack", "address": "@ada" }
+```
+
+```json
+{
+  "event_type": "SLABreached",
+  "recipient_role": "owner",
+  "requested_channel": "slack",
+  "channel": "email",
+  "status": "fallback_sent",
+  "attempts": [
+    { "channel": "slack", "delivered": false, "error": "no slack address is configured for this recipient" },
+    { "channel": "email", "delivered": true }
+  ]
+}
+```
+
+Status is `sent` on the preferred channel, `fallback_sent` when email rescued it, and `failed` when neither worked.
+
+### Tenant configuration
+
+```http
+POST /notifications/settings
+{ "escalation_threshold_percent": 150, "unavailable_channels": [] }
+```
+
+`escalation_threshold_percent` must exceed 100, because escalation happens after a breach. `unavailable_channels` is **pilot-only**: it simulates a transport outage so the fallback path can be demonstrated without a real provider.
+
+### Delivery log
+
+`GET /notifications` returns the tenant's delivery log, filterable by `recipient_id`, `work_item_id` and `event_type`. It doubles as the idempotency record — a unique constraint on `(event_id, recipient_id)` means a replayed event notifies nobody twice, so the 60-second aging tick cannot spam.
+
+Work items past the escalation threshold carry `escalated_at`, surfaced in the UI as an **Escalated** badge and filter.
+
+### Production boundary
+
+The channel adapters are stubs: **nothing actually leaves the process**, and the `notifications` table is the delivery record. Spec §18.3 keeps external transports out of the pilot. Swapping in SES/SendGrid, the Slack Web API and Microsoft Graph means replacing one `transmit` method per adapter — routing, fallback, idempotency and audit are transport-independent and already tested.
+
+---
+
 ## Production Boundaries
 
 The pilot is deliberately explicit about what is not production-ready:
@@ -267,19 +333,20 @@ The pilot is deliberately explicit about what is not production-ready:
    - per-provider adapters translating raw provider payloads into the normalized contract above.
 2. **Integration identity is not authenticated.** Tenant identity arrives in a header rather than from an authenticated integration credential, and `automation_actor_role` grants a workflow role by configuration rather than by binding to a real RBAC principal. Guards still evaluate that role — it is not a bypass — but the binding is US10.3 hardening work.
 3. **Delivery durability stops at the datastore.** Deduplication and recorded results are durable, but transport retries, a transactional outbox, Kafka, and a dead-letter queue remain Epic 5 work.
-4. **The Service registry is not a CMDB.** Auto-registered entries are lightweight stubs flagged `monitoring_discovery`. Live federation, staleness flagging, and authoritative ownership are Epic 11 (US11.1, US11.2).
+4. **No notification actually leaves the process.** Channel adapters are stubs; the `notifications` table is the delivery record. Routing, fallback and idempotency are real and tested, but SES/SendGrid, the Slack Web API and Microsoft Graph are not wired in.
+5. **The Service registry is not a CMDB.** Auto-registered entries are lightweight stubs flagged `monitoring_discovery`. Live federation, staleness flagging, and authoritative ownership are Epic 11 (US11.1, US11.2).
 
 ---
 
 ## Remaining Phase 1 Work (Spec §18.5)
 
-The aging engine, team workspace, workflow automation, traceability graph, Git/CI integration, and monitoring/APM integration are implemented. The remaining Phase 1 work is:
+The aging engine, team workspace, workflow automation, traceability graph, Git/CI integration, monitoring/APM integration, and notification routing are implemented. The remaining Phase 1 work is:
 
 1. **Production Event Bus (Epic 5)**:
    - Replace `InProcessEventBus` with Kafka / AWS MSK using a transactional outbox pattern in Postgres to guarantee at-least-once event delivery.
 
-2. **Notification & Escalation Service (Epic 8)**:
-   - Route the SLA warning/breach and incident events the platform already emits to email, Slack, and Teams with per-user channel preferences.
+2. **Real Notification Transports (Epic 8 hardening)**:
+   - Replace the pilot channel adapters with SES/SendGrid, the Slack Web API, and Microsoft Graph. Routing, fallback, and the delivery log already work and are transport-independent.
 
 3. **CMDB Federation (Epic 11)**:
    - Replace pilot-discovered Service stubs with a federated read from the authoritative CMDB, including staleness flagging and owning-team resolution.
@@ -333,5 +400,17 @@ The aging engine, team workspace, workflow automation, traceability graph, Git/C
 | **US7.3** | Records the proposal as skipped when the automation role fails the guard | `test/us7.3.spec.ts` | **PASS** |
 | **US7.3** | Records a resolution with no linked Incident as evidence only | `test/us7.3.spec.ts` | **PASS** |
 | **US7.3** | Exposes queryable alert evidence from the Incident | `test/us7.3.spec.ts` | **PASS** |
+| **US8.1** | Notifies the owner on their preferred channel when an item crosses 75% | `test/us8.1.spec.ts` | **PASS** |
+| **US8.1** | Never notifies the same recipient twice for one event | `test/us8.1.spec.ts` | **PASS** |
+| **US8.1** | Records nothing for an unowned item and keeps the log tenant-scoped | `test/us8.1.spec.ts` | **PASS** |
+| **US8.2** | Notifies both the owner and the team lead on breach | `test/us8.2.spec.ts` | **PASS** |
+| **US8.2** | Escalates to the configured manager at 150% and flags the item escalated | `test/us8.2.spec.ts` | **PASS** |
+| **US8.2** | Falls back to an on-call team member when no escalation target is set | `test/us8.2.spec.ts` | **PASS** |
+| **US8.2** | Validates the escalation threshold and rejects an unknown target | `test/us8.2.spec.ts` | **PASS** |
+| **US8.3** | Delivers on the channel the user chose | `test/us8.3.spec.ts` | **PASS** |
+| **US8.3** | Falls back to email when the preferred channel has no address | `test/us8.3.spec.ts` | **PASS** |
+| **US8.3** | Falls back to email when the preferred channel is unavailable | `test/us8.3.spec.ts` | **PASS** |
+| **US8.3** | Records a failure when the fallback channel is also unavailable | `test/us8.3.spec.ts` | **PASS** |
+| **US8.3** | Defaults to email and rejects an unknown channel | `test/us8.3.spec.ts` | **PASS** |
 | **US10.3** | Enforces RBAC role permissions on workflow state transitions | `test/us10.3.spec.ts` | **PASS** |
 | **Stage B** | Imports 12 true Epic items, 38 Stories, and their hierarchy | `test/stage-b-dogfooding.spec.ts` | **PASS** |

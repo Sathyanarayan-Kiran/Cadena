@@ -6,6 +6,7 @@ import { WorkflowService } from './modules/workflow/workflow.service';
 import { LineageService } from './modules/lineage/lineage.service';
 import { ServiceRegistryService } from './modules/services/service-registry.service';
 import { MonitoringIntegrationService } from './modules/integrations/monitoring.service';
+import { NotificationService } from './modules/notifications/notification.service';
 import { randomUUID } from 'crypto';
 
 async function bootstrap() {
@@ -17,6 +18,7 @@ async function bootstrap() {
   const lineageService = new LineageService();
   const serviceRegistry = new ServiceRegistryService();
   const monitoringService = new MonitoringIntegrationService();
+  const notificationService = new NotificationService();
 
   const orgId = '00000000-0000-0000-0000-000000000099';
   const teamId = '00000000-0000-0000-0000-000000000001';
@@ -44,6 +46,27 @@ async function bootstrap() {
       [randomUUID(), orgId, policy.type, policy.state, policy.minutes, policy.calendar],
     );
   }
+
+  // Pilot people, so Epic 8 notifications have somewhere to route. Roles mirror the
+  // options in the workspace role selector.
+  const seedPeople = [
+    { id: '00000000-0000-0000-0000-00000000a001', name: 'Ada Owner', email: 'ada@cadena.test', role: 'developer', channel: 'slack', address: '@ada' },
+    { id: '00000000-0000-0000-0000-00000000a002', name: 'Lena Lead', email: 'lena@cadena.test', role: 'team_lead', channel: 'email', address: null },
+    { id: '00000000-0000-0000-0000-00000000a003', name: 'Otto Oncall', email: 'otto@cadena.test', role: 'on_call', channel: 'teams', address: 'otto@teams' },
+  ];
+  for (const person of seedPeople) {
+    await db.query(
+      `INSERT INTO people (id, org_id, team_id, name, email, role)
+       VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
+      [person.id, orgId, teamId, person.name, person.email, person.role],
+    );
+    await notificationService.setPreference(orgId, {
+      person_id: person.id,
+      channel: person.channel,
+      address: person.address,
+    });
+  }
+  await notificationService.setTeamEscalationTarget(orgId, teamId, seedPeople[2].id);
 
   // Monitoring/APM defaults (Epic 7) so alert ingestion has an owning team before any import.
   await monitoringService.updateSettings(orgId, {

@@ -17,6 +17,7 @@ export interface RecomputeSummary {
   updatedCount: number;
   warningCount: number;
   breachCount: number;
+  escalationCount: number;
 }
 
 @Injectable()
@@ -28,6 +29,7 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
   // Cache to track emitted events per work_item state entry to avoid duplicate event spamming
   private emittedWarnings: Set<string> = new Set();
   private emittedBreaches: Set<string> = new Set();
+  private emittedEscalations: Set<string> = new Set();
 
   constructor(private readonly slaCalculator: SlaCalculatorService) {
     this.dbService = DatabaseService.getInstance();
@@ -81,6 +83,19 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
     let updatedCount = 0;
     let warningCount = 0;
     let breachCount = 0;
+    let escalationCount = 0;
+
+    // US8.2: escalation fires past a configurable multiple of the threshold, default 150%.
+    const escalationThresholds = new Map<string, number>();
+    const settingsRes = await this.dbService.db.query<any>(
+      orgId
+        ? `SELECT org_id, escalation_threshold_percent FROM notification_settings WHERE org_id = $1;`
+        : `SELECT org_id, escalation_threshold_percent FROM notification_settings;`,
+      orgId ? [orgId] : [],
+    );
+    for (const row of settingsRes.rows || []) {
+      escalationThresholds.set(row.org_id, Number(row.escalation_threshold_percent));
+    }
 
     for (const item of items) {
       processedCount++;
@@ -164,6 +179,35 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
+      const escalationPercent = escalationThresholds.get(item.org_id) ?? 150;
+      if (policy && newScore >= escalationPercent && !this.emittedEscalations.has(stateEntryKey)) {
+        this.emittedEscalations.add(stateEntryKey);
+        escalationCount++;
+
+        const escalationTargetRes = await this.dbService.db.query<{ escalation_person_id: string | null }>(
+          `SELECT escalation_person_id FROM team_escalation_targets WHERE team_id = $1 AND org_id = $2;`,
+          [item.team_id, item.org_id],
+        );
+
+        await this.eventBus.publish(
+          'SLAEscalated',
+          item.id,
+          { type: 'system', id: 'aging-engine' },
+          {
+            work_item_id: item.id,
+            type: item.type,
+            status: item.status,
+            aging_score: newScore,
+            escalation_threshold_percent: escalationPercent,
+            threshold_minutes: policy.threshold_minutes,
+            owner_id: item.owner_id,
+            team_id: item.team_id,
+            org_id: item.org_id,
+            escalation_person_id: escalationTargetRes.rows?.[0]?.escalation_person_id || null,
+          },
+        );
+      }
+
       if (item.aging_bucket !== newBucket || Number(item.aging_score) !== newScore) {
         await this.dbService.db.query(
           `UPDATE work_items SET aging_bucket = $1, aging_score = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3;`,
@@ -178,6 +222,7 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
       updatedCount,
       warningCount,
       breachCount,
+      escalationCount,
     };
   }
 

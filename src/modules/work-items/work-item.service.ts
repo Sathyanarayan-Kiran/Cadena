@@ -122,6 +122,7 @@ export class WorkItemService {
       updated_at: now,
       aging_bucket: 'green',
       aging_score: 0,
+      escalated_at: null,
     };
 
     await this.eventBus.publish('WorkItemCreated', id, { type: 'user', id: actorId }, { work_item: item });
@@ -218,6 +219,9 @@ export class WorkItemService {
       updated_at: typeof row.updated_at === 'string' ? row.updated_at : new Date(row.updated_at).toISOString(),
       aging_bucket: agingBucket,
       aging_score: agingScore,
+      escalated_at: row.escalated_at
+        ? (typeof row.escalated_at === 'string' ? row.escalated_at : new Date(row.escalated_at).toISOString())
+        : null,
     };
   }
 

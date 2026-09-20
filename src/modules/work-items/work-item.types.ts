@@ -34,6 +34,8 @@ export interface WorkItem {
   updated_at: string;
   aging_bucket: 'green' | 'amber' | 'red';
   aging_score: number;
+  /** Set by the Epic 8 escalation path once an item passes the tenant escalation threshold. */
+  escalated_at?: string | null;
 }
 
 export interface CreateWorkItemDto {

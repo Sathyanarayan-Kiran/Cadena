@@ -185,6 +185,52 @@ export class DatabaseService {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS notification_preferences (
+        person_id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        channel TEXT NOT NULL DEFAULT 'email',
+        address TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS notification_settings (
+        org_id UUID PRIMARY KEY,
+        escalation_threshold_percent INT NOT NULL DEFAULT 150,
+        unavailable_channels TEXT[] NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS team_escalation_targets (
+        team_id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        escalation_person_id UUID,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS notifications (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        event_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        work_item_id UUID NOT NULL,
+        work_item_key TEXT,
+        recipient_id UUID NOT NULL,
+        recipient_role TEXT NOT NULL,
+        requested_channel TEXT NOT NULL,
+        channel TEXT NOT NULL,
+        status TEXT NOT NULL,
+        subject TEXT NOT NULL,
+        body TEXT NOT NULL,
+        attempts JSONB NOT NULL DEFAULT '[]',
+        error TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        delivered_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE(event_id, recipient_id)
+      );
+
       CREATE TABLE IF NOT EXISTS sla_policies (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),
@@ -199,6 +245,7 @@ export class DatabaseService {
 
     // Safe migration for pilot databases created before stable work-item keys existed.
     await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS item_key TEXT;`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`
       UPDATE work_items
       SET item_key = CASE
