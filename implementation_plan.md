@@ -2,6 +2,73 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex datastore persistence update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections.
+
+**Status:** Implemented and covered by `test/persistence.spec.ts`, and verified by restarting the server rather than by unit test alone.
+
+### Why this came next
+
+PGlite was constructed without a data directory, so the database lived in memory and every restart began from the seed. That collided with the flow metrics delivered earlier the same day: a 30-day DORA window cannot show a trend on a datastore that dies with the process, so deployment frequency, lead time and change failure rate were structurally incapable of measuring anything beyond a single session. The measurement layer had been built on ground that reset nightly.
+
+It also unblocks two things previously recorded as blocked: demonstrations that survive a restart, and any future attempt at genuine dogfooding, which was explicitly blocked on the backlog evaporating between sessions.
+
+### Scope delivered by Codex
+
+- Added `CADENA_DATA_DIR`, which selects the PGlite directory. `npm run dev` and `npm start` set it to `./data` via `cross-env`; `npm run dev:ephemeral` preserves the previous throwaway behaviour.
+- Added `DatabaseService.createIsolated(dir)` for opening a directory outside the process singleton, plus `close()` and `isPersistent()`, and a public `dataDir`.
+- The server prints its storage mode at boot, so which mode is active is never ambiguous.
+- Added `npm run db:reset` and gitignored `data/`.
+
+### Design decisions
+
+- **In-memory remains the default.** Persistence is opted into through the environment rather than assumed in code. The alternative — defaulting to durable and having each test runner opt out — fails dangerously: a forgotten opt-out silently shares a database across twenty-six spec files. Defaulting to ephemeral fails safely, because the worst outcome is a lost throwaway.
+- **The browser suite forces ephemeral explicitly.** It spawns the built server with `CADENA_DATA_DIR: ''` rather than inheriting the parent environment, because it seeds its own scenario and must begin from the seed on every run. Inheriting a developer's exported data directory would have made it pass or fail depending on whose machine ran it.
+- **`cross-env` was added rather than inlining `VAR=value` in the npm script.** POSIX-style environment prefixes do not work when npm runs scripts through `cmd.exe`, which is the situation on this machine.
+- **Migration safety was already present and is now relied upon.** Schema creation uses `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` throughout, so reopening an existing directory with a newer build migrates rather than resets. Demo seeding is guarded on an empty tenant, and every supporting insert is an upsert, so a restart does not duplicate the seed.
+
+### Verification added by Codex
+
+- `test/persistence.spec.ts` (5 tests): the in-memory default, work items surviving a close and reopen, additive re-initialisation over a populated directory without loss or duplication, retained `domain_events` history, and isolation between two separate directories.
+- End-to-end restart, performed against the built server rather than asserted in isolation: created `STORY-7893449E` on the first boot with five items present; killed the process; reopened the same directory and found five items with that story intact, two services rather than four, and no re-seed in the log.
+- The full suite was then run with `./data` deleted, confirming it creates no directory: 26 files, 76 tests, no `./data` afterwards.
+- The browser smoke suite passes unchanged with the forced-ephemeral spawn.
+
+### Files added by Codex in this increment
+
+- `test/persistence.spec.ts`
+
+### Files updated by Codex in this increment
+
+- `src/database/database.service.ts`
+- `src/server.ts`
+- `test/ui-smoke.spec.ts`
+- `package.json`
+- `.gitignore`
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Deliberate boundaries
+
+- This is a single-process embedded datastore, durable but not managed. No replication, no point-in-time recovery, no concurrent access from a second process, and backup means copying the directory while the server is stopped.
+- There is no migration framework and no schema version table. Additive DDL covers the changes made so far; a destructive change — renaming a column, tightening a constraint — has no supported path and would need one.
+- Seed events are not captured in `domain_events`, because bootstrap seeding runs before the Nest application starts and therefore before the event store subscribes. Fixture creation is arguably not history, but the asymmetry is worth knowing when reading early event counts.
+- Nothing prunes the data directory. A long-running instance accumulates `domain_events` rows indefinitely, and retention is unaddressed.
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused suite (`test/persistence.spec.ts`): **PASS — 5 tests**
+- Full regression suite: **PASS — 26 test files, 76 tests**
+- Browser smoke suite: **PASS — 7 tests**
+- Restart durability against the built server: **PASS**
+- Test suite creates no data directory: **PASS**
+- `git diff --check`: **PASS**
+
+---
+
 ## Codex US9.4 flow metrics update — 2026-09-20
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections, with their original wording preserved even where terminology has since changed.

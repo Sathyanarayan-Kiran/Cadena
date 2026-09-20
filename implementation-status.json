@@ -174,7 +174,7 @@
       "name": "Schema-registered domain events",
       "status": "partial",
       "phase": 3,
-      "note": "Every published event is now persisted to <code>domain_events</code> and queryable at <code>GET /events</code>, and the schema change that added <code>org_id</code> to <code>WorkItemStateChanged</code> was additive. Still partial: the write happens just after the mutation rather than inside its transaction, so the outbox guarantee is not yet met."
+      "note": "Every published event is persisted to <code>domain_events</code>, now on a datastore that survives a restart, and queryable at <code>GET /events</code>. The schema change that added <code>org_id</code> to <code>WorkItemStateChanged</code> was additive. Still partial: the write happens just after the mutation rather than inside its transaction, so the outbox guarantee is not yet met."
     },
     "US5.2": {
       "name": "Idempotent event processing",

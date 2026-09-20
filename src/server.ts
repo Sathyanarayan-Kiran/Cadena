@@ -10,7 +10,13 @@ import { NotificationService } from './modules/notifications/notification.servic
 import { randomUUID } from 'crypto';
 
 async function bootstrap() {
-  await DatabaseService.getInstance().initialize();
+  const database = DatabaseService.getInstance();
+  await database.initialize();
+  console.log(
+    database.isPersistent()
+      ? `💾 Datastore persisting to ${database.dataDir}`
+      : '⚠️  Datastore is in-memory; all data is discarded on exit. Set CADENA_DATA_DIR to persist.',
+  );
 
   // Seed demo data if database is empty
   const itemService = new WorkItemService();

@@ -11,7 +11,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 ## Technical Stack & Architecture
 
 - **Runtime & Framework**: TypeScript throughout, NestJS backend API.
-- **Datastore**: PostgreSQL with `pgvector` extension enabled via `@electric-sql/pglite` WASM in-process engine.
+- **Datastore**: PostgreSQL with `pgvector` enabled via the `@electric-sql/pglite` in-process WASM engine, persisting to `CADENA_DATA_DIR` and in-memory when that is unset.
 - **Workflow Engine**: Hand-rolled state-machine engine implementing Spec §4, supporting versioned definitions, role guards, required fields, and reachability validation.
 - **Traceability Graph**: Typed edge table (`work_item_links`) supporting upstream and downstream recursive lineage traversal, plus depth-limited impact analysis from a Service across the `affects` edge.
 - **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, and warning/breach events.
@@ -21,7 +21,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA and ITIL flow metrics computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 71 automated tests across 25 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 76 automated tests across 26 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -60,14 +60,36 @@ Expected output:
  ✓ test/us8.3.spec.ts (5 tests)
  ✓ test/us9.4.spec.ts (7 tests)
  ✓ test/tracker.spec.ts (5 tests)
+ ✓ test/persistence.spec.ts (5 tests)
  ✓ test/us10.3.spec.ts (1 test)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  25 passed (25)
-      Tests  71 passed (71)
+ Test Files  26 passed (26)
+      Tests  76 passed (76)
 ```
 
-### 2. Run Browser Smoke Tests
+### 2. Run the Server
+
+```bash
+npm run dev            # persists to ./data, survives a restart
+npm run dev:ephemeral  # in-memory, discarded on exit
+npm run db:reset       # delete the data directory and start clean
+```
+
+The datastore is selected by `CADENA_DATA_DIR`. **In-memory is the default when that variable is unset, and that is deliberate**: a test run or a throwaway script must never inherit a durable database by accident, so persistence is opted into rather than assumed. `npm run dev` and `npm start` set it to `./data`, which is gitignored.
+
+The server states its mode at boot:
+
+```
+💾 Datastore persisting to ./data
+⚠️  Datastore is in-memory; all data is discarded on exit. Set CADENA_DATA_DIR to persist.
+```
+
+Schema creation is additive — `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — so reopening an existing directory with a newer build migrates it rather than resetting it. Demo seeding is guarded on an empty tenant and every supporting insert is an upsert, so a restart never duplicates the seed.
+
+**Boundary:** this is a single-process embedded datastore. It is durable across restarts but is not a managed Postgres: no replication, no point-in-time recovery, and no concurrent access from a second process. Backing up means copying the directory while the server is stopped.
+
+### 3. Run Browser Smoke Tests
 
 Drives the real page in headless Chrome against the built server. Uses a browser already installed on the machine, so there is no Chromium download; the suite skips if none is found.
 
@@ -77,11 +99,6 @@ npm run test:ui
 
 It covers board rendering, the Incident monitoring-evidence drawer, Service impact edge chains, the notification delivery log including Slack-to-email fallback, workflow-permitted transitions, the escalated filter, console errors, and phone-width layout.
 
-### 3. Run Development Server
-
-```bash
-npm run dev
-```
 
 ---
 

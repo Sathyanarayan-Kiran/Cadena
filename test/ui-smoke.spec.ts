@@ -120,7 +120,9 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
 
   beforeAll(async () => {
     server = spawn(process.execPath, [serverEntry], {
-      env: { ...process.env, PORT: String(PORT) },
+      // Forced ephemeral: this suite seeds its own scenario and must start from the seed
+      // every run, even if the surrounding shell exports a data directory.
+      env: { ...process.env, PORT: String(PORT), CADENA_DATA_DIR: '' },
       stdio: 'ignore',
     });
     await waitForServer();

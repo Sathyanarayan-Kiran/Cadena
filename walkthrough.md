@@ -3,7 +3,7 @@
 A running record of what is built, how to try it, and what changed when.
 
 **Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified.
-**Verification:** 71 automated tests across 25 test files, plus 7 browser smoke tests driving the real page.
+**Verification:** 76 automated tests across 26 test files, plus 7 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,35 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-20 — The datastore survives a restart
+
+PGlite was running in-memory, so every `npm run dev` started from the seed. That collided directly with the flow metrics shipped an hour earlier: a 30-day DORA window is meaningless on a database that dies with the process. Deployment frequency, lead time and change failure rate could never show a trend because there was never more than one session of history.
+
+**Added**
+
+- `CADENA_DATA_DIR` selects the PGlite directory. `npm run dev` and `npm start` set it to `./data`; `npm run dev:ephemeral` keeps the old throwaway behaviour.
+- `DatabaseService.createIsolated(dir)` for opening a directory outside the process singleton, plus `close()` and `isPersistent()`.
+- The server now prints which mode it is in at boot, so it is never ambiguous.
+- `npm run db:reset` removes the directory; `data/` is gitignored.
+- `test/persistence.spec.ts` — 5 tests covering write/close/reopen, additive re-initialisation, retained event history, and isolation between directories.
+
+**In-memory stays the default, deliberately.** Persistence is opt-in through the environment rather than a code default, so a test run or a throwaway script can never inherit a durable database by accident. The browser smoke suite goes further and forces `CADENA_DATA_DIR=''` on the server it spawns, because it seeds its own scenario and must start clean every run.
+
+**Verified by actually restarting the server**, not just by unit test:
+
+```
+boot 1  💾 Datastore persisting to ./data
+        created STORY-7893449E, 5 items total
+        <process killed>
+boot 2  💾 Datastore persisting to ./data
+        5 items - STORY-7893449E still present
+        services still 2, no re-seed, no duplication
+```
+
+The suite was then run with the directory deleted, confirming it creates none: 26 files, 76 tests, no `./data`.
+
+**What this unblocks.** Metrics can now accumulate across sessions. Demos survive a restart. And real dogfooding — running this project's own work through the tool rather than importing a markdown file — stops being blocked on the database forgetting everything overnight.
 
 ### 2026-09-20 — Durable event history and flow metrics (US9.4)
 
@@ -197,12 +226,12 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 71 tests across 25 files
+npm test        # 76 tests across 26 files
 npm run test:ui # 7 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
 
-The datastore is in-memory PGlite, so **restarting resets to the seed** — convenient for re-running the flows below.
+`npm run dev` persists to `./data`, so work survives a restart. Use `npm run db:reset` to start clean, or `npm run dev:ephemeral` for a throwaway in-memory run.
 
 ### 1. A monitoring alert becomes an Incident
 
@@ -270,8 +299,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  25 passed (25)
-      Tests  71 passed (71)
+ Test Files  26 passed (26)
+      Tests  76 passed (76)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -290,6 +319,7 @@ npm run test:ui
 | Typed links, lineage, **service impact** | `us4.1`, `us4.2`, **`us4.3`** |
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
 | **DORA & ITIL flow metrics** | **`us9.4`** |
+| **Datastore persistence** | **`persistence`** |
 | **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
 | RBAC, backlog fixture | `us10.3`, `backlog-fixture` |

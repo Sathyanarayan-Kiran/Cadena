@@ -2,22 +2,56 @@ import { PGlite } from '@electric-sql/pglite';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { vector } = require('@electric-sql/pglite/vector');
 
+/**
+ * Directory PGlite persists to, from `CADENA_DATA_DIR`.
+ *
+ * Absent or empty means in-memory, and that is deliberately the default: a test run or a
+ * throwaway script must never inherit a durable database by accident. `npm run dev` and
+ * `npm start` opt in explicitly, so persistence is something you choose rather than
+ * something that happens to you.
+ */
+function resolveDataDir(): string | undefined {
+  const configured = process.env.CADENA_DATA_DIR?.trim();
+  return configured ? configured : undefined;
+}
+
 export class DatabaseService {
   private static instance: DatabaseService;
   public db: PGlite;
+  /** The directory this instance persists to, or null when it is in-memory. */
+  public readonly dataDir: string | null;
   private initialized = false;
 
-  private constructor() {
-    this.db = new PGlite({
-      extensions: { vector },
-    });
+  private constructor(dataDir?: string) {
+    this.dataDir = dataDir ?? null;
+    this.db = dataDir
+      ? new PGlite(dataDir, { extensions: { vector } })
+      : new PGlite({ extensions: { vector } });
   }
 
   public static getInstance(): DatabaseService {
     if (!DatabaseService.instance) {
-      DatabaseService.instance = new DatabaseService();
+      DatabaseService.instance = new DatabaseService(resolveDataDir());
     }
     return DatabaseService.instance;
+  }
+
+  /**
+   * A standalone instance that bypasses the process singleton. Used by the persistence
+   * tests to open, close and reopen a directory without disturbing anything else.
+   */
+  public static createIsolated(dataDir?: string): DatabaseService {
+    return new DatabaseService(dataDir);
+  }
+
+  public isPersistent(): boolean {
+    return this.dataDir !== null;
+  }
+
+  /** Releases the underlying connection. Reopening the same directory recovers the data. */
+  public async close(): Promise<void> {
+    await this.db.close();
+    this.initialized = false;
   }
 
   public async initialize(): Promise<void> {
