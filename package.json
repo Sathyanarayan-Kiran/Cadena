@@ -9,7 +9,8 @@
     "build": "tsc",
     "dev": "tsx watch src/server.ts",
     "start": "node dist/server.js",
-    "test:ui": "tsc && vitest run test/ui-smoke.spec.ts"
+    "test:ui": "tsc && vitest run test/ui-smoke.spec.ts",
+    "tracker": "node scripts/build-tracker.mjs"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.2.14",
