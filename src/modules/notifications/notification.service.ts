@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
 import { DomainEventEnvelope, InProcessEventBus } from '../events/event-bus';
+import { EventConsumerRegistry } from '../events/consumer-registry.service';
 import { buildChannelAdapters, NotificationChannelAdapter } from './notification-channels';
 import {
   DEFAULT_ESCALATION_THRESHOLD_PERCENT,
@@ -43,6 +44,7 @@ const SUBSCRIBED_EVENTS: NotificationEventType[] = ['SLAWarning', 'SLABreached',
 export class NotificationService implements OnModuleInit {
   private dbService = DatabaseService.getInstance();
   private eventBus = InProcessEventBus.getInstance();
+  public static readonly CONSUMER_NAME = 'notifications';
   private static subscribedBuses = new WeakSet<InProcessEventBus>();
 
   onModuleInit(): void {
@@ -50,22 +52,20 @@ export class NotificationService implements OnModuleInit {
   }
 
   /**
-   * Wires this service to the event bus. The bus is a process-wide singleton, so the
-   * guard keeps a second application instance (as tests create) from double-subscribing.
+   * Registers this service as an event consumer.
+   *
+   * Dispatch goes through `EventConsumerRegistry`, which supplies idempotency, retry and
+   * dead-lettering, so this class no longer swallows its own failures: a persistent fault
+   * now surfaces in the dead-letter queue instead of a log line nobody reads.
    */
   public subscribeToEvents(): void {
     if (NotificationService.subscribedBuses.has(this.eventBus)) return;
     NotificationService.subscribedBuses.add(this.eventBus);
-    for (const eventType of SUBSCRIBED_EVENTS) {
-      this.eventBus.subscribe(eventType, async (event) => {
-        try {
-          await this.handleSlaEvent(event);
-        } catch (error) {
-          // A notification failure must never break the aging engine tick that emitted it.
-          console.error(`Notification dispatch failed for ${event.event_type}:`, error);
-        }
-      });
-    }
+    new EventConsumerRegistry().register({
+      name: NotificationService.CONSUMER_NAME,
+      eventTypes: [...SUBSCRIBED_EVENTS],
+      handle: (event) => this.handleSlaEvent(event).then(() => undefined),
+    });
   }
 
   // ---------------------------------------------------------------------------------------

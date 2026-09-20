@@ -2,6 +2,79 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex Epic 5 reliable consumption update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections.
+
+**Status:** US5.2, US5.3 and US5.5 implemented and covered by `test/us5.spec.ts`. US5.1 remains partial and US5.4 was deliberately deferred.
+
+### Why this came next
+
+The platform had exactly one real event consumer, and it caught its own errors and logged them. A persistent fault produced a log line nobody reads and a notification nobody received: no retry, no record, no recovery path. With a durable event stream and a datastore that now survives a restart, the missing piece was reliable consumption on top of them.
+
+### Scope delivered by Codex
+
+- Added `EventConsumerRegistry`, which wraps every registered consumer with idempotency, retry and dead-lettering. Consumers remain ordinary async functions and no longer carry that logic themselves.
+- Added `event_consumptions`, keyed on (consumer, event_id), so a redelivery is a no-op for that consumer while leaving others free to process the same event. That per-consumer scoping is what US5.2 actually asks for; a global seen-set would have been wrong.
+- Added `dead_letter_events` and `DeadLetterService`: an exhausted event is stored with its full envelope, attempt count and last error, and a `DeadLetterQueueAlert` is published carrying the current depth.
+- Added `GET /dlq`, `GET /dlq/depth`, `POST /dlq/:id/replay` and `POST /dlq/:id/discard`.
+- Added a **Dead letters** view to the workspace showing each entry with its payload in an editable box, so an operator can correct a malformed event and re-inject it.
+- Migrated `NotificationService` onto the framework, removing its internal error-swallowing.
+
+### Design decisions
+
+- **Idempotency is per consumer, not global.** Two consumers must both see an event; only a repeat delivery to the *same* consumer is a no-op.
+- **Replay preserves identity.** A corrected event keeps its original `event_id` and is re-dispatched only to the consumer that failed. Issuing a new id would break the audit trail, and republishing to the bus would re-trigger consumers that had already succeeded.
+- **A failed replay stays queued.** It updates the existing entry's attempts and error rather than resolving or duplicating it, so nothing is lost by trying.
+- **Dispatch never throws into the publisher.** A consumer failure surfaces through the queue, not as an exception in the aging tick or webhook handler that happened to publish the event.
+- **The production consumer was migrated deliberately.** A framework proven only against test doubles proves little; the 12 existing notification tests passing unchanged is the evidence that the contract holds for real code.
+
+### Deferred: US5.4
+
+Asynchronous HTTP 202 ingestion changes the response contract that ten Epic 6 and Epic 7 tests assert against. It deserves its own slice with a considered migration — most likely opt-in per request so existing integrations keep their synchronous contract — rather than being smuggled in beside a consumer framework.
+
+### Verification added by Codex
+
+- `test/us5.spec.ts` (8 tests): once-per-consumer processing with redelivery as a no-op; a transient failure retried to success without dead-lettering; exhaustion producing a queue entry with payload, attempts and error plus a depth alert; corrected-payload replay clearing the entry while preserving the event id; a failed replay staying queued; discard removing an entry from depth; rejection of replaying a discarded entry and of an unknown id; and confirmation that the production notification consumer is registered through the framework.
+- Full regression: the 12 notification tests pass unchanged after migration.
+
+### Files added by Codex in this increment
+
+- `src/modules/events/consumer-registry.service.ts`
+- `src/modules/events/dead-letter.service.ts`
+- `src/modules/events/dead-letter.controller.ts`
+- `test/us5.spec.ts`
+
+### Files updated by Codex in this increment
+
+- `src/app.module.ts`
+- `src/database/database.service.ts`
+- `src/modules/metrics/metrics.module.ts`
+- `src/modules/notifications/notification.service.ts`
+- `public/index.html`
+- `implementation-status.json`
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Deliberate boundaries
+
+- Retries are in-process and immediate, with linear backoff measured in milliseconds. A consumer whose dependency is down for minutes will exhaust its attempts and dead-letter rather than waiting it out; scheduled redelivery belongs with the durable queue that replaces the in-process bus.
+- The dead-letter alert is published as a domain event. Nothing routes it to a person yet, so DLQ depth is visible in the dashboard and the event stream but does not page anyone.
+- Replay requires the consumer to be registered in the running process. An entry belonging to a consumer that has since been removed or renamed cannot be replayed, and the API says so rather than failing silently.
+- There is no automatic retry schedule for dead-lettered events; recovery is an operator action by design, because an event that failed three times usually needs a human to look at it.
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused suite (`test/us5.spec.ts`): **PASS — 8 tests**
+- Full regression suite: **PASS — 27 test files, 84 tests**
+- UI JavaScript parse check: **PASS**
+- `git diff --check`: **PASS**
+- Browser QA of the new Dead letters view: **not run in this increment; the browser smoke suite covers the board, incident drawer, service impact, notifications and transitions**
+
+---
+
 ## Codex datastore persistence update — 2026-09-20
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections.

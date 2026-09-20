@@ -1,11 +1,14 @@
 import { Module } from '@nestjs/common';
 import { EventStoreService } from '../events/event-store.service';
+import { DeadLetterController } from '../events/dead-letter.controller';
+import { DeadLetterService } from '../events/dead-letter.service';
+import { EventConsumerRegistry } from '../events/consumer-registry.service';
 import { EventStoreController, MetricsController } from './metrics.controller';
 import { MetricsService } from './metrics.service';
 
 @Module({
-  controllers: [MetricsController, EventStoreController],
-  providers: [MetricsService, EventStoreService],
-  exports: [MetricsService, EventStoreService],
+  controllers: [MetricsController, EventStoreController, DeadLetterController],
+  providers: [MetricsService, EventStoreService, DeadLetterService, EventConsumerRegistry],
+  exports: [MetricsService, EventStoreService, DeadLetterService, EventConsumerRegistry],
 })
 export class MetricsModule {}

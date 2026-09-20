@@ -3,7 +3,7 @@
 A running record of what is built, how to try it, and what changed when.
 
 **Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified.
-**Verification:** 76 automated tests across 26 test files, plus 7 browser smoke tests driving the real page.
+**Verification:** 84 automated tests across 27 test files, plus 7 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,33 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-20 — Reliable event consumption: idempotency, retry, dead letters (Epic 5)
+
+Before this, `NotificationService` caught its own errors and logged them. A persistent fault produced a log line nobody reads and a notification nobody received. There was no retry, no record, and no way to recover the event.
+
+**Added**
+
+- `EventConsumerRegistry` — wraps every registered consumer with idempotency, retry and dead-lettering. Consumers stay ordinary async functions; they no longer carry that logic or swallow their own failures.
+- `event_consumptions` keyed on (consumer, event_id): a redelivery is a no-op **per consumer**, which is what US5.2 actually asks for.
+- `dead_letter_events` plus `DeadLetterService`: exhausted events are stored with payload, attempt count and error, and a `DeadLetterQueueAlert` fires carrying the current depth.
+- `GET /dlq`, `GET /dlq/depth`, `POST /dlq/:id/replay`, `POST /dlq/:id/discard`.
+- UI: a **Dead letters** view with the payload in an editable box, so an operator can correct a malformed event and re-inject it without asking the source system to resend.
+- `test/us5.spec.ts` — 8 tests.
+
+**The notification consumer was migrated onto the framework**, which is the point: the contract is proven on a production consumer, not only on test doubles. All 12 notification tests still pass, and a persistent notification fault now lands in the queue instead of a log line.
+
+**Replay preserves identity.** A replay re-dispatches the *same* `event_id` to only the consumer that failed, so the audit trail stays continuous and other consumers are not re-triggered. A replay that fails again stays queued rather than vanishing.
+
+| Story | State |
+| --- | --- |
+| US5.2 idempotent processing | **Done** |
+| US5.3 DLQ with alerting | **Done** |
+| US5.5 replay console | **Done** |
+| US5.1 outbox | Partial — events persist, but outside the mutation's transaction |
+| US5.4 HTTP 202 ingestion | Not started — deferred, see below |
+
+**US5.4 was deliberately deferred.** Making webhook ingestion asynchronous changes the response contract that ten Epic 6 and 7 tests assert against. It deserves its own slice with a considered migration, not a change smuggled in beside a consumer framework.
 
 ### 2026-09-20 — The datastore survives a restart
 
@@ -226,7 +253,7 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 76 tests across 26 files
+npm test        # 84 tests across 27 files
 npm run test:ui # 7 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
@@ -299,8 +326,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  26 passed (26)
-      Tests  76 passed (76)
+ Test Files  27 passed (27)
+      Tests  84 passed (84)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -320,6 +347,7 @@ npm run test:ui
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
 | **DORA & ITIL flow metrics** | **`us9.4`** |
 | **Datastore persistence** | **`persistence`** |
+| **Idempotency, retry, dead letters** | **`us5`** |
 | **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
 | RBAC, backlog fixture | `us10.3`, `backlog-fixture` |
@@ -332,7 +360,7 @@ npm run test:ui
 
 Named plainly so nobody mistakes the pilot for a product:
 
-- **Epic 5** — no durable event bus. `InProcessEventBus` has the right envelope but no outbox, no Kafka, no dead-letter queue.
+- **Epic 5** — consumption is now reliable (idempotent, retried, dead-lettered), but the bus is still in-process. No Kafka, no transactional outbox, and webhook ingestion is still synchronous (US5.4).
 - **Epic 8 transports** — routing, fallback and the delivery log are real, but no message actually leaves the process. The channel adapters are stubs awaiting SES/SendGrid, the Slack Web API and Microsoft Graph. `IncidentAutoCreated` is also not yet routed; only the three SLA events are.
 - **US10.3 hardening** — no real authentication. Tenant and actor role arrive in headers.
 - **Epic 11** — no CMDB federation. Alert-discovered Services are lightweight stubs flagged `monitoring_discovery`.

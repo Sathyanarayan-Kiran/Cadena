@@ -277,6 +277,32 @@ export class DatabaseService {
         occurred_at TIMESTAMP WITH TIME ZONE NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS event_consumptions (
+        consumer TEXT NOT NULL,
+        event_id UUID NOT NULL,
+        status TEXT NOT NULL,
+        attempts INT NOT NULL DEFAULT 1,
+        first_attempt_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        last_attempt_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (consumer, event_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS dead_letter_events (
+        id UUID PRIMARY KEY,
+        consumer TEXT NOT NULL,
+        event_id UUID NOT NULL,
+        org_id UUID,
+        event_type TEXT NOT NULL,
+        envelope JSONB NOT NULL,
+        attempts INT NOT NULL,
+        last_error TEXT,
+        status TEXT NOT NULL DEFAULT 'dead',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        resolved_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE (consumer, event_id)
+      );
+
       CREATE TABLE IF NOT EXISTS sla_policies (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),
@@ -295,6 +321,7 @@ export class DatabaseService {
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS domain_events_org_time ON domain_events (org_id, occurred_at);
       CREATE INDEX IF NOT EXISTS domain_events_type_time ON domain_events (event_type, occurred_at);
+      CREATE INDEX IF NOT EXISTS dlq_consumer_status ON dead_letter_events (consumer, status);
     `);
     await this.db.exec(`
       UPDATE work_items

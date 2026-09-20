@@ -18,10 +18,11 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
+- **Reliable Consumption**: Every event consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
 - **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA and ITIL flow metrics computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 76 automated tests across 26 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 84 automated tests across 27 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -61,11 +62,12 @@ Expected output:
  ✓ test/us9.4.spec.ts (7 tests)
  ✓ test/tracker.spec.ts (5 tests)
  ✓ test/persistence.spec.ts (5 tests)
+ ✓ test/us5.spec.ts (8 tests)
  ✓ test/us10.3.spec.ts (1 test)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  26 passed (26)
-      Tests  76 passed (76)
+ Test Files  27 passed (27)
+      Tests  84 passed (84)
 ```
 
 ### 2. Run the Server
@@ -391,6 +393,35 @@ The response also reports coverage, because a metric computed over partial evide
 
 ---
 
+## Reliable Event Consumption (Epic 5)
+
+Every registered consumer runs behind `EventConsumerRegistry`, which supplies three things the consumers used to lack:
+
+| Guarantee | Story | Behaviour |
+| --- | --- | --- |
+| Idempotency | US5.2 | Consumption is keyed on (consumer, event_id). A redelivery is a no-op for that consumer, and other consumers are unaffected. |
+| Retry | US5.3 | A throwing handler is retried to its configured limit with linear backoff. |
+| Dead-lettering | US5.3 | On exhaustion the event is stored with payload, attempts and error, and a `DeadLetterQueueAlert` fires carrying the current depth. |
+
+Consumers stay ordinary async functions. Before this, each either reinvented that logic or quietly swallowed its own failures — `NotificationService` did the latter, so a persistent fault produced a log line and a notification nobody received. It is now registered through the framework, so the contract is exercised by a production consumer rather than only by tests.
+
+### Operator surface
+
+```http
+GET  /dlq?consumer=notifications&status=dead
+GET  /dlq/depth
+POST /dlq/:id/replay     { "payload": { ...corrected... } }
+POST /dlq/:id/discard    { "reason": "superseded" }
+```
+
+`GET /dlq/depth` returns the total, a per-consumer breakdown, and an `alerting` flag that is true whenever depth exceeds zero. The **Dead letters** view in the workspace shows each entry with its payload in an editable box, so a malformed event can be corrected and re-injected without asking the source system to resend it.
+
+**Replay preserves identity.** The corrected event keeps its original `event_id` and is re-dispatched only to the consumer that failed, so the audit trail stays continuous and no other consumer is re-triggered. A replay that fails again stays queued rather than vanishing.
+
+**Boundary:** retries are in-process and immediate, so a consumer whose dependency is down for minutes will exhaust its attempts and dead-letter rather than waiting it out. Scheduled redelivery with longer backoff belongs with the durable queue that replaces the in-process bus.
+
+---
+
 ## Production Boundaries
 
 The pilot is deliberately explicit about what is not production-ready:
@@ -411,8 +442,8 @@ The pilot is deliberately explicit about what is not production-ready:
 
 The aging engine, team workspace, workflow automation, traceability graph, Git/CI integration, monitoring/APM integration, and notification routing are implemented. The remaining Phase 1 work is:
 
-1. **Production Event Bus (Epic 5)**:
-   - Replace `InProcessEventBus` with Kafka / AWS MSK using a transactional outbox pattern in Postgres to guarantee at-least-once event delivery.
+1. **Remaining Event Backbone (Epic 5)**:
+   - Consumption is reliable: idempotent, retried, dead-lettered, replayable. Still open: the transactional outbox (US5.1), asynchronous HTTP 202 ingestion (US5.4), and replacing the in-process bus with Kafka / AWS MSK.
 
 2. **Real Notification Transports (Epic 8 hardening)**:
    - Replace the pilot channel adapters with SES/SendGrid, the Slack Web API, and Microsoft Graph. Routing, fallback, and the delivery log already work and are transport-independent.
