@@ -122,6 +122,13 @@ export function buildModel() {
   };
 }
 
+/** Renders one delta category, or nothing at all when it contributed none. */
+function deltaLine(noun, ids, verb = 'added') {
+  if (!ids || ids.length === 0) return '';
+  const plural = ids.length === 1 ? noun : `${noun}s`;
+  return `<li><b>${ids.length} ${plural} ${verb}:</b> ${ids.join(', ')}</li>`;
+}
+
 function page(model, meta) {
   const data = JSON.stringify({
     epics: model.epics,
@@ -266,7 +273,7 @@ function page(model, meta) {
       <div class="tally done"><div class="tally-n" id="t-done">0</div><div class="tally-l">Done &amp; test-verified</div></div>
       <div class="tally partial"><div class="tally-n" id="t-partial">0</div><div class="tally-l">Partial, gap named</div></div>
       <div class="tally idle"><div class="tally-n" id="t-idle">0</div><div class="tally-l">Not started</div></div>
-      <div class="tally delta"><div class="tally-n" id="t-delta">0</div><div class="tally-l">New in latest master</div></div>
+      <div class="tally delta"><div class="tally-n" id="t-delta">0</div><div class="tally-l">New in latest delta</div></div>
     </div>
     <div class="meter" id="meter" role="img" aria-label="Overall delivery progress"></div>
   </section>
@@ -280,14 +287,14 @@ function page(model, meta) {
   </section>
 
   <section class="callout delta-callout">
-    <h3>Latest consolidation delta &middot; ${model.latestDelta?.date ?? 'not recorded'}</h3>
-    <p><code>${model.latestDelta?.source ?? 'No source recorded'}</code> was reconciled against the canonical backlog instead of appended with conflicting identifiers. The scope moves from <b>${model.latestDelta?.baseline_epics ?? 0} epics / ${model.latestDelta?.baseline_stories ?? 0} stories</b> to <b>${model.latestDelta?.current_epics ?? model.epics.length} epics / ${model.latestDelta?.current_stories ?? 0} stories</b>.</p>
+    <h3>Latest scope delta &middot; ${model.latestDelta?.date ?? 'not recorded'}</h3>
+    <p><code>${model.latestDelta?.source ?? 'No source recorded'}</code> moved the canonical scope from <b>${model.latestDelta?.baseline_epics ?? 0} epics / ${model.latestDelta?.baseline_stories ?? 0} stories</b> to <b>${model.latestDelta?.current_epics ?? model.epics.length} epics / ${model.latestDelta?.current_stories ?? 0} stories</b>. Existing identifiers and delivery status are never reassigned by a delta.</p>
     <ul>
-      <li><b>+${model.latestDelta?.added_epics.length ?? 0} epics:</b> ${model.latestDelta?.added_epics.join(', ') ?? 'none'}.</li>
-      <li><b>+${model.latestDelta?.added_stories.length ?? 0} genuinely new stories:</b> ${model.latestDelta?.added_stories.join(', ') ?? 'none'}.</li>
-      <li><b>${model.latestDelta?.expanded_stories.length ?? 0} existing stories expanded:</b> ${model.latestDelta?.expanded_stories.join(', ') ?? 'none'}.</li>
+      ${deltaLine('epic', model.latestDelta?.added_epics)}
+      ${deltaLine('new story', model.latestDelta?.added_stories)}
+      ${deltaLine('expanded story', model.latestDelta?.expanded_stories, 'expanded')}
     </ul>
-    <p>Use <b>Latest master delta</b> below to show both the newly added stories and the existing stories whose acceptance criteria changed.</p>
+    <p>Filter by <b>New in latest delta</b> below to see exactly what this delta contributed.</p>
   </section>
 
   <section class="callout">
@@ -295,7 +302,7 @@ function page(model, meta) {
     <p><em>Cadena Research.docx</em> &sect;7 records a backlog execution status that does not match what the code and tests show. The repository is authoritative here; the divergences are listed rather than silently reconciled.</p>
     <ul>
       <li><b>Epic 2 is understated.</b> The playbook marks US2.1&ndash;US2.3 <em>In Progress</em>. All three are implemented and covered by <code>us2.1</code>&ndash;<code>us2.3</code>.</li>
-      <li><b>Epic 10 is overstated, and it matters.</b> The playbook marks US10.1&ndash;US10.2 (SSO and SCIM provisioning) <em>Completed</em>. Neither exists: identity is a header-based stub. The story that <em>is</em> complete is US10.3, role-gated transitions.</li>
+      <li><b>Epic 10 is overstated, and it matters.</b> The playbook marks US10.1&ndash;US10.2 (SSO and SCIM provisioning) <em>Completed</em>. Neither exists: identity is a header-based stub. The stories that <em>are</em> complete in that epic are US10.3 (role-gated transitions) and US10.9 (authenticated tenant and actor identity).</li>
       <li><b>Epic 4 is fairly described</b> as in progress &mdash; US4.1&ndash;US4.3 are done, US4.4 has not been started.</li>
     </ul>
     <p>Treating the playbook's table as a delivery signal would credit the platform with an enterprise identity posture it does not have.</p>
@@ -317,7 +324,7 @@ function page(model, meta) {
       <button class="chip" type="button" data-status="done" aria-pressed="false">Done</button>
       <button class="chip" type="button" data-status="partial" aria-pressed="false">Partial</button>
       <button class="chip" type="button" data-status="idle" aria-pressed="false">Not started</button>
-      <button class="chip" type="button" data-status="delta" aria-pressed="false">Latest master delta</button>
+      <button class="chip" type="button" data-status="delta" aria-pressed="false">Latest delta</button>
       <button class="chip" type="button" data-status="new" aria-pressed="false">All scope additions</button>
     </div>
     <div id="ledger"></div>
