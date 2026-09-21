@@ -73,7 +73,7 @@ export class IntegrationSupport {
   public async completeDelivery(recordId: string, result: unknown): Promise<void> {
     await this.dbService.db.query(
       `UPDATE integration_deliveries
-       SET status = 'completed', result = $1, processed_at = CURRENT_TIMESTAMP
+       SET status = 'completed', result = $1, error = NULL, processed_at = CURRENT_TIMESTAMP
        WHERE id = $2`,
       [JSON.stringify(result), recordId],
     );
@@ -90,7 +90,8 @@ export class IntegrationSupport {
 
   public async getDeliveryRecord(orgId: string, provider: string, deliveryId: string): Promise<any | null> {
     const result = await this.dbService.db.query<any>(
-      `SELECT provider, delivery_id, event_type, status, result, error, created_at, processed_at
+      `SELECT id, integration_kind, provider, delivery_id, event_type, status, attempts,
+              result, error, created_at, claimed_at, processed_at
        FROM integration_deliveries
        WHERE org_id = $1 AND provider = $2 AND delivery_id = $3`,
       [orgId, provider.toLowerCase(), deliveryId],
@@ -101,6 +102,7 @@ export class IntegrationSupport {
       ...row,
       result: this.parseJson(row.result),
       created_at: this.toIso(row.created_at),
+      claimed_at: row.claimed_at ? this.toIso(row.claimed_at) : null,
       processed_at: row.processed_at ? this.toIso(row.processed_at) : null,
     };
   }

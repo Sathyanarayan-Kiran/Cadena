@@ -175,13 +175,16 @@ export class DatabaseService {
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,
         provider TEXT NOT NULL,
+        integration_kind TEXT NOT NULL DEFAULT 'git',
         delivery_id TEXT NOT NULL,
         event_type TEXT NOT NULL,
         status TEXT NOT NULL,
+        attempts INT NOT NULL DEFAULT 0,
         payload JSONB NOT NULL,
         result JSONB,
         error TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        claimed_at TIMESTAMP WITH TIME ZONE,
         processed_at TIMESTAMP WITH TIME ZONE,
         UNIQUE(org_id, provider, delivery_id)
       );
@@ -359,10 +362,14 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sla_clock_started_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sla_suspended BOOLEAN NOT NULL DEFAULT FALSE;`);
     await this.db.exec(`ALTER TABLE sla_policies ADD COLUMN IF NOT EXISTS suspend_sla BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS integration_kind TEXT NOT NULL DEFAULT 'git';`);
+    await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;`);
+    await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS domain_events_org_time ON domain_events (org_id, occurred_at);
       CREATE INDEX IF NOT EXISTS domain_events_type_time ON domain_events (event_type, occurred_at);
       CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (status, created_at);
+      CREATE INDEX IF NOT EXISTS integration_deliveries_queue ON integration_deliveries (status, created_at);
       CREATE INDEX IF NOT EXISTS dlq_consumer_status ON dead_letter_events (consumer, status);
       CREATE INDEX IF NOT EXISTS api_credentials_hash ON api_credentials (token_hash);
     `);

@@ -4,6 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
+import { postGitAndWait } from './integration-webhook-helpers';
 
 describe('US6.1 — Commit and pull-request linking', () => {
   let app: INestApplication;
@@ -24,11 +25,8 @@ describe('US6.1 — Commit and pull-request linking', () => {
       .send({ type: 'story', title: 'Webhook reference matching', team_id: teamId, org_id: orgId })
       .expect(201);
 
-    const webhook = await request(app.getHttpServer())
-      .post('/integrations/git/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us6.1-linked-commit')
-      .send({
+    const webhook = await postGitAndWait(
+      app.getHttpServer(), orgId, 'us6.1-linked-commit', {
         provider: 'github',
         event_type: 'push',
         repository: 'cadena/platform',
@@ -37,8 +35,8 @@ describe('US6.1 — Commit and pull-request linking', () => {
           message: `feat: implement gateway for ${story.body.key}`,
           url: 'https://github.example/cadena/platform/commit/abc123def456',
         }],
-      })
-      .expect(201);
+      },
+    );
 
     expect(webhook.body.linked_work_item_keys).toEqual([story.body.key]);
     expect(webhook.body.artifacts[0].artifact_type).toBe('commit');
@@ -52,17 +50,14 @@ describe('US6.1 — Commit and pull-request linking', () => {
   });
 
   it('stores an unreferenced commit without treating the missing key as an error', async () => {
-    const webhook = await request(app.getHttpServer())
-      .post('/integrations/git/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us6.1-unlinked-commit')
-      .send({
+    const webhook = await postGitAndWait(
+      app.getHttpServer(), orgId, 'us6.1-unlinked-commit', {
         provider: 'github',
         event_type: 'push',
         repository: 'cadena/platform',
         commit: { sha: 'no-reference-sha', message: 'docs: clarify local setup' },
-      })
-      .expect(201);
+      },
+    );
 
     expect(webhook.body.artifacts).toHaveLength(1);
     expect(webhook.body.linked_work_item_keys).toEqual([]);

@@ -3,20 +3,29 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   HttpException,
   HttpStatus,
+  Inject,
   Param,
   Post,
   Query,
 } from '@nestjs/common';
 import { GitWebhookDto } from './integration.types';
 import { IntegrationService, InvalidIntegrationPayloadError } from './integration.service';
+import { InboundWebhookQueueService } from './inbound-webhook-queue.service';
 
 @Controller('integrations/git')
 export class GitIntegrationController {
-  private readonly service = new IntegrationService();
+  constructor(
+    @Inject(InboundWebhookQueueService)
+    private readonly queue: InboundWebhookQueueService,
+    @Inject(IntegrationService)
+    private readonly service: IntegrationService,
+  ) {}
 
   @Post('webhooks')
+  @HttpCode(HttpStatus.ACCEPTED)
   async receiveWebhook(
     @Body() body: GitWebhookDto,
     @Headers('x-org-id') orgId?: string,
@@ -28,7 +37,7 @@ export class GitIntegrationController {
     }
     const deliveryId = deliveryHeader || githubDelivery || body.delivery_id || '';
     try {
-      return await this.service.processGitWebhook(orgId, body, deliveryId);
+      return await this.queue.enqueueGit(orgId, body, deliveryId);
     } catch (error) {
       if (error instanceof InvalidIntegrationPayloadError) {
         throw new HttpException(

@@ -5,6 +5,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
 import { InProcessEventBus } from '../src/modules/events/event-bus';
+import { postGitAndWait } from './integration-webhook-helpers';
 
 describe('US2.3 — Automatic transitions from external events', () => {
   let app: INestApplication;
@@ -46,11 +47,8 @@ describe('US2.3 — Automatic transitions from external events', () => {
       .send({ to_state: 'In Progress' })
       .expect(201);
 
-    const response = await request(app.getHttpServer())
-      .post('/integrations/git/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us2.3-guarded-pr')
-      .send({
+    const response = await postGitAndWait(
+      app.getHttpServer(), orgId, 'us2.3-guarded-pr', {
         provider: 'github',
         event_type: 'pull_request',
         repository: 'cadena/platform',
@@ -61,8 +59,8 @@ describe('US2.3 — Automatic transitions from external events', () => {
           merged: true,
           state: 'closed',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(response.body.transitions).toHaveLength(1);
     expect(response.body.transitions[0].outcome).toBe('skipped');

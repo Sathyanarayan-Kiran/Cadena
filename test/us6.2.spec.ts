@@ -4,6 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
+import { postGitAndWait } from './integration-webhook-helpers';
 
 describe('US6.2 — Pull-request merge auto-transition', () => {
   let app: INestApplication;
@@ -32,11 +33,8 @@ describe('US6.2 — Pull-request merge auto-transition', () => {
         .expect(201);
     }
 
-    const webhook = await request(app.getHttpServer())
-      .post('/integrations/git/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us6.2-merged-pr')
-      .send({
+    const webhook = await postGitAndWait(
+      app.getHttpServer(), orgId, 'us6.2-merged-pr', {
         provider: 'github',
         event_type: 'pull_request',
         repository: 'cadena/platform',
@@ -48,8 +46,8 @@ describe('US6.2 — Pull-request merge auto-transition', () => {
           merged: true,
           state: 'closed',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(webhook.body.transitions).toEqual([
       expect.objectContaining({

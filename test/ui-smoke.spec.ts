@@ -67,13 +67,26 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     throw new Error(`Server did not become ready on ${BASE}`);
   }
 
+  async function waitForMonitoringDelivery(deliveryId: string, provider: string, timeoutMs = 10000) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      const delivery = await api(
+        `/integrations/monitoring/deliveries/${encodeURIComponent(deliveryId)}?provider=${provider}`,
+      );
+      if (delivery.status === 'completed') return delivery.result;
+      if (delivery.status === 'failed') throw new Error(`Monitoring delivery failed: ${delivery.error}`);
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    throw new Error(`Monitoring delivery '${deliveryId}' did not complete before timeout`);
+  }
+
   /** Layers an alert-driven Incident, an impact chain and a fallback notification onto the seed. */
   async function seedScenario() {
     await api('/integrations/monitoring/settings', {
       min_severity: 'SEV4', dedupe_window_minutes: 60, default_team_id: TEAM,
     });
 
-    const alert = await api(
+    await api(
       '/integrations/monitoring/webhooks',
       {
         provider: 'datadog',
@@ -86,6 +99,7 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
       },
       { 'x-delivery-id': 'ui-smoke-alert' },
     );
+    const alert = await waitForMonitoringDelivery('ui-smoke-alert', 'datadog');
 
     const release = await api('/workitems', {
       type: 'release', title: 'Release 4.2.0', team_id: TEAM, org_id: ORG,

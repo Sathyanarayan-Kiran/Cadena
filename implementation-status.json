@@ -269,10 +269,10 @@
     },
     "US5.4": {
       "name": "HTTP 202 asynchronous ingestion",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
-      "note": "New from research §4. Webhooks are processed synchronously today, the classic webhook-timeout failure mode at volume."
+      "note": "Verified by <code>test/us5.4.spec.ts</code> — valid Git and monitoring webhooks are durably persisted with an outbox event before HTTP 202 is returned; a serial worker exposes queued/processing/completed/failed state by delivery id, deduplicates redelivery, retries three times, dead-letters terminal failures and supports corrected replay."
     },
     "US5.5": {
       "name": "Dead-letter replay console",

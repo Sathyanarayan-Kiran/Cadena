@@ -2,6 +2,76 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex US5.4 asynchronous webhook-ingestion update — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older dated notes below that correctly recorded US5.4 as deferred or not started at the time they were written; those sections remain unchanged as delivery history.
+
+**Status:** Complete. US5.4 moved from not started to done. The delivery ledger is now **29 done / 5 partial / 38 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+The event backbone could already commit canonical mutations and their events atomically, retry consumers, dead-letter terminal failures and replay corrected payloads. Provider webhook endpoints were still synchronous, however: each HTTP request stayed open while artifacts, links, transitions and incidents were mutated. A slow processor could therefore trigger a provider timeout and redelivery even though the platform had accepted the request.
+
+### Scope delivered by Codex
+
+- Changed valid Git and monitoring webhook endpoints to return **HTTP 202 Accepted** after durable acceptance rather than returning the processing result synchronously.
+- Persisted the delivery row and its `InboundWebhookAccepted` outbox envelope in one database transaction before acknowledgement. No work-item, artifact, link or incident mutation occurs on the request path.
+- Added a stable acceptance contract containing `accepted`, `duplicate`, `delivery_id`, `provider`, current `status` and a queryable `status_url`.
+- Added `integration_kind`, `attempts` and `claimed_at` delivery metadata plus a queue-oriented `(status, created_at)` index, with safe migrations for existing databases.
+- Added a serial inbound worker so bursts remain durably queued instead of consuming unbounded request workers or being rejected while downstream processing is busy.
+- Exposed `queued`, `processing`, `completed` and `failed` state, attempt count, result and error through the existing tenant-scoped delivery-status endpoints.
+- Reused the Epic 5 consumer registry for event-id idempotency, three processing attempts, DLQ alerting and replay. A replay can supply a corrected webhook body and completes the original delivery record without requiring the provider to resend it.
+- Requeues rows left in `processing` by a stopped single-process worker and recovers their pending outbox envelopes during application bootstrap.
+- Preserved delivery-id deduplication: duplicate requests receive HTTP 202 and the existing delivery's status without creating a second job or repeating side effects.
+- Migrated the Epic 2, Epic 6, Epic 7, flow-metrics and browser smoke fixtures to wait on the delivery resource before asserting downstream results.
+- Added an optional, capped `CADENA_INBOUND_WORKER_DELAY_MS` worker throttle for constrained pilot environments and deterministic backpressure testing. It never delays the HTTP acknowledgement path.
+
+### Acceptance criteria proved
+
+| Acceptance criterion | Evidence |
+| --- | --- |
+| Persist before acknowledging, and acknowledge before mutation | `test/us5.4.spec.ts` confirms HTTP 202 plus a queryable delivery while the linked work item still has no external artifact. |
+| Queue rather than reject under processor backlog | A burst test submits three deliveries behind the serial worker, observes queued/processing state and confirms that all settle successfully. |
+| Idempotent provider redelivery | Reusing a delivery id returns `duplicate: true`, retains the completed status and leaves exactly one delivery row. |
+| Recover a poison payload | A malformed inner payload is attempted three times, marked failed and dead-lettered; corrected DLQ replay then completes the same delivery. |
+
+### Files added by Codex
+
+- `src/modules/integrations/inbound-webhook-queue.service.ts`
+- `test/integration-webhook-helpers.ts`
+- `test/us5.4.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/integrations/integration-support.ts`
+- `src/modules/integrations/integration.controller.ts`
+- `src/modules/integrations/integration.module.ts`
+- `src/modules/integrations/integration.service.ts`
+- `src/modules/integrations/monitoring.controller.ts`
+- `src/modules/integrations/monitoring.service.ts`
+- the existing webhook-dependent tests for US2.3, US6.1–US6.3, US7.1–US7.3, US9.4 and browser smoke coverage
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- TypeScript no-emit build: **PASS**
+- Focused US5.4 acceptance suite: **PASS — 4 tests**
+- Impacted integration regression: **PASS — 9 test files, 30 tests**
+- Full non-browser regression: **PASS — 33 test files, 120 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 29 done / 5 partial / 38 not started**
+- Browser smoke suite against the built production server: **PASS — 11 tests**
+
+### Deliberate boundaries
+
+- HTTP acceptance is now asynchronous, but dispatch and processing still run in this application process. The persisted delivery/outbox boundary survives a restart; horizontal multi-worker leasing, partitions and Kafka/MSK remain future production work.
+- Retries remain immediate and short. Long-duration scheduled redelivery with exponential backoff belongs with the external broker implementation.
+- Provider signature verification, raw-payload adapters, timestamp replay protection and provider-bound credentials remain production-security boundaries. Delivery-id deduplication is not a substitute for signature verification.
+
 ## Codex US5.1 transactional-outbox update — 2026-09-21
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older dated notes below that correctly recorded US5.1 as partial at the time they were written; those sections remain unchanged as delivery history.

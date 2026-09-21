@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, Epic 5 transactional event delivery and consumption reliability, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.4 flow metrics and US10.9 authenticated tenant identity. The canonical backlog is **20 epics / 72 stories**, with **28 done / 5 partial / 39 not started**.
-**Verification:** 116 automated tests across 32 test files, plus 11 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.4 flow metrics and US10.9 authenticated tenant identity. The canonical backlog is **20 epics / 72 stories**, with **29 done / 5 partial / 38 not started**.
+**Verification:** 120 automated tests across 33 test files, plus 11 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,23 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-21 — HTTP 202 webhook ingestion: accept first, process safely (US5.4)
+
+Git and monitoring webhooks no longer hold the provider request open while artifacts, transitions and Incidents are mutated. A valid request writes its delivery plus an `InboundWebhookAccepted` outbox envelope in one transaction, then returns HTTP 202 with a delivery id and status URL.
+
+**What changed**
+
+- A serial worker processes accepted deliveries, so a burst creates visible `queued` depth rather than rejected requests or unbounded concurrent work.
+- Delivery status exposes `queued`, `processing`, `completed` or `failed`, attempt count, the final result and any error.
+- Duplicate delivery ids return the existing status without enqueuing a second job or repeating side effects.
+- Processing failures retry three times and enter the existing per-consumer DLQ. An operator can correct the webhook body and replay the original event into the same delivery record.
+- Startup requeues work left in `processing` and recovers committed outbox envelopes that were not dispatched before shutdown.
+- `test/us5.4.spec.ts` proves acknowledgement-before-mutation, burst backpressure, duplicate delivery handling, retry/dead-letter and corrected replay.
+
+US5.4 moves from not started to **done**, taking the canonical ledger to **29 done / 5 partial / 38 not started**. The complete non-browser regression passes **120 tests across 33 files**, and all **11 browser smoke tests** pass against the built server.
+
+**Boundary:** acceptance is durable, but dispatch and processing still run in one application process. Horizontal worker leasing, long-duration retry scheduling and Kafka/MSK remain production-scale extensions.
 
 ### 2026-09-21 — Transactional outbox: a committed work-item change cannot lose its event
 
@@ -31,7 +48,7 @@ Durable event history existed, but it was written immediately after the business
 
 US5.1 moves from partial to **done**, taking the canonical ledger to **28 done / 5 partial / 39 not started**. The complete non-browser regression passes **116 tests across 32 files**.
 
-**Boundary:** the dispatcher remains in-process and bootstrap-driven. US5.4 asynchronous HTTP ingestion, continuous multi-worker dispatch and Kafka/MSK remain open; the delivered guarantee is the US5.1 mutation-to-event transaction boundary.
+**Boundary at this increment:** the dispatcher remained in-process and bootstrap-driven, and US5.4 was still open. The US5.4 update above later added asynchronous HTTP ingestion; continuous multi-worker dispatch and Kafka/MSK remain open.
 
 ### 2026-09-21 — Phase 1 operational visibility: fair clocks, ordered attention, executive evidence
 
@@ -126,9 +143,9 @@ Before this, `NotificationService` caught its own errors and logged them. A pers
 | US5.3 DLQ with alerting | **Done** |
 | US5.5 replay console | **Done** |
 | US5.1 outbox | Partial at this 2026-09-20 increment — completed by the 2026-09-21 update above |
-| US5.4 HTTP 202 ingestion | Not started — deferred, see below |
+| US5.4 HTTP 202 ingestion | Deferred in this 2026-09-20 increment — completed by the 2026-09-21 update above |
 
-**US5.4 was deliberately deferred.** Making webhook ingestion asynchronous changes the response contract that ten Epic 6 and 7 tests assert against. It deserves its own slice with a considered migration, not a change smuggled in beside a consumer framework.
+**Historical note:** US5.4 was deliberately deferred in this increment because it changed the Epic 6 and 7 response contract. The dedicated 2026-09-21 slice above completed that migration and its regression coverage.
 
 ### 2026-09-20 — The datastore survives a restart
 
@@ -360,7 +377,7 @@ curl -X POST http://localhost:3000/integrations/monitoring/webhooks \
         "service":"checkout","environment":"production"}}'
 ```
 
-Refresh the UI: a new `INC-*` card appears in **Triaged**, tagged SEV1/P0. Open it → **Monitoring evidence** shows the `Affects SVC-CHECKOUT-API` tag and the alert row. Re-send with a new `x-delivery-id` and the same `dedupe_key` — still one card, now reading `2 occurrences`.
+The request returns HTTP 202 with a `status_url`. Poll that URL with the same `x-org-id` until it reports `completed`, then refresh the UI: a new `INC-*` card appears in **Triaged**, tagged SEV1/P0. Open it → **Monitoring evidence** shows the `Affects SVC-CHECKOUT-API` tag and the alert row. Re-send with a new `x-delivery-id` and the same `dedupe_key` — still one card, now reading `2 occurrences` after that delivery completes.
 
 ### 2. Automation proposes, a human confirms
 
@@ -447,7 +464,7 @@ npm run test:ui
 
 Named plainly so nobody mistakes the pilot for a product:
 
-- **Epic 5 remaining boundary** — work-item mutations use a transactional outbox and consumption is idempotent, retried and dead-lettered, but the dispatcher is still in-process and bootstrap-driven. There is no Kafka/MSK, continuous multi-worker poller or asynchronous webhook ingestion (US5.4).
+- **Epic 5 production boundary** — work-item mutations and HTTP 202 webhook acceptance use a transactional outbox, and consumption is idempotent, retried and dead-lettered, but dispatch and processing are still in-process. There is no Kafka/MSK, continuous multi-worker leasing or long-duration retry scheduler.
 - **Epic 8 transports** — routing, fallback and the delivery log are real, but no message actually leaves the process. The channel adapters are stubs awaiting SES/SendGrid, the Slack Web API and Microsoft Graph. `IncidentAutoCreated` is also not yet routed; only the three SLA events are.
 - **Identity hardening** — bearer credentials now prove tenant and principal in production mode, but SSO/OIDC/SAML, SCIM, a login UI and provider-specific integration credentials are not built. Dev mode still permits explicit header identity for the pilot UI.
 - **Epic 11** — no CMDB federation. Alert-discovered Services are lightweight stubs flagged `monitoring_discovery`.

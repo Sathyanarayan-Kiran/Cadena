@@ -3,8 +3,10 @@ import {
   Controller,
   Get,
   Headers,
+  HttpCode,
   HttpException,
   HttpStatus,
+  Inject,
   Param,
   Post,
   Query,
@@ -12,6 +14,7 @@ import {
 import { InvalidIntegrationPayloadError } from './integration.service';
 import { MonitoringIntegrationService } from './monitoring.service';
 import { MonitoringWebhookDto, UpdateMonitoringSettingsDto } from './monitoring.types';
+import { InboundWebhookQueueService } from './inbound-webhook-queue.service';
 
 function requireOrg(orgId?: string): string {
   if (!orgId?.trim()) {
@@ -41,9 +44,15 @@ function toHttpError(error: unknown): never {
  */
 @Controller('integrations/monitoring')
 export class MonitoringIntegrationController {
-  private readonly service = new MonitoringIntegrationService();
+  constructor(
+    @Inject(InboundWebhookQueueService)
+    private readonly queue: InboundWebhookQueueService,
+    @Inject(MonitoringIntegrationService)
+    private readonly service: MonitoringIntegrationService,
+  ) {}
 
   @Post('webhooks')
+  @HttpCode(HttpStatus.ACCEPTED)
   async receiveWebhook(
     @Body() body: MonitoringWebhookDto,
     @Headers('x-org-id') orgId?: string,
@@ -53,7 +62,7 @@ export class MonitoringIntegrationController {
     const tenant = requireOrg(orgId);
     const deliveryId = deliveryHeader || monitoringDelivery || body?.delivery_id || '';
     try {
-      return await this.service.processMonitoringWebhook(tenant, body, deliveryId);
+      return await this.queue.enqueueMonitoring(tenant, body, deliveryId);
     } catch (error) {
       toHttpError(error);
     }

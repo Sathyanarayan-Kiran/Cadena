@@ -4,6 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
+import { postMonitoringAndWait } from './integration-webhook-helpers';
 
 describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', () => {
   let app: INestApplication;
@@ -27,11 +28,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
   });
 
   it('creates a Triaged Incident with severity mapped from the alert', async () => {
-    const response = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.1-fired-1')
-      .send({
+    const response = await postMonitoringAndWait(
+      server(), orgId, 'us7.1-fired-1', {
         provider: 'datadog',
         event_type: 'alert_fired',
         alert: {
@@ -44,8 +42,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
           url: 'https://app.datadoghq.example/monitors/4821',
           triggered_at: '2026-09-20T09:00:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(response.body.outcome).toBe('incident_created');
     expect(response.body.severity).toMatchObject({
@@ -81,11 +79,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
     ];
 
     for (const [index, testCase] of cases.entries()) {
-      const response = await request(server())
-        .post('/integrations/monitoring/webhooks')
-        .set('x-org-id', orgId)
-        .set('x-delivery-id', `us7.1-severity-${index}`)
-        .send({
+      const response = await postMonitoringAndWait(
+        server(), orgId, `us7.1-severity-${index}`, {
           provider: 'datadog',
           event_type: 'alert_fired',
           alert: {
@@ -94,8 +89,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
             severity: testCase.severity,
             triggered_at: '2026-09-20T09:05:00.000Z',
           },
-        })
-        .expect(201);
+        },
+      );
 
       expect(response.body.outcome).toBe('incident_created');
       expect(response.body.severity.mapped).toBe(testCase.expected);
@@ -104,11 +99,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
   });
 
   it('updates the existing Incident when the same alert refires inside the dedupe window', async () => {
-    const first = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.1-dedupe-first')
-      .send({
+    const first = await postMonitoringAndWait(
+      server(), orgId, 'us7.1-dedupe-first', {
         provider: 'datadog',
         event_type: 'alert_fired',
         alert: {
@@ -118,15 +110,12 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
           severity: 'warning',
           triggered_at: '2026-09-20T10:00:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
     expect(first.body.outcome).toBe('incident_created');
 
-    const refire = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.1-dedupe-refire')
-      .send({
+    const refire = await postMonitoringAndWait(
+      server(), orgId, 'us7.1-dedupe-refire', {
         provider: 'datadog',
         event_type: 'alert_fired',
         alert: {
@@ -136,8 +125,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
           severity: 'critical',
           triggered_at: '2026-09-20T10:20:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(refire.body.outcome).toBe('incident_deduplicated');
     expect(refire.body.incident.id).toBe(first.body.incident.id);
@@ -159,11 +148,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
   });
 
   it('opens a new Incident when the same alert returns outside the dedupe window', async () => {
-    const recurrence = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.1-dedupe-window-expired')
-      .send({
+    const recurrence = await postMonitoringAndWait(
+      server(), orgId, 'us7.1-dedupe-window-expired', {
         provider: 'datadog',
         event_type: 'alert_fired',
         alert: {
@@ -173,8 +159,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
           severity: 'warning',
           triggered_at: '2026-09-20T14:00:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(recurrence.body.outcome).toBe('incident_created');
     const incidents = await request(server())
@@ -186,11 +172,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
   });
 
   it('records but suppresses alerts below the configured severity threshold', async () => {
-    const response = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.1-below-threshold')
-      .send({
+    const response = await postMonitoringAndWait(
+      server(), orgId, 'us7.1-below-threshold', {
         provider: 'datadog',
         event_type: 'alert_fired',
         alert: {
@@ -199,8 +182,8 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
           severity: 'info',
           triggered_at: '2026-09-20T11:00:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(response.body.outcome).toBe('suppressed_below_threshold');
     expect(response.body.severity.mapped).toBe('SEV4');
@@ -222,20 +205,14 @@ describe('US7.1 — Monitoring alerts auto-create and deduplicate Incidents', ()
       },
     };
 
-    const first = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.1-replay')
-      .send(payload)
-      .expect(201);
+    const first = await postMonitoringAndWait(
+      server(), orgId, 'us7.1-replay', payload,
+    );
     expect(first.body.duplicate).toBe(false);
 
-    const replay = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.1-replay')
-      .send(payload)
-      .expect(201);
+    const replay = await postMonitoringAndWait(
+      server(), orgId, 'us7.1-replay', payload,
+    );
 
     expect(replay.body.duplicate).toBe(true);
     expect(replay.body.incident.id).toBe(first.body.incident.id);

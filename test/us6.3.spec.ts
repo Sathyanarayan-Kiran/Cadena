@@ -4,6 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
+import { postGitAndWait } from './integration-webhook-helpers';
 
 describe('US6.3 — Deployment and release traceability', () => {
   let app: INestApplication;
@@ -49,12 +50,9 @@ describe('US6.3 — Deployment and release traceability', () => {
       },
     };
 
-    const webhook = await request(app.getHttpServer())
-      .post('/integrations/git/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us6.3-deployment')
-      .send(payload)
-      .expect(201);
+    const webhook = await postGitAndWait(
+      app.getHttpServer(), orgId, 'us6.3-deployment', payload,
+    );
 
     expect(webhook.body.linked_work_item_keys).toEqual(
       expect.arrayContaining([release.body.key, story.body.key]),
@@ -85,12 +83,9 @@ describe('US6.3 — Deployment and release traceability', () => {
       });
     }
 
-    const duplicate = await request(app.getHttpServer())
-      .post('/integrations/git/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us6.3-deployment')
-      .send(payload)
-      .expect(201);
+    const duplicate = await postGitAndWait(
+      app.getHttpServer(), orgId, 'us6.3-deployment', payload,
+    );
     expect(duplicate.body.duplicate).toBe(true);
     expect(duplicate.body.transitions[0].outcome).toBe('applied');
   });

@@ -4,6 +4,7 @@ import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
+import { postMonitoringAndWait } from './integration-webhook-helpers';
 
 describe('US7.2 — Auto-created Incidents are linked to the affected Service', () => {
   let app: INestApplication;
@@ -42,11 +43,8 @@ describe('US7.2 — Auto-created Incidents are linked to the affected Service', 
 
     expect(service.body).toMatchObject({ service_key: 'SVC-PAYMENTS-API', source: 'internal' });
 
-    const alert = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.2-service-match')
-      .send({
+    const alert = await postMonitoringAndWait(
+      server(), orgId, 'us7.2-service-match', {
         provider: 'prometheus',
         event_type: 'alert_fired',
         alert: {
@@ -58,8 +56,8 @@ describe('US7.2 — Auto-created Incidents are linked to the affected Service', 
           environment: 'production',
           triggered_at: '2026-09-20T09:00:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(alert.body.outcome).toBe('incident_created');
     expect(alert.body.affected_services).toEqual([
@@ -95,11 +93,8 @@ describe('US7.2 — Auto-created Incidents are linked to the affected Service', 
   });
 
   it('registers a discovered Service when the alert names one the registry does not hold', async () => {
-    const alert = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.2-service-discovered')
-      .send({
+    const alert = await postMonitoringAndWait(
+      server(), orgId, 'us7.2-service-discovered', {
         provider: 'prometheus',
         event_type: 'alert_fired',
         alert: {
@@ -111,8 +106,8 @@ describe('US7.2 — Auto-created Incidents are linked to the affected Service', 
           environment: 'production',
           triggered_at: '2026-09-20T09:30:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(alert.body.affected_services).toEqual([
       { service_key: 'SVC-SEARCH-INDEXER', name: 'search-indexer', source: 'monitoring_discovery' },

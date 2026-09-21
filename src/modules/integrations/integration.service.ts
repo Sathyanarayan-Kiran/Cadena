@@ -46,20 +46,31 @@ export class IntegrationService {
     );
 
     try {
-      const result = await this.processEvent(orgId, provider, deliveryId, dto);
-      await this.support.completeDelivery(deliveryRecordId, result);
-      await this.eventBus.publish(
-        'IntegrationDeliveryProcessed',
-        result.artifacts[0]?.id || deliveryRecordId,
-        { type: 'integration', id: provider },
-        { org_id: orgId, delivery_id: deliveryId, event_type: dto.event_type, result },
-      );
-      return result;
+      return await this.processQueuedGitWebhook(deliveryRecordId, orgId, provider, deliveryId, dto);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown integration error';
       await this.support.failDelivery(deliveryRecordId, message);
       throw error;
     }
+  }
+
+  /** Processes a delivery already persisted by the HTTP 202 ingestion queue. */
+  public async processQueuedGitWebhook(
+    deliveryRecordId: string,
+    orgId: string,
+    provider: string,
+    deliveryId: string,
+    dto: GitWebhookDto,
+  ): Promise<IntegrationDeliveryResult> {
+    const result = await this.processEvent(orgId, provider, deliveryId, dto);
+    await this.support.completeDelivery(deliveryRecordId, result);
+    await this.eventBus.publish(
+      'IntegrationDeliveryProcessed',
+      result.artifacts[0]?.id || deliveryRecordId,
+      { type: 'integration', id: provider },
+      { org_id: orgId, delivery_id: deliveryId, event_type: dto.event_type, result },
+    );
+    return result;
   }
 
   public async listExternalLinks(workItemId: string, orgId: string): Promise<Array<ExternalArtifact & {
@@ -202,7 +213,7 @@ export class IntegrationService {
     };
   }
 
-  private validateWebhook(dto: GitWebhookDto, deliveryId: string): void {
+  public validateWebhook(dto: GitWebhookDto, deliveryId: string): void {
     if (!deliveryId?.trim()) throw new InvalidIntegrationPayloadError('delivery_id is required');
     if (!dto.repository?.trim()) throw new InvalidIntegrationPayloadError('repository is required');
     if (!['push', 'pull_request', 'deployment'].includes(dto.event_type)) {

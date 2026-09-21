@@ -5,6 +5,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
 import { EventStoreService } from '../src/modules/events/event-store.service';
+import { postGitAndWait } from './integration-webhook-helpers';
 
 describe('US9.4 — DORA and ITIL metrics computed from recorded history', () => {
   let app: INestApplication;
@@ -28,12 +29,7 @@ describe('US9.4 — DORA and ITIL metrics computed from recorded history', () =>
   }
 
   async function git(deliveryId: string, body: object) {
-    return request(server())
-      .post('/integrations/git/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', deliveryId)
-      .send(body)
-      .expect(201);
+    return postGitAndWait(server(), orgId, deliveryId, body);
   }
 
   beforeAll(async () => {

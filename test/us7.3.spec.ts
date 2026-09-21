@@ -5,6 +5,7 @@ import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/database/database.service';
 import { InProcessEventBus } from '../src/modules/events/event-bus';
+import { postMonitoringAndWait } from './integration-webhook-helpers';
 
 describe('US7.3 — A resolved alert proposes mitigation without closing the Incident', () => {
   let app: INestApplication;
@@ -14,11 +15,7 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
   const server = () => app.getHttpServer();
 
   async function fireAlert(deliveryId: string, dedupeKey: string, triggeredAt: string) {
-    return request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', deliveryId)
-      .send({
+    return postMonitoringAndWait(server(), orgId, deliveryId, {
         provider: 'pagerduty',
         event_type: 'alert_fired',
         alert: {
@@ -29,8 +26,7 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
           monitor_name: 'cart-availability',
           triggered_at: triggeredAt,
         },
-      })
-      .expect(201);
+      });
   }
 
   beforeAll(async () => {
@@ -52,11 +48,8 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
 
     InProcessEventBus.getInstance().clearEmittedEvents();
 
-    const resolved = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.3-resolved')
-      .send({
+    const resolved = await postMonitoringAndWait(
+      server(), orgId, 'us7.3-resolved', {
         provider: 'pagerduty',
         event_type: 'alert_resolved',
         alert: {
@@ -66,8 +59,8 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
           severity: 'critical',
           resolved_at: '2026-09-20T09:42:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(resolved.body.outcome).toBe('mitigation_proposed');
     expect(resolved.body.incident.status).toBe('Mitigated');
@@ -119,11 +112,8 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
 
     const fired = await fireAlert('us7.3-guarded-fired', 'checkout-availability', '2026-09-20T11:00:00.000Z');
 
-    const resolved = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.3-guarded-resolved')
-      .send({
+    const resolved = await postMonitoringAndWait(
+      server(), orgId, 'us7.3-guarded-resolved', {
         provider: 'pagerduty',
         event_type: 'alert_resolved',
         alert: {
@@ -133,8 +123,8 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
           severity: 'critical',
           resolved_at: '2026-09-20T11:30:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(resolved.body.transitions).toHaveLength(1);
     expect(resolved.body.transitions[0]).toMatchObject({ to_state: 'Investigating', outcome: 'skipped' });
@@ -154,11 +144,8 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
   });
 
   it('records a resolution with no linked Incident as evidence only', async () => {
-    const response = await request(server())
-      .post('/integrations/monitoring/webhooks')
-      .set('x-org-id', orgId)
-      .set('x-delivery-id', 'us7.3-orphan-resolution')
-      .send({
+    const response = await postMonitoringAndWait(
+      server(), orgId, 'us7.3-orphan-resolution', {
         provider: 'pagerduty',
         event_type: 'alert_resolved',
         alert: {
@@ -167,8 +154,8 @@ describe('US7.3 — A resolved alert proposes mitigation without closing the Inc
           title: 'Alert that this tenant never received',
           resolved_at: '2026-09-20T12:00:00.000Z',
         },
-      })
-      .expect(201);
+      },
+    );
 
     expect(response.body.outcome).toBe('no_linked_incident');
     expect(response.body.incident).toBeNull();

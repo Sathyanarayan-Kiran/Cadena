@@ -191,23 +191,36 @@ export class MonitoringIntegrationService {
     );
 
     try {
-      const result = dto.event_type === 'alert_fired'
-        ? await this.handleAlertFired(orgId, provider, deliveryId, dto.alert)
-        : await this.handleAlertResolved(orgId, provider, deliveryId, dto.alert);
-
-      await this.support.completeDelivery(deliveryRecordId, result);
-      await this.eventBus.publish(
-        'MonitoringAlertReceived',
-        result.incident?.id || result.alert_artifact_id,
-        { type: 'integration', id: provider },
-        { org_id: orgId, delivery_id: deliveryId, event_type: dto.event_type, result },
+      return await this.processQueuedMonitoringWebhook(
+        deliveryRecordId, orgId, provider, deliveryId, dto,
       );
-      return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown monitoring integration error';
       await this.support.failDelivery(deliveryRecordId, message);
       throw error;
     }
+  }
+
+  /** Processes a delivery already persisted by the HTTP 202 ingestion queue. */
+  public async processQueuedMonitoringWebhook(
+    deliveryRecordId: string,
+    orgId: string,
+    provider: string,
+    deliveryId: string,
+    dto: MonitoringWebhookDto,
+  ): Promise<MonitoringDeliveryResult> {
+    const result = dto.event_type === 'alert_fired'
+      ? await this.handleAlertFired(orgId, provider, deliveryId, dto.alert)
+      : await this.handleAlertResolved(orgId, provider, deliveryId, dto.alert);
+
+    await this.support.completeDelivery(deliveryRecordId, result);
+    await this.eventBus.publish(
+      'MonitoringAlertReceived',
+      result.incident?.id || result.alert_artifact_id,
+      { type: 'integration', id: provider },
+      { org_id: orgId, delivery_id: deliveryId, event_type: dto.event_type, result },
+    );
+    return result;
   }
 
   public async getDelivery(orgId: string, provider: string, deliveryId: string): Promise<any | null> {
@@ -630,7 +643,7 @@ export class MonitoringIntegrationService {
   // Helpers
   // ---------------------------------------------------------------------------------------
 
-  private validateWebhook(dto: MonitoringWebhookDto, deliveryId: string): void {
+  public validateWebhook(dto: MonitoringWebhookDto, deliveryId: string): void {
     if (!deliveryId?.trim()) {
       throw new InvalidIntegrationPayloadError(
         'A delivery identifier is required; send x-delivery-id, x-monitoring-delivery, or delivery_id',

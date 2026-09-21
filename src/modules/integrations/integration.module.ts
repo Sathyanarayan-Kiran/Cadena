@@ -3,6 +3,7 @@ import { ExternalArtifactController, GitIntegrationController } from './integrat
 import { IntegrationService } from './integration.service';
 import { MonitoringEvidenceController, MonitoringIntegrationController } from './monitoring.controller';
 import { MonitoringIntegrationService } from './monitoring.service';
+import { InboundWebhookQueueService } from './inbound-webhook-queue.service';
 
 @Module({
   controllers: [
@@ -11,7 +12,7 @@ import { MonitoringIntegrationService } from './monitoring.service';
     MonitoringIntegrationController,
     MonitoringEvidenceController,
   ],
-  providers: [IntegrationService, MonitoringIntegrationService],
-  exports: [IntegrationService, MonitoringIntegrationService],
+  providers: [IntegrationService, MonitoringIntegrationService, InboundWebhookQueueService],
+  exports: [IntegrationService, MonitoringIntegrationService, InboundWebhookQueueService],
 })
 export class IntegrationModule {}
