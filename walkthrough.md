@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified.
-**Verification:** 84 automated tests across 27 test files, plus 7 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 5 consumption reliability, Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified. The canonical backlog is **20 epics / 71 stories**.
+**Verification:** 94 automated tests across 28 test files, plus 9 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,27 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-21 — Review remediation and master-backlog consolidation
+
+An external review of `ebc53c2` found four functional risks and two documentation gaps. All are closed; the entry is recorded here because this document skipped the increment, which is exactly the drift a dated log exists to prevent.
+
+**Functional fixes**
+
+| Finding | Fix |
+| --- | --- |
+| DLQ operations were not tenant-isolated | `get`, `replay` and `discard` are scoped by tenant, and another tenant's entry reports **not found** rather than forbidden, so existence cannot be probed |
+| Restart overwrote persisted configuration | Pilot seeding moved to `src/bootstrap/pilot-configuration.ts` and is now insert-only, so an operator's preferences, thresholds and escalation target survive a restart |
+| Consumer idempotency raced under concurrent delivery | The check-then-act became a single atomic claim; exactly one of two simultaneous deliveries runs the side effect |
+| SLA suppression was in-memory only | Emissions are recorded in `sla_emissions`, so a restart no longer re-notifies owners about work that already warned |
+
+A defect the review did not raise was also closed: a process that died mid-handler left its claim in `processing` forever. Abandoned claims are now returned to `failed` at startup.
+
+**A design decision that went the other way.** An earlier draft exposed an `untenanted_total` on `/dlq/depth`. It was removed, because a global failure count handed to every tenant leaks cross-tenant operational signal. The consequence is that an event with no resolvable tenant appears in no tenant view at all, so it is now logged when it happens: still invisible to the API, no longer silent. A platform-operator surface under its own authorization model is the real fix and is deliberately not built.
+
+**Hardening from the follow-up review.** `DeadLetterService.list()` and `depth()` took an optional tenant and fell back to global scope when it was omitted — the same shape as the defect just fixed, reachable the moment a second caller appeared. The tenant is now a required argument, so the compiler rejects an unscoped query.
+
+**Backlog consolidation.** `cadena-master-epics-and-user-stories.md` was reviewed against the canonical backlog rather than appended, since it carries its own Epic 1–10 numbering that would have collided with the existing Epic 1–16. Nine existing stories gained missing acceptance criteria and fifteen genuinely new stories were added across four new epics and six existing ones: **16 epics / 56 stories → 20 epics / 71 stories**, with every original id and delivery status preserved.
 
 ### 2026-09-20 — Reliable event consumption: idempotency, retry, dead letters (Epic 5)
 
@@ -253,7 +274,7 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 84 tests across 27 files
+npm test        # 94 tests across 28 files
 npm run test:ui # 7 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
@@ -326,8 +347,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  27 passed (27)
-      Tests  84 passed (84)
+ Test Files  28 passed (28)
+      Tests  94 passed (94)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -335,7 +356,7 @@ Plus the browser smoke suite, run separately because it builds and takes ~140 se
 ```
 npm run test:ui
  Test Files  1 passed (1)
-      Tests  7 passed (7)
+      Tests  9 passed (9)
 ```
 
 | Area | Tests |

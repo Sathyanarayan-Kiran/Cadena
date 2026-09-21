@@ -102,6 +102,8 @@ Persistence, notifications and reliable consumption were individually covered, b
 - `GET /dlq/:id`, replay and discard now carry the authenticated `x-org-id` into the service and query by both entry id and tenant.
 - Cross-tenant probes return `404`, including replay attempts containing a replacement payload, so an entry cannot be discovered or modified through its UUID.
 - List and depth remain tenant-scoped and expose no global or untenanted failure metadata.
+- **Follow-up review remediation (2026-09-21).** `DeadLetterService.list()` and `depth()` still accepted an optional tenant and fell back to global scope when it was omitted. No caller did so, but that is the same shape as the defect just fixed on `get`/`replay`/`discard` and would have become reachable with a second caller. Both now take the tenant as a required argument, making the guarantee structural rather than conventional.
+- **Untenanted dead letters are logged (2026-09-21).** Removing `untenanted_total` was correct — a global failure count handed to every tenant leaks cross-tenant operational signal — but it left an unresolvable-tenant event absent from every view with nothing recording that it happened. Such an event is now logged at dead-letter time, covered by `test/review-regressions.spec.ts`. This reduces the gap from silent to observable; it does not close it, and the platform-operator surface remains unbuilt by choice.
 - Tenant resolution used by the event store and dead-letter writer now shares one implementation, including the work-item fallback for envelopes whose payload omitted `org_id`.
 
 #### Atomic consumer idempotency and crash recovery

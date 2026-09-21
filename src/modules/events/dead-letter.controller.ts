@@ -36,8 +36,7 @@ export class DeadLetterController {
     @Query('status') status?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.service.list({
-      org_id: requireOrg(orgId),
+    return this.service.list(requireOrg(orgId), {
       consumer,
       status,
       limit: limit ? Number(limit) : undefined,

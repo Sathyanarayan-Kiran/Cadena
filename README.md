@@ -22,7 +22,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA and ITIL flow metrics computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 93 automated tests across 28 test files, plus a 9-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 94 automated tests across 28 test files, plus a 9-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -68,7 +68,7 @@ Expected output:
  ✓ test/backlog-fixture.spec.ts (1 test)
 
  Test Files  28 passed (28)
-      Tests  93 passed (93)
+      Tests  94 passed (94)
 ```
 
 ### 2. Run the Server
@@ -419,7 +419,7 @@ POST /dlq/:id/discard    { "reason": "superseded" }
 
 **Replay preserves identity.** The corrected event keeps its original `event_id` and is re-dispatched only to the consumer that failed, so the audit trail stays continuous and no other consumer is re-triggered. A replay that fails again stays queued rather than vanishing.
 
-Every dead-letter read, depth calculation and mutation is scoped to the calling tenant, and an entry belonging to another tenant reports as **not found** rather than forbidden, so a caller cannot probe for the existence of other tenants' failures. Events whose tenant cannot be resolved are deliberately absent from tenant APIs; a future platform-operator surface can expose them under a different authorization model.
+Every dead-letter read, depth calculation and mutation takes the tenant as a required argument rather than an optional filter, so an unscoped query cannot be expressed and the compiler rejects an attempt to omit it. Each is scoped to the calling tenant, and an entry belonging to another tenant reports as **not found** rather than forbidden, so a caller cannot probe for the existence of other tenants' failures. Events whose tenant cannot be resolved are deliberately absent from tenant APIs, and are logged when they occur so the failure is invisible to the API without being silent to an operator reading the logs; a future platform-operator surface can expose them under a different authorization model.
 
 **Boundaries:**
 

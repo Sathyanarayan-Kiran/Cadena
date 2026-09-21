@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { Test } from '@nestjs/testing';
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
@@ -120,6 +120,35 @@ describe('Review regressions', () => {
       const otherDepth = await request(server()).get('/dlq/depth').set('x-org-id', tenantB).expect(200);
       expect(otherDepth.body).toMatchObject({ total: 0, by_consumer: {}, alerting: false });
       expect(otherDepth.body).not.toHaveProperty('untenanted_total');
+    });
+  });
+
+  describe('Finding 2b — an untenanted dead letter is logged rather than silent', () => {
+    it('warns when a dead-lettered event has no resolvable tenant', async () => {
+      // No org_id in the payload and a work_item_id that matches no work item, so neither
+      // resolution path finds a tenant. Such an entry is deliberately absent from every
+      // tenant-scoped view, which is precisely why it must not also be silent.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        await InProcessEventBus.getInstance().publish(
+          'ReviewProbeEvent',
+          randomUUID(),
+          { type: 'system', id: 'review' },
+          { note: 'no tenant anywhere in this payload' },
+        );
+
+        const warned = warn.mock.calls.map((args) => String(args[0])).join(' | ');
+        expect(warned).toContain('no resolvable tenant');
+        expect(warned).toContain('review-failing-consumer');
+      } finally {
+        warn.mockRestore();
+      }
+
+      // It is still absent from both tenants' views, as designed.
+      for (const tenant of [tenantA, tenantB]) {
+        const list = await request(server()).get('/dlq').set('x-org-id', tenant).expect(200);
+        expect(list.body.some((e: any) => e.org_id === null)).toBe(false);
+      }
     });
   });
 

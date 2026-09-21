@@ -45,39 +45,46 @@ export class DeadLetterService {
   private dbService = DatabaseService.getInstance();
   private registry = new EventConsumerRegistry();
 
-  public async list(filter: { org_id?: string; consumer?: string; status?: string; limit?: number } = {}): Promise<DeadLetterEntry[]> {
+  /**
+   * The tenant is a required argument rather than an optional filter.
+   *
+   * It was optional, which meant a caller that simply forgot it received every tenant's
+   * failures. That is the same shape as the defect already fixed on `get`, `replay` and
+   * `discard`, so the guarantee is made structural here: there is no way to express an
+   * unscoped query, and the compiler rejects an attempt to omit it.
+   */
+  public async list(
+    orgId: string,
+    filter: { consumer?: string; status?: string; limit?: number } = {},
+  ): Promise<DeadLetterEntry[]> {
     await this.dbService.initialize();
-    const params: any[] = [];
-    const where: string[] = [];
+    const params: any[] = [orgId];
+    const where: string[] = ['org_id = $1'];
 
-    if (filter.org_id) { params.push(filter.org_id); where.push(`org_id = $${params.length}`); }
     if (filter.consumer) { params.push(filter.consumer); where.push(`consumer = $${params.length}`); }
     if (filter.status) { params.push(filter.status); where.push(`status = $${params.length}`); }
 
     params.push(Math.min(Math.max(filter.limit || 100, 1), 500));
     const result = await this.dbService.db.query<any>(
       `SELECT * FROM dead_letter_events
-       ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+       WHERE ${where.join(' AND ')}
        ORDER BY created_at DESC LIMIT $${params.length}`,
       params,
     );
     return result.rows.map((row) => this.map(row));
   }
 
-  /** Depth per consumer. US5.3 treats any depth above zero as alertable. */
-  public async depth(orgId?: string): Promise<{
+  /** Depth per consumer for one tenant. US5.3 treats any depth above zero as alertable. */
+  public async depth(orgId: string): Promise<{
     total: number;
     by_consumer: Record<string, number>;
     alerting: boolean;
   }> {
     await this.dbService.initialize();
     const result = await this.dbService.db.query<any>(
-      orgId
-        ? `SELECT consumer, COUNT(*)::int AS n FROM dead_letter_events
-           WHERE status = 'dead' AND org_id = $1 GROUP BY consumer`
-        : `SELECT consumer, COUNT(*)::int AS n FROM dead_letter_events
-           WHERE status = 'dead' GROUP BY consumer`,
-      orgId ? [orgId] : [],
+      `SELECT consumer, COUNT(*)::int AS n FROM dead_letter_events
+       WHERE status = 'dead' AND org_id = $1 GROUP BY consumer`,
+      [orgId],
     );
 
     const byConsumer: Record<string, number> = {};

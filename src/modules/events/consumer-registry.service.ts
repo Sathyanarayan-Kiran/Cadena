@@ -216,6 +216,16 @@ export class EventConsumerRegistry implements OnModuleInit {
     // Resolved rather than read straight off the payload: an entry with no tenant is
     // invisible to the tenant-scoped API, so guessing null here would hide real failures.
     const orgId = await resolveEventOrgId(event);
+    if (!orgId) {
+      // Deliberately absent from every tenant-scoped API, so without this line the failure
+      // would be unobservable. A platform-operator surface under a separate authorization
+      // model is the real fix and is not built; logging at least removes the silence.
+      console.warn(
+        `Dead-lettered event ${event.event_id} (${event.event_type}) for consumer '${consumer}' `
+        + `has no resolvable tenant and will not appear in any tenant-scoped dead-letter view. `
+        + `Last error: ${error}`,
+      );
+    }
     await this.dbService.db.query(
       `INSERT INTO dead_letter_events
        (id, consumer, event_id, org_id, event_type, envelope, attempts, last_error, status, created_at, updated_at)
