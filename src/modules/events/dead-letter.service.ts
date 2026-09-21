@@ -65,7 +65,11 @@ export class DeadLetterService {
   }
 
   /** Depth per consumer. US5.3 treats any depth above zero as alertable. */
-  public async depth(orgId?: string): Promise<{ total: number; by_consumer: Record<string, number>; alerting: boolean }> {
+  public async depth(orgId?: string): Promise<{
+    total: number;
+    by_consumer: Record<string, number>;
+    alerting: boolean;
+  }> {
     await this.dbService.initialize();
     const result = await this.dbService.db.query<any>(
       orgId
@@ -85,11 +89,15 @@ export class DeadLetterService {
     return { total, by_consumer: byConsumer, alerting: total > 0 };
   }
 
-  public async get(id: string): Promise<DeadLetterEntry> {
+  /**
+   * Tenant-scoped by id. An entry belonging to another tenant reports as not found rather
+   * than forbidden, so a caller cannot probe for the existence of other tenants' failures.
+   */
+  public async get(id: string, orgId: string): Promise<DeadLetterEntry> {
     await this.dbService.initialize();
     const result = await this.dbService.db.query<any>(
-      `SELECT * FROM dead_letter_events WHERE id = $1`,
-      [id],
+      `SELECT * FROM dead_letter_events WHERE id = $1 AND org_id = $2`,
+      [id, orgId],
     );
     if (result.rows.length === 0) throw new DeadLetterNotFoundError(id);
     return this.map(result.rows[0]);
@@ -102,13 +110,13 @@ export class DeadLetterService {
    * re-injection. The envelope identity — event id, type, actor, timestamp — is preserved,
    * because a replay is the same event being tried again, not a new one.
    */
-  public async replay(id: string, payload?: Record<string, unknown>): Promise<{
+  public async replay(id: string, orgId: string, payload?: Record<string, unknown>): Promise<{
     entry: DeadLetterEntry;
     outcome: string;
     attempts: number;
     error?: string;
   }> {
-    const entry = await this.get(id);
+    const entry = await this.get(id, orgId);
     if (entry.status === 'discarded') {
       throw new InvalidReplayError(`Entry '${id}' was discarded and cannot be replayed`);
     }
@@ -153,7 +161,7 @@ export class DeadLetterService {
     }
 
     return {
-      entry: await this.get(id),
+      entry: await this.get(id, orgId),
       outcome: result.outcome,
       attempts: result.attempts,
       ...(result.error ? { error: result.error } : {}),
@@ -161,8 +169,8 @@ export class DeadLetterService {
   }
 
   /** Marks an entry as deliberately abandoned, so it stops counting toward depth. */
-  public async discard(id: string, reason?: string): Promise<DeadLetterEntry> {
-    const entry = await this.get(id);
+  public async discard(id: string, orgId: string, reason?: string): Promise<DeadLetterEntry> {
+    const entry = await this.get(id, orgId);
     await this.dbService.db.query(
       `UPDATE dead_letter_events
        SET status = 'discarded', resolved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
@@ -170,7 +178,7 @@ export class DeadLetterService {
        WHERE id = $2`,
       [reason ? `discarded: ${reason}` : null, entry.id],
     );
-    return this.get(id);
+    return this.get(id, orgId);
   }
 
   private map(row: any): DeadLetterEntry {

@@ -116,6 +116,7 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     // which is past both the breach and the lowered escalation threshold.
     await new Promise((resolve) => setTimeout(resolve, 130000));
     await api('/aging/recompute', {});
+
   }
 
   beforeAll(async () => {
@@ -312,6 +313,55 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     expect(body).toContain('Escalated');
 
     await page.select('#agingFilter', '');
+  });
+
+  it('renders the flow metrics view with DORA and ITIL figures', async () => {
+    await closeAnyDialog();
+    await page.click('#openMetricsFromNav');
+    await page.waitForSelector('#metricsDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(
+      () => document.querySelector('#metricsContent')?.textContent?.includes('DORA') ?? false,
+      { timeout: 15000 },
+    );
+
+    const metrics = await lowerTextOf('#metricsContent');
+    expect(metrics).toContain('deployment frequency');
+    expect(metrics).toContain('change failure rate');
+    expect(metrics).toContain('time to restore service');
+    expect(metrics).toContain('itil');
+    expect(metrics).toContain('incidents opened');
+    // The coverage note must be shown, so a figure over partial evidence says so.
+    expect(metrics).toContain('lead time covers only deployments');
+
+    await page.select('#metricsWindow', '7');
+    await page.waitForFunction(
+      () => document.querySelector('#metricsContent')?.textContent?.includes('DORA') ?? false,
+      { timeout: 15000 },
+    );
+    await closeAnyDialog();
+  });
+
+  it('renders the dead letters view with its depth summary', async () => {
+    await closeAnyDialog();
+    await page.click('#openDlqFromNav');
+    await page.waitForSelector('#dlqDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(
+      () => (document.querySelector('#dlqContent')?.textContent?.length ?? 0) > 0
+        && !document.querySelector('#dlqContent .skeleton'),
+      { timeout: 15000 },
+    );
+
+    const dlq = await lowerTextOf('#dlqContent');
+    expect(dlq).toContain('awaiting attention');
+
+    // Switching status re-queries rather than leaving a stale list on screen.
+    await page.select('#dlqStatus', 'replayed');
+    await page.waitForFunction(
+      () => !document.querySelector('#dlqContent .skeleton'),
+      { timeout: 15000 },
+    );
+    expect((await textOf('#dlqContent')).length).toBeGreaterThan(0);
+    await closeAnyDialog();
   });
 
   it('renders without console errors and does not overflow at phone width', async () => {

@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
 import { DomainEventEnvelope, InProcessEventBus } from './event-bus';
+import { resolveEventOrgId } from './tenant-resolution';
 
 export interface ConsumerDefinition {
   /** Stable name. Idempotency and the dead-letter queue are keyed on it, so it must not drift. */
@@ -42,13 +43,27 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
  * reinvented that logic or quietly swallowed its own failures.
  */
 @Injectable()
-export class EventConsumerRegistry {
+export class EventConsumerRegistry implements OnModuleInit {
   private dbService = DatabaseService.getInstance();
   private eventBus = InProcessEventBus.getInstance();
 
   // Static so a controller instantiated outside Nest's container still sees registrations.
   private static consumers = new Map<string, ConsumerDefinition>();
   private static wired = new Map<InProcessEventBus, Set<string>>();
+
+  /**
+   * A process can stop after claiming an event but before recording its outcome. Since PGlite
+   * is single-process storage, every `processing` row left at application start is abandoned.
+   * Returning it to `failed` lets the next delivery claim it instead of suppressing it forever.
+   */
+  public async onModuleInit(): Promise<void> {
+    await this.dbService.initialize();
+    await this.dbService.db.query(
+      `UPDATE event_consumptions
+       SET status = 'failed', last_attempt_at = CURRENT_TIMESTAMP
+       WHERE status = 'processing'`,
+    );
+  }
 
   public register(definition: ConsumerDefinition): void {
     EventConsumerRegistry.consumers.set(definition.name, definition);
@@ -101,7 +116,7 @@ export class EventConsumerRegistry {
       throw new Error(`No consumer registered under '${consumerName}'`);
     }
 
-    if (!options.force && await this.alreadyProcessed(consumerName, event.event_id)) {
+    if (!await this.claim(consumerName, event.event_id, options.force === true)) {
       return { consumer: consumerName, event_id: event.event_id, outcome: 'skipped_duplicate', attempts: 0 };
     }
 
@@ -132,12 +147,31 @@ export class EventConsumerRegistry {
     };
   }
 
-  private async alreadyProcessed(consumer: string, eventId: string): Promise<boolean> {
+  /**
+   * Atomically takes ownership of (consumer, event) before the handler runs.
+   *
+   * A read-then-write check was not enough: two concurrent deliveries could both observe
+   * "not yet processed" and both execute the side effect. The claim is a single statement,
+   * so exactly one caller wins. It succeeds when the pair is new, or when a previous
+   * attempt ended in `failed` and is therefore eligible to be retried; it loses when
+   * another delivery is mid-flight (`processing`) or the work is already `processed`.
+   *
+   * `force` is the operator replay path, which deliberately re-runs a settled event.
+   */
+  private async claim(consumer: string, eventId: string, force: boolean): Promise<boolean> {
+    const conflictClause = force
+      ? `DO UPDATE SET status = 'processing', last_attempt_at = CURRENT_TIMESTAMP`
+      : `DO UPDATE SET status = 'processing', last_attempt_at = CURRENT_TIMESTAMP
+         WHERE event_consumptions.status = 'failed'`;
+
     const result = await this.dbService.db.query<any>(
-      `SELECT status FROM event_consumptions WHERE consumer = $1 AND event_id = $2`,
+      `INSERT INTO event_consumptions (consumer, event_id, status, attempts, first_attempt_at, last_attempt_at)
+       VALUES ($1, $2, 'processing', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT (consumer, event_id) ${conflictClause}
+       RETURNING consumer`,
       [consumer, eventId],
     );
-    return result.rows.length > 0 && result.rows[0].status === 'processed';
+    return result.rows.length > 0;
   }
 
   private async markProcessed(consumer: string, eventId: string, attempts: number): Promise<void> {
@@ -179,7 +213,9 @@ export class EventConsumerRegistry {
     attempts: number,
     error: string,
   ): Promise<void> {
-    const orgId = (event.payload as any)?.org_id ?? null;
+    // Resolved rather than read straight off the payload: an entry with no tenant is
+    // invisible to the tenant-scoped API, so guessing null here would hide real failures.
+    const orgId = await resolveEventOrgId(event);
     await this.dbService.db.query(
       `INSERT INTO dead_letter_events
        (id, consumer, event_id, org_id, event_type, envelope, attempts, last_error, status, created_at, updated_at)
@@ -188,7 +224,7 @@ export class EventConsumerRegistry {
          attempts = EXCLUDED.attempts, last_error = EXCLUDED.last_error,
          status = 'dead', resolved_at = NULL, updated_at = CURRENT_TIMESTAMP`,
       [
-        randomUUID(), consumer, event.event_id, typeof orgId === 'string' ? orgId : null,
+        randomUUID(), consumer, event.event_id, orgId,
         event.event_type, JSON.stringify(event), attempts, error,
       ],
     );
@@ -204,7 +240,7 @@ export class EventConsumerRegistry {
       event.work_item_id,
       { type: 'system', id: 'event-consumer-registry' },
       {
-        org_id: typeof orgId === 'string' ? orgId : null,
+        org_id: orgId,
         consumer,
         depth: depthValue,
         event_id: event.event_id,

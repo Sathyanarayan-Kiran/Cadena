@@ -2,6 +2,177 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex master-backlog consolidation — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was reviewed and consolidated by **Codex** from `cadena-master-epics-and-user-stories.md` on 2026-09-21. The source document is retained unchanged; the canonical, non-conflicting result lives in `Backlog.md` and `backlog.json`.
+
+**Status:** Complete. The canonical backlog moves from **16 epics / 56 stories** to **20 epics / 71 stories**. Delivery status remains **23 done / 7 partial**; all newly introduced scope is explicitly not started.
+
+### Consolidation method
+
+The new document presents ten “master” epics numbered 1–10, but those identifiers collide with the platform's original Epic 1–10 and several of its stories repeat capabilities already introduced by the earlier research expansion. Appending it literally would have produced two incompatible Epic 1s and credited duplicate requirements as net-new scope.
+
+Codex therefore used the existing backlog as the canonical identity system:
+
+- Preserve every original epic and story id, implementation status and acceptance criterion.
+- Merge richer criteria into an existing story when the user outcome is the same.
+- Add a new story only when the requested outcome cannot be accepted by an existing story.
+- Add a new epic only when the capability has no coherent existing epic home.
+- Record the source, baseline, additions and expansions as machine-readable delta metadata so the generated status page can prove how its totals changed.
+
+### Delta added by Codex
+
+#### Four new epics
+
+- **E17 — Connector, mapping & ingestion automation:** native connector/entity discovery, visual mappings with a constrained JS/TS sandbox, scheduled JQL/WIQL/encoded-query triggers, and governed historical backfill.
+- **E18 — Cross-organization federation & proxy identity:** invitation-based independent node pairing and project-scoped proxy credentials separated from console identity.
+- **E19 — Configuration lifecycle & simulation:** draft/published versions, visual diffs, rollback and non-destructive dry runs.
+- **E20 — In-context synchronization experience:** a Chrome/Edge ticket panel with twin status and RBAC-gated resync/unlink actions.
+
+#### Fifteen genuinely new stories
+
+- Added to existing epics: **US9.5**, **US10.7**, **US10.8**, **US11.3**, **US16.4**, **US16.5**.
+- Added under E17–E20: **US17.1–US17.4**, **US18.1–US18.2**, **US19.1–US19.2**, **US20.1**.
+
+#### Nine existing stories expanded rather than duplicated
+
+- **US13.1:** validates target-required fields and logs invalid lifecycle jumps.
+- **US13.2:** immutable correlation now covers one-to-many and many-to-one trees.
+- **US13.4:** comment privacy now includes direction, role filtering and author attribution.
+- **US14.1:** explicit bidirectional HTML/ADF/wiki round trips and active-content sanitization.
+- **US14.2:** direction, MIME and size governance for media.
+- **US15.1:** default similarity threshold, score evidence and consolidation recommendation.
+- **US15.2:** hostname/IP/error-code extraction with CMDB evidence.
+- **US15.3:** policy-controlled low-risk auto-approval alongside high-risk CAB routing.
+- **US16.1:** jittered exponential backoff and operational rate-limit telemetry.
+
+The master story for workflow closure is already fully represented by **US13.1** and **US13.5**, so it did not create another story. This is the kind of semantic de-duplication the consolidation was intended to preserve.
+
+### Delivery ledger changes
+
+- Added `latest_delta` to `implementation-status.json`, recording the source document, date, 16/56 baseline, 20/71 current totals, four added epic ids, fifteen added story ids and nine expanded story ids.
+- Added `addedIn` and `expandedIn` markers without changing any implementation status.
+- Extended `scripts/build-tracker.mjs` to validate that delta metadata against the canonical backlog before generating.
+- Added a fifth headline tally, a dated consolidation callout, **NEW MASTER** / **EXPANDED** badges, and a **Latest master delta** filter to `public/status.html`.
+- Added tracker regression coverage proving the arithmetic, ids and source attribution cannot silently drift.
+
+### Files updated by Codex
+
+- `Backlog.md`
+- `backlog.json`
+- `implementation-status.json`
+- `scripts/build-tracker.mjs`
+- `public/status.html` (generated)
+- `test/tracker.spec.ts`
+- `README.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- JSON/backlog consistency: **PASS — 20 epics, 71 stories, 71 status entries, no missing or orphaned ids**
+- Tracker generation: **PASS — current page includes the dated delta and all 71 stories**
+- Focused tracker/backlog tests: **PASS**
+- Full non-browser regression: **PASS — 28 files, 93 tests**
+- `npm run build`: **PASS**
+- Generated `status.html` JavaScript parse and required delta-content check: **PASS**
+- `git diff --check`: **PASS**
+
+### Deliberate boundaries
+
+- This increment consolidates requirements; it does not claim implementation of the new master-backlog capabilities.
+- The original master document is not renamed or rewritten. Its local Epic 1–10 numbering remains source context only, while E1–E20 in the canonical backlog remains authoritative for delivery tracking.
+- The in-app browser had no available backend in this session, so visual click-through QA of `status.html` was not possible. The generated JavaScript parses, the delta content is explicitly asserted, and model/drift behaviour is covered by `test/tracker.spec.ts`.
+
+---
+
+## Codex reliability and review hardening update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was implemented by **Codex** after reviewing commit `ebc53c2`. It records the corrective work separately from the earlier Gemini baseline and the feature increments below.
+
+**Status:** Complete. All four review findings are fixed and protected by automated regressions; the generated delivery tracker and browser suite are current.
+
+### Why this pass came before another feature
+
+Persistence, notifications and reliable consumption were individually covered, but their interaction exposed failure modes that happy-path story tests did not: tenant checks stopped at the DLQ list endpoint, bootstrap upserts reverted persisted configuration, simultaneous deliveries could both execute a consumer, and process-local SLA suppression forgot every prior notification on restart. Those defects affect trust in the platform foundation, so they were corrected before taking on another backlog slice.
+
+### Scope delivered by Codex
+
+#### Tenant-safe dead-letter operations
+
+- `GET /dlq/:id`, replay and discard now carry the authenticated `x-org-id` into the service and query by both entry id and tenant.
+- Cross-tenant probes return `404`, including replay attempts containing a replacement payload, so an entry cannot be discovered or modified through its UUID.
+- List and depth remain tenant-scoped and expose no global or untenanted failure metadata.
+- Tenant resolution used by the event store and dead-letter writer now shares one implementation, including the work-item fallback for envelopes whose payload omitted `org_id`.
+
+#### Atomic consumer idempotency and crash recovery
+
+- Replaced the read-then-handle idempotency check with an atomic `processing` claim in `event_consumptions`. Two concurrent deliveries now produce one `processed` result and one `skipped_duplicate`, with the handler running once.
+- Failed claims remain eligible for retry and operator replay can deliberately reclaim a settled event.
+- On application startup, abandoned `processing` rows are returned to `failed`. PGlite is a single-process datastore, so those rows can only belong to the process that stopped; this avoids turning a crash between claim and completion into permanent suppression.
+
+#### Durable SLA emission suppression
+
+- Added `sla_emissions`, keyed by work item, state, state-entry timestamp and event kind.
+- Warning, breach and escalation paths atomically claim an emission before publishing. A new engine instance therefore cannot produce fresh event ids and duplicate notifications for a state entry already handled before restart.
+- The same claim also prevents overlapping aging ticks from emitting twice.
+
+#### Insert-only pilot configuration
+
+- Extracted supporting defaults into `seedPilotConfiguration`, making restart behaviour independently testable.
+- Notification preferences, the team escalation target, monitoring settings and Service records are now created only when absent. Curated channel addresses, monitoring thresholds, ownership, CMDB source and service metadata survive every subsequent startup.
+- Re-running the seed remains idempotent: three pilot people and two Services stay three and two.
+
+#### Browser and documentation closure
+
+- Extended the headless-Chrome suite from seven to nine scenarios with working Flow Metrics and Dead Letters views, including metric coverage text, window changes, DLQ depth and status filtering.
+- Corrected the README production boundary that still described dead-lettering as unfinished Epic 5 work.
+- Added the previously missing Codex delivery records for the research-derived backlog expansion and generated implementation tracker.
+- Regenerated `public/status.html`: **16 epics, 56 stories — 23 done, 7 partial, 26 not started — across 29 spec files including browser QA**. No story status changed during this hardening pass.
+
+### Regression coverage added by Codex
+
+- `test/review-regressions.spec.ts` (6 tests): cross-tenant DLQ read, replay/edit and discard rejection; tenant-scoped list/depth; SLA suppression across a fresh engine instance; and preservation of customised persisted configuration across repeated pilot seeding.
+- `test/us5.spec.ts` now has 10 tests, adding simultaneous-delivery proof and abandoned-claim recovery.
+- `test/ui-smoke.spec.ts` now has 9 browser scenarios, adding Flow Metrics and Dead Letters.
+
+### Files added by Codex
+
+- `src/bootstrap/pilot-configuration.ts`
+- `src/modules/events/tenant-resolution.ts`
+- `test/review-regressions.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/events/consumer-registry.service.ts`
+- `src/modules/events/dead-letter.controller.ts`
+- `src/modules/events/dead-letter.service.ts`
+- `src/modules/events/event-store.service.ts`
+- `src/modules/sla/aging-engine.service.ts`
+- `src/server.ts`
+- `test/us5.spec.ts`
+- `test/ui-smoke.spec.ts`
+- `README.md`
+- `public/status.html`
+- `implementation_plan.md`
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused hardening suites: **PASS — 2 files, 16 tests**
+- Full non-browser regression: **PASS — 28 files, 92 tests**
+- Headless-Chrome suite: **PASS — 1 file, 9 tests**
+- Tracker generation: **PASS — 16 epics, 56 stories; generated page current**
+- `git diff --check`: **PASS**
+
+### Deliberate boundaries
+
+- The in-process bus is still not a transactional outbox or durable broker. This pass makes each consumer claim reliable within the embedded single-process architecture; US5.1 and US5.4 remain partial/deferred as already recorded.
+- Events with no resolvable tenant are excluded from tenant APIs. A future platform-operator surface needs its own authorization model before it can expose those failures.
+- Channel transports remain stubs. This pass prevents duplicate delivery records and repeat routing after restart; it does not add SES, Slack or Microsoft Graph.
+
+---
+
 ## Codex Epic 5 reliable consumption update — 2026-09-20
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections.
@@ -71,7 +242,7 @@ Asynchronous HTTP 202 ingestion changes the response contract that ten Epic 6 an
 - Full regression suite: **PASS — 27 test files, 84 tests**
 - UI JavaScript parse check: **PASS**
 - `git diff --check`: **PASS**
-- Browser QA of the new Dead letters view: **not run in this increment; the browser smoke suite covers the board, incident drawer, service impact, notifications and transitions**
+- Browser QA of the new Dead letters view: **not run in this increment; completed later in the Codex reliability and review hardening update above**
 
 ---
 
@@ -139,6 +310,104 @@ It also unblocks two things previously recorded as blocked: demonstrations that 
 - Restart durability against the built server: **PASS**
 - Test suite creates no data directory: **PASS**
 - `git diff --check`: **PASS**
+
+---
+
+## Codex implementation tracker update — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. It was originally recorded only incidentally inside the US9.4 section; external review noted the omission and this section was written to correct it.
+
+**Status:** Implemented and guarded by `test/tracker.spec.ts`.
+
+### Why a generated tracker
+
+The first delivery-status page was written by hand. It was accurate the day it was written and would have drifted from `Backlog.md` the moment a requirement changed, with nothing to detect the drift. A status page that quietly goes stale is worse than none, because it is still consulted.
+
+### Scope delivered by Codex
+
+- Split ownership across two files: `backlog.json` owns epics, stories and acceptance criteria; `implementation-status.json` owns delivery status, the abridged titles the tracker shows, and phase alignment.
+- Added `scripts/build-tracker.mjs`, which merges them into `public/status.html` and exits non-zero naming any story that appears in one file and not the other.
+- Added `npm run tracker`.
+- Added `test/tracker.spec.ts`, which fails when a story has no status entry, when a status entry names a story nobody wrote, on an unrecognised status or an unknown phase, on a missing title or explanatory note, and when the generated page is stale.
+- The page counts spec files from disk rather than carrying a hand-typed suite size.
+
+### Design decisions
+
+- **Status lives outside `backlog.json`.** Keeping them apart means adding a requirement cannot silently change a status, and a status cannot silently invent a requirement.
+- **The generator refuses rather than guesses.** A story with no status entry stops the build; it does not render as unknown, because an unknown row is the thing a reader skims past.
+- **The drift guard was verified, not assumed.** A fake `US1.9` was injected into `backlog.json`: the generator exited non-zero naming it and two tracker tests failed by name. The story was then removed.
+
+### Files added
+
+- `implementation-status.json`
+- `scripts/build-tracker.mjs`
+- `test/tracker.spec.ts`
+
+### Files updated
+
+- `package.json`
+- `public/status.html`
+
+### Deliberate boundaries
+
+- Status is asserted by hand in `implementation-status.json`. The guard proves every story has *a* status, not that the status is truthful; that judgement stays human and is stated as such on the page.
+- The page is a build artefact committed to the repository. It is regenerated by `npm run tracker` and will be stale between a status change and the next run, which `test/tracker.spec.ts` catches only for added or removed stories, not for an edited note.
+
+---
+
+## Codex research-derived backlog expansion — 2026-09-20
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. External review noted that this increment had no delivery section of its own; this corrects that.
+
+**Status:** Requirements recorded in `Backlog.md` and `backlog.json`. None of the added stories are implemented.
+
+### Source
+
+`Cadena Research.docx`, an architecture and engineering playbook framing Cadena as a bridge between ServiceNow (ITSM) and Jira (SDLC). The backlog predated it and had no home for most of what it describes.
+
+### Scope delivered by Codex
+
+Eighteen user stories, taking the backlog from 12 epics and 38 stories to **16 epics and 56 stories**.
+
+Added to existing epics:
+
+- **US3.4** SLA clock suspension while an item sits in a hold state.
+- **US5.4** HTTP 202 ingestion, so a slow downstream cannot cause a provider-side webhook timeout.
+- **US5.5** dead-letter replay with inline payload correction.
+- **US10.5** identity resolved by immutable account identifier rather than email address.
+- **US10.6** deactivation via SCIM `PATCH` where the target REST API offers no deactivation endpoint.
+
+New epics:
+
+- **E13 — ServiceNow / Jira bidirectional synchronization** (5 stories): configurable ITIL-to-Agile state matrix, immutable correlation references, echo-loop suppression, work-note privacy in comment sync, resolution code write-back.
+- **E14 — Rich-text fidelity and AST transformer** (2 stories).
+- **E15 — Agentic AI subsystem** (3 stories): incident-storm duplicate detection, stack-trace entity extraction, CAB release risk scoring.
+- **E16 — Integration resilience and network topology** (3 stories): adaptive rate governance, indexed-query safety, zero-inbound-port relay connectivity.
+
+### A discrepancy worth recording
+
+The playbook's own §7 backlog execution status does not match the repository, and the divergence is not symmetrical:
+
+- **Epic 2 is understated** as *In Progress*; US2.1–US2.3 are implemented and covered by `us2.1`–`us2.3`.
+- **Epic 10 is overstated, and it matters.** US10.1–US10.2 (SSO and SCIM provisioning) are recorded as *Completed*. Neither exists; identity is a header-based stub. Treating that table as a delivery signal would credit the platform with an enterprise identity posture it does not have.
+- Epic 4 is fairly described as in progress.
+
+The repository is treated as authoritative, and the divergences are printed on the delivery tracker rather than silently reconciled.
+
+### Knock-on change
+
+`test/stage-b-dogfooding.spec.ts` hard-coded 12 epics and 38 stories, so expanding the backlog broke it. The expectations now derive from `backlog.json`: adding a requirement grows the fixture rather than breaking the test.
+
+### Files updated
+
+- `Backlog.md`
+- `backlog.json`
+- `test/stage-b-dogfooding.spec.ts` (later renamed `test/backlog-fixture.spec.ts`)
+
+### Deliberate boundaries
+
+- Requirements only. No implementation accompanies these stories, and all eighteen are recorded as not started.
+- Acceptance criteria are written against capability rather than a named vendor API, because the pilot has no ServiceNow or Jira instance to build against and criteria written from documentation alone would encode assumptions no test could check.
 
 ---
 
@@ -250,7 +519,7 @@ The Stage B backlog import was described throughout as dogfooding. The imported 
 - UI JavaScript parse check: **PASS**
 - `git diff --check`: **PASS**
 - Live verification on the seeded tenant: deployment frequency, a change failure rate of 1/1 with `INC-D3220784 caused_by REL-5E5DFF18 via live-deploy-6.0.0`, and seven events persisted across four event types: **PASS**
-- Browser screenshot/interaction QA of the new Flow metrics view: **not run; the browser smoke suite covers the board, incident drawer, service impact, notifications and transitions, and was not extended to this view in this increment**
+- Browser screenshot/interaction QA of the new Flow metrics view: **not run in this increment; completed later in the Codex reliability and review hardening update above**
 
 ---
 

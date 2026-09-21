@@ -59,6 +59,27 @@ describe('Implementation tracker', () => {
     expect(bad, 'epics assigned to an unknown rollout phase').toEqual([]);
   });
 
+  it('records the latest master-backlog delta without relabelling existing scope as new', () => {
+    const delta = (overlay as any).latest_delta;
+    const epicIds = backlog.epics.map((epic) => epic.epic_id);
+    const status = (overlay as any).stories;
+    const epicStatus = (overlay as any).epics;
+
+    expect(delta.source).toBe('cadena-master-epics-and-user-stories.md');
+    expect(delta.baseline_epics + delta.added_epics.length).toBe(delta.current_epics);
+    expect(delta.baseline_stories + delta.added_stories.length).toBe(delta.current_stories);
+    expect(delta.current_epics).toBe(backlog.epics.length);
+    expect(delta.current_stories).toBe(backlogStoryIds.length);
+    expect(delta.added_stories.filter((id: string) => delta.expanded_stories.includes(id))).toEqual([]);
+
+    for (const id of delta.added_epics) {
+      expect(epicIds).toContain(id);
+      expect(epicStatus[id].addedIn).toBe(delta.id);
+    }
+    for (const id of delta.added_stories) expect(status[id].addedIn).toBe(delta.id);
+    for (const id of delta.expanded_stories) expect(status[id].expandedIn).toBe(delta.id);
+  });
+
   it('has a generated page that matches the current story count', () => {
     const page = join(__dirname, '..', 'public', 'status.html');
     expect(existsSync(page), 'public/status.html is missing — run `npm run tracker`').toBe(true);

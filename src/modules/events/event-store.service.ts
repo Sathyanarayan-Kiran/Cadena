@@ -1,6 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { DomainEventEnvelope, InProcessEventBus } from './event-bus';
+import { resolveEventOrgId } from './tenant-resolution';
 
 export interface StoredEvent {
   event_id: string;
@@ -60,7 +61,7 @@ export class EventStoreService implements OnModuleInit {
 
   public async record(event: DomainEventEnvelope): Promise<void> {
     await this.dbService.initialize();
-    const orgId = await this.resolveOrgId(event);
+    const orgId = await resolveEventOrgId(event);
     await this.dbService.db.query(
       `INSERT INTO domain_events
        (event_id, org_id, event_type, schema_version, work_item_id, actor_type, actor_id, payload, occurred_at)
@@ -98,32 +99,6 @@ export class EventStoreService implements OnModuleInit {
 
     const result = await this.dbService.db.query<any>(sql, params);
     return result.rows.map((row) => this.map(row));
-  }
-
-  /**
-   * Events carry their tenant in the payload rather than the envelope, because the
-   * envelope contract in spec §8.2 has no org field. Several shapes are in use.
-   */
-  private async resolveOrgId(event: DomainEventEnvelope): Promise<string | null> {
-    const fromPayload = this.extractOrgId(event);
-    if (fromPayload) return fromPayload;
-    // Last resort: an event whose payload omits the tenant is still attributable when its
-    // subject is a work item. Without this, such events fall out of every tenant-scoped query.
-    if (!event.work_item_id || !/^[0-9a-f-]{36}$/i.test(event.work_item_id)) return null;
-    const result = await this.dbService.db.query<any>(
-      `SELECT org_id FROM work_items WHERE id = $1`,
-      [event.work_item_id],
-    );
-    return result.rows?.[0]?.org_id ?? null;
-  }
-
-  private extractOrgId(event: DomainEventEnvelope): string | null {
-    const payload = (event.payload || {}) as Record<string, any>;
-    const candidate = payload.org_id
-      ?? payload.work_item?.org_id
-      ?? payload.service?.org_id
-      ?? payload.result?.org_id;
-    return typeof candidate === 'string' ? candidate : null;
   }
 
   private map(row: any): StoredEvent {

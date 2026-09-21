@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's core thesis: **one canonical work-item model** and **one state-machine engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them.
 
-> **Current status (Codex update, 2026-09-20):** Phase 0, the Epic 3 aging/SLA engine, Stage B backlog dogfooding, the complete Epic 4 traceability graph including US4.3 service impact analysis, the Epic 8 notification and escalation service, US9.4 DORA/ITIL flow metrics, and the Phase 1 integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. See `implementation_plan.md` for the clearly attributed Codex delivery records.
+> **Current status (Codex update, 2026-09-21):** Phase 0, the Epic 3 aging/SLA engine, the complete Epic 4 traceability graph including US4.3 service impact analysis, the Epic 8 notification and escalation service, US9.4 DORA/ITIL flow metrics, and the Phase 1 integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog now contains **20 epics and 71 stories** after consolidating `cadena-master-epics-and-user-stories.md`; `status.html` identifies the **4 epics and 15 stories newly added** plus 9 expanded stories. See `implementation_plan.md` for the clearly attributed Codex delivery records.
 
 ---
 
@@ -22,7 +22,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA and ITIL flow metrics computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 84 automated tests across 27 test files, plus a 7-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 93 automated tests across 28 test files, plus a 9-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -60,14 +60,15 @@ Expected output:
  ✓ test/us8.2.spec.ts (4 tests)
  ✓ test/us8.3.spec.ts (5 tests)
  ✓ test/us9.4.spec.ts (7 tests)
- ✓ test/tracker.spec.ts (5 tests)
+ ✓ test/tracker.spec.ts (6 tests)
  ✓ test/persistence.spec.ts (5 tests)
- ✓ test/us5.spec.ts (8 tests)
+ ✓ test/us5.spec.ts (10 tests)
+ ✓ test/review-regressions.spec.ts (6 tests)
  ✓ test/us10.3.spec.ts (1 test)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  27 passed (27)
-      Tests  84 passed (84)
+ Test Files  28 passed (28)
+      Tests  93 passed (93)
 ```
 
 ### 2. Run the Server
@@ -418,7 +419,13 @@ POST /dlq/:id/discard    { "reason": "superseded" }
 
 **Replay preserves identity.** The corrected event keeps its original `event_id` and is re-dispatched only to the consumer that failed, so the audit trail stays continuous and no other consumer is re-triggered. A replay that fails again stays queued rather than vanishing.
 
-**Boundary:** retries are in-process and immediate, so a consumer whose dependency is down for minutes will exhaust its attempts and dead-letter rather than waiting it out. Scheduled redelivery with longer backoff belongs with the durable queue that replaces the in-process bus.
+Every dead-letter read, depth calculation and mutation is scoped to the calling tenant, and an entry belonging to another tenant reports as **not found** rather than forbidden, so a caller cannot probe for the existence of other tenants' failures. Events whose tenant cannot be resolved are deliberately absent from tenant APIs; a future platform-operator surface can expose them under a different authorization model.
+
+**Boundaries:**
+
+- Retries are in-process and immediate, so a consumer whose dependency is down for minutes will exhaust its attempts and dead-letter rather than waiting it out. Scheduled redelivery with longer backoff belongs with the durable queue that replaces the in-process bus.
+- A consumer claim is taken before the handler runs. Because the embedded datastore has one writer process, startup safely returns any abandoned `processing` claims to `failed`, allowing the source or an operator to redeliver them.
+- Replay requires the consumer to be registered in the running process; an entry for a consumer since removed or renamed cannot be replayed, and the API says so rather than failing quietly.
 
 ---
 
@@ -432,8 +439,9 @@ The pilot is deliberately explicit about what is not production-ready:
    - timestamp-based replay rejection in addition to the existing delivery-id deduplication;
    - per-provider adapters translating raw provider payloads into the normalized contract above.
 2. **Integration identity is not authenticated.** Tenant identity arrives in a header rather than from an authenticated integration credential, and `automation_actor_role` grants a workflow role by configuration rather than by binding to a real RBAC principal. Guards still evaluate that role — it is not a bypass — but the binding is US10.3 hardening work.
-3. **Delivery durability stops at the datastore.** Deduplication and recorded results are durable, but transport retries, a transactional outbox, Kafka, and a dead-letter queue remain Epic 5 work.
-4. **No notification actually leaves the process.** Channel adapters are stubs; the `notifications` table is the delivery record. Routing, fallback and idempotency are real and tested, but SES/SendGrid, the Slack Web API and Microsoft Graph are not wired in.
+3. **Delivery durability stops short of a broker.** Consumption is idempotent, retried and dead-lettered with operator replay, and history is persisted. Still outstanding: the transactional outbox (US5.1), asynchronous HTTP 202 ingestion (US5.4), and a real broker such as Kafka or AWS MSK in place of the in-process bus.
+4. **Retries are in-process and immediate.** A consumer whose dependency is down for minutes exhausts its attempts and dead-letters rather than waiting it out. Scheduled redelivery with longer backoff belongs with that broker.
+5. **No notification actually leaves the process.** Channel adapters are stubs; the `notifications` table is the delivery record. Routing, fallback and idempotency are real and tested, but SES/SendGrid, the Slack Web API and Microsoft Graph are not wired in.
 6. **The Service registry is not a CMDB.** Auto-registered entries are lightweight stubs flagged `monitoring_discovery`. Live federation, staleness flagging, and authoritative ownership are Epic 11 (US11.1, US11.2).
 
 ---

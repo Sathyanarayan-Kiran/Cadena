@@ -26,10 +26,30 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
   private dbService: DatabaseService;
   private eventBus: InProcessEventBus;
 
-  // Cache to track emitted events per work_item state entry to avoid duplicate event spamming
-  private emittedWarnings: Set<string> = new Set();
-  private emittedBreaches: Set<string> = new Set();
-  private emittedEscalations: Set<string> = new Set();
+  /**
+   * Claims the right to emit one SLA event for one state entry.
+   *
+   * This used to be an in-memory Set, which meant a restart forgot every suppression: aged
+   * items re-emitted with fresh event ids, and because notification deduplication keys on
+   * event id, owners were notified all over again. Now the datastore persists, so the
+   * suppression has to persist with it. The insert is atomic, so a concurrent tick cannot
+   * double-emit either.
+   */
+  private async claimEmission(
+    workItemId: string,
+    state: string,
+    enteredAt: Date,
+    kind: 'warning' | 'breach' | 'escalation',
+  ): Promise<boolean> {
+    const result = await this.dbService.db.query<any>(
+      `INSERT INTO sla_emissions (work_item_id, state, entered_state_at, kind, emitted_at)
+       VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+       ON CONFLICT (work_item_id, state, entered_state_at, kind) DO NOTHING
+       RETURNING kind`,
+      [workItemId, state, enteredAt.toISOString(), kind],
+    );
+    return result.rows.length > 0;
+  }
 
   constructor(private readonly slaCalculator: SlaCalculatorService) {
     this.dbService = DatabaseService.getInstance();
@@ -120,10 +140,7 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
         newBucket = 'green';
       }
 
-      const stateEntryKey = `${item.id}:${item.status}:${enteredAt.toISOString()}`;
-
-      if (newScore >= 75 && !this.emittedWarnings.has(stateEntryKey)) {
-        this.emittedWarnings.add(stateEntryKey);
+      if (newScore >= 75 && await this.claimEmission(item.id, item.status, enteredAt, 'warning')) {
         warningCount++;
         await this.eventBus.publish(
           'SLAWarning',
@@ -143,8 +160,7 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      if (newScore > 100 && !this.emittedBreaches.has(stateEntryKey)) {
-        this.emittedBreaches.add(stateEntryKey);
+      if (newScore > 100 && await this.claimEmission(item.id, item.status, enteredAt, 'breach')) {
         breachCount++;
 
         let teamLeadId: string | null = null;
@@ -180,8 +196,8 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
       }
 
       const escalationPercent = escalationThresholds.get(item.org_id) ?? 150;
-      if (policy && newScore >= escalationPercent && !this.emittedEscalations.has(stateEntryKey)) {
-        this.emittedEscalations.add(stateEntryKey);
+      if (policy && newScore >= escalationPercent
+        && await this.claimEmission(item.id, item.status, enteredAt, 'escalation')) {
         escalationCount++;
 
         const escalationTargetRes = await this.dbService.db.query<{ escalation_person_id: string | null }>(

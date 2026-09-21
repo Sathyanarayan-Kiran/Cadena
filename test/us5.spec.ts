@@ -93,6 +93,58 @@ describe('Epic 5 — reliable event consumption', () => {
     expect(consumption.rows[0]).toMatchObject({ status: 'processed' });
   });
 
+  it('US5.2 — two concurrent deliveries of one event run the side effect once', async () => {
+    // The reviewer's reproduction: a read-then-write check let both callers pass. The claim
+    // is now a single statement, so exactly one of these wins the right to run the handler.
+    const event = {
+      event_id: randomUUID(),
+      event_type: 'Epic5ProbeEvent',
+      schema_version: 1,
+      timestamp: new Date().toISOString(),
+      actor: { type: 'system' as const, id: 'epic5-race' },
+      work_item_id: randomUUID(),
+      payload: { org_id: orgId },
+    };
+
+    const registry = new EventConsumerRegistry();
+    const before = (calls['test-reliable'] || []).length;
+    const [a, b] = await Promise.all([
+      registry.dispatch('test-reliable', event),
+      registry.dispatch('test-reliable', event),
+    ]);
+
+    const outcomes = [a.outcome, b.outcome].sort();
+    expect(outcomes).toEqual(['processed', 'skipped_duplicate']);
+    expect((calls['test-reliable'] || []).length).toBe(before + 1);
+    expect((calls['test-reliable'] || []).filter((id) => id === event.event_id)).toHaveLength(1);
+  });
+
+  it('US5.2 — recovers an abandoned processing claim on application startup', async () => {
+    const event = {
+      event_id: randomUUID(),
+      event_type: 'Epic5ProbeEvent',
+      schema_version: 1,
+      timestamp: new Date().toISOString(),
+      actor: { type: 'system' as const, id: 'epic5-recovery' },
+      work_item_id: randomUUID(),
+      payload: { org_id: orgId },
+    };
+    const registry = new EventConsumerRegistry();
+    await DatabaseService.getInstance().db.query(
+      `INSERT INTO event_consumptions
+       (consumer, event_id, status, attempts, first_attempt_at, last_attempt_at)
+       VALUES ('test-reliable', $1, 'processing', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [event.event_id],
+    );
+
+    // A persisted `processing` row at startup can only belong to the previous process.
+    await registry.onModuleInit();
+    const recovered = await registry.dispatch('test-reliable', event);
+
+    expect(recovered.outcome).toBe('processed');
+    expect((calls['test-reliable'] || []).filter((id) => id === event.event_id)).toHaveLength(1);
+  });
+
   it('retries a transient failure and succeeds without dead-lettering', async () => {
     failuresRemaining = 1;
     const event = await publish('Epic5RecoverableEvent');

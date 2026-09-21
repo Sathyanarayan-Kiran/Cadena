@@ -1,6 +1,25 @@
 {
   "_comment": "Status overlay for the implementation tracker. backlog.json owns the stories and their acceptance criteria; this file owns delivery status, the abridged title shown in the tracker, and phase alignment. Regenerate the page with `npm run tracker`. test/tracker.spec.ts fails if the two files fall out of sync.",
   "source_of_truth": "repository",
+  "latest_delta": {
+    "id": "master-2026-09-21",
+    "source": "cadena-master-epics-and-user-stories.md",
+    "date": "2026-09-21",
+    "baseline_epics": 16,
+    "baseline_stories": 56,
+    "current_epics": 20,
+    "current_stories": 71,
+    "added_epics": ["E17", "E18", "E19", "E20"],
+    "added_stories": [
+      "US9.5", "US10.7", "US10.8", "US11.3", "US16.4", "US16.5",
+      "US17.1", "US17.2", "US17.3", "US17.4", "US18.1", "US18.2",
+      "US19.1", "US19.2", "US20.1"
+    ],
+    "expanded_stories": [
+      "US13.1", "US13.2", "US13.4", "US14.1", "US14.2",
+      "US15.1", "US15.2", "US15.3", "US16.1"
+    ]
+  },
   "spec_phases": [
     {
       "id": 0,
@@ -82,6 +101,26 @@
     "E16": {
       "rollout": "Infrastructure",
       "isNew": true
+    },
+    "E17": {
+      "rollout": "Infrastructure",
+      "isNew": true,
+      "addedIn": "master-2026-09-21"
+    },
+    "E18": {
+      "rollout": "Enterprise Scaling",
+      "isNew": true,
+      "addedIn": "master-2026-09-21"
+    },
+    "E19": {
+      "rollout": "Mapping",
+      "isNew": true,
+      "addedIn": "master-2026-09-21"
+    },
+    "E20": {
+      "rollout": "Enterprise Scaling",
+      "isNew": true,
+      "addedIn": "master-2026-09-21"
     }
   },
   "stories": {
@@ -353,14 +392,16 @@
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Configurable translation so each platform shows its own native lifecycle; an unmapped state holds for review rather than guessing."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: configurable translation now also validates required target fields and logs invalid state jumps before execution."
     },
     "US13.2": {
       "name": "Immutable correlation references",
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Each side stores the other's immutable id, so the pair survives renames and re-indexing without summary-text matching."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: immutable pair ids now cover one-to-many and many-to-one parent trees without orphaned dependencies."
     },
     "US13.3": {
       "name": "Echo-loop suppression",
@@ -374,7 +415,8 @@
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Comment sync opt-in by default; internal work notes never reach a customer-visible stream."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: opt-in public/private streams now include directional rules, role filtering and original-author attribution."
     },
     "US13.5": {
       "name": "Resolution code write-back",
@@ -388,42 +430,48 @@
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Parse source HTML to an intermediate tree, then serialise to the target's document format or wiki markup from the same representation."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: bidirectional HTML/ADF/wiki round trips must preserve supported structure while sanitising script and iframe content."
     },
     "US14.2": {
       "name": "Inline media and attachments",
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Screenshots transfer as attachments referenced at their original positions; oversized files warn and link back rather than failing the record."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: inline media keeps its position and obeys direction, MIME and size governance with recorded decisions."
     },
     "US15.1": {
       "name": "Incident-storm duplicate detection",
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Embedding similarity above the configured threshold suppresses the duplicate and links it under a master incident."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: the default 0.88 threshold now surfaces the score, matched master and consolidation recommendation."
     },
     "US15.2": {
       "name": "Stack-trace entity extraction",
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Component and affected version inferred from logs, flagged machine-derived, left unset below the confidence threshold."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: hostnames, IPs and error codes are cross-referenced against CMDB records with evidence for each proposed field."
     },
     "US15.3": {
       "name": "CAB release risk scoring",
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Score from historical velocity, prior change-failure rate and blast radius; high scores route to an elevated approval tier."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: the 0-100 score can drive policy-controlled low-risk auto-approval as well as high-risk CAB routing."
     },
     "US16.1": {
       "name": "Adaptive rate governance",
       "status": "idle",
       "phase": 3,
       "isNew": true,
-      "note": "Shape outbound calls inside each target's quota and honour <code>Retry-After</code> instead of failing at the boundary."
+      "expandedIn": "master-2026-09-21",
+      "note": "Expanded by the master backlog: quota shaping and Retry-After now include jittered exponential backoff plus backlog, quota and retry telemetry."
     },
     "US16.2": {
       "name": "Indexed-query safety",
@@ -438,6 +486,126 @@
       "phase": 3,
       "isNew": true,
       "note": "A relay behind the firewall long-polls over outbound HTTPS, so integrating never widens the attack surface."
+    },
+    "US9.5": {
+      "name": "Integration topology and queue health",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. No connected-node topology, synchronized-item trend or queue-health dashboard exists."
+    },
+    "US10.7": {
+      "name": "Cryptographically verifiable audit export",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Event rows are durable but are not hash-chained or exposed through an integrity-verifiable audit export."
+    },
+    "US10.8": {
+      "name": "Data residency and tenant key controls",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. The embedded pilot has no region placement, tenant key management or automated rotation."
+    },
+    "US11.3": {
+      "name": "CMDB-aware priority matrix",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Priority is not transformed from impact, urgency and federated CI criticality."
+    },
+    "US16.4": {
+      "name": "Per-twin persistent FIFO queue",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Domain events are durable, but there is no ordered queue partitioned by synchronized record pair."
+    },
+    "US16.5": {
+      "name": "Twin-level failure isolation",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Consumer DLQ replay exists, but no twin queue can pause independently while unrelated synchronization continues."
+    },
+    "US17.1": {
+      "name": "Native connector and entity discovery matrix",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Only normalized Git/CI and monitoring webhooks exist; there is no multi-platform schema discovery."
+    },
+    "US17.2": {
+      "name": "Visual mappings with sandboxed scripts",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. No visual mapping editor or resource-constrained JS/TS transformation sandbox exists."
+    },
+    "US17.3": {
+      "name": "Scheduled native-query triggers",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. No JQL, WIQL or encoded-query scheduler with watermarked incremental ingestion exists."
+    },
+    "US17.4": {
+      "name": "Bulk synchronization and historical backfill",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. The fixture importer is not a resumable, throttled cross-platform migration job with progress and CSV audit."
+    },
+    "US18.1": {
+      "name": "Invitation-based independent node pairing",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Organizations cannot pair nodes with time-bound invitations and independently governed ingress/egress rules."
+    },
+    "US18.2": {
+      "name": "Least-privilege proxy identities",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Console identity and project-scoped connector credentials are not yet separated."
+    },
+    "US19.1": {
+      "name": "Versioned configuration and rollback",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Mapping and rule configuration has no draft/published lifecycle, visual diff or rollback."
+    },
+    "US19.2": {
+      "name": "Non-destructive dry-run simulator",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. Draft transforms cannot be simulated against representative records without target writes."
+    },
+    "US20.1": {
+      "name": "In-context browser synchronization panel",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "master-2026-09-21",
+      "note": "New from the master backlog. No Chrome/Edge extension shows twin status or RBAC-gated resync and unlink actions on native ticket pages."
     }
   }
 }

@@ -2,6 +2,8 @@
 
 Epics below map directly to the services and phases defined in the main specification tab. Each user story follows Given/When/Then acceptance criteria.
 
+> **Master-backlog consolidation (2026-09-21):** `cadena-master-epics-and-user-stories.md` was reviewed against the existing canonical backlog rather than appended with conflicting Epic 1–10 identifiers. Nine existing stories were expanded with missing acceptance criteria and fifteen genuinely distinct stories were added across four new and six existing epics. The canonical scope therefore moves from **16 epics / 56 stories** to **20 epics / 71 stories** while preserving every original story id and delivery status.
+
 ## Epic 1 — Canonical work item model & core service
 
 **US1.1** As a platform engineer, I want one WorkItem schema shared across all item types, so that every type gets create/read/update/list for free.
@@ -165,6 +167,11 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given a date range, when I request the flow-metrics report, then deployment frequency, change failure rate, MTTR, and lead time for changes are returned, computed from event history (not manual entry).
 
+**US9.5** As a VP of Infrastructure, I want an integration topology and queue-health dashboard, so that I can see connected nodes, synchronized-item volume and operational bottlenecks in one place.
+
+- Given active integration nodes and twins, when I open the topology console, then connections and cumulative synchronized-item counts are shown over time.
+- Given queues are processing traffic, when I inspect a connection, then backlog depth, latency, throughput and error rate are visible and tenant-scoped.
+
 ## Epic 10 — RBAC, identity & audit
 
 **US10.1** As an employee, I want to log in via my company's SSO, so that I don't need a separate platform password.
@@ -193,6 +200,16 @@ Epics below map directly to the services and phases defined in the main specific
 - Given a user is deprovisioned, when the platform deactivates them downstream, then it issues a SCIM `PATCH` setting `active: false` rather than relying on a REST deactivation endpoint.
 - Given SCIM is unavailable or its prerequisite identity tier is not licensed, when deactivation is attempted, then an actionable error names the prerequisite instead of reporting success.
 
+**US10.7** As a compliance auditor, I want a cryptographically verifiable audit export, so that unauthorized changes to the platform's history are detectable.
+
+- Given recorded field changes, transitions and integration transactions, when they enter the audit store, then each event participates in a SHA-256 hash chain or equivalent signed integrity proof.
+- Given an auditor requests an export, when `GET /audit/export` is called within their tenant scope, then actor, timestamp, before/after values and integrity-verification metadata are returned.
+
+**US10.8** As a data privacy officer, I want regional data residency and tenant encryption controls, so that regulated data stays within its approved boundary and key lifecycle.
+
+- Given a tenant selects US, EU or APAC residency, when its data is stored or replicated, then it remains inside the selected boundary and any unsupported transfer is rejected.
+- Given tenant data is persisted or transmitted, when encryption policy is evaluated, then AES-256-equivalent at-rest encryption, TLS 1.3 in transit and KMS/Vault-backed key rotation are enforced without cross-tenant key reuse.
+
 ## Epic 11 — CMDB federation
 
 **US11.1** As a platform architect, I want to federate Service/Asset data from an existing CMDB rather than duplicate it, so that the platform never becomes a second source of truth that drifts.
@@ -203,6 +220,11 @@ Epics below map directly to the services and phases defined in the main specific
 **US11.2** As an incident commander, I want incidents linked to the correct Service/Asset from the federated CMDB, so that ownership and impact are accurate.
 
 - Given an alert identifies a host or service, when the Incident is auto-created (Epic 7), then it links to the matching federated Service record, including its owning team from the CMDB.
+
+**US11.3** As an ITIL process owner, I want priority mappings to consider impact, urgency and CMDB criticality, so that the target priority reflects service importance rather than a flat lookup.
+
+- Given source impact and urgency plus a matched CI criticality tier, when a record is transformed, then the configured matrix produces the target priority and records the inputs and rule version used.
+- Given CI context is missing or stale, when priority is evaluated, then the sync holds for review or applies an explicitly configured override rather than silently guessing.
 
 ## Epic 12 — ChatOps integration
 
@@ -224,11 +246,13 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given a configured transition matrix, when a record changes state in either system, then its counterpart moves to the mapped status and the mapping applied is recorded on the sync record.
 - Given a state has no configured mapping, when a change arrives, then the sync is held for review with an actionable error rather than guessing a target state.
+- Given a mapped target transition requires platform-specific fields, when the transition is prepared, then those fields are prompted for or populated before execution and invalid state jumps are blocked and logged.
 
 **US13.2** As a solution architect, I want each synced pair to carry immutable cross-references, so that the link survives renames, re-indexing and partial outages.
 
 - Given a record is linked to a counterpart issue, when the pair is created, then each side stores the other's immutable identifier in a dedicated correlation field.
 - Given either side is renamed or moved, when the pair next syncs, then it resolves by stored correlation reference and never by summary-text matching.
+- Given a one-to-many or many-to-one parent-child tree is synchronized, when any member changes, then every dependency resolves through immutable correlation metadata without creating an orphan.
 
 **US13.3** As a platform operator, I want changes written by the integration's own service account ignored on the return path, so that a sync never triggers an infinite echo loop.
 
@@ -239,6 +263,7 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given comment synchronization has not been explicitly enabled, when records sync, then no comments transfer at all (opt-in by default).
 - Given comment sync is enabled, when an internal work note is written, then it is excluded from the public comment stream while customer-visible comments still sync.
+- Given a permitted comment is transferred, when it reaches the target, then direction rules and role filters are enforced and the original author and source system remain visibly attributed.
 
 **US13.5** As an ITIL process owner, I want resolution metadata written back when engineering completes the work, so that closure records stay complete without manual re-entry.
 
@@ -251,11 +276,13 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given a source description containing headings, tables, code blocks and nested lists, when it syncs to a structured-document target, then it is serialized into that target's document format with the structure intact.
 - Given a target that accepts wiki markup rather than a structured document format, when the same content syncs, then it is serialized to wiki markup from the same intermediate representation.
+- Given rich text is synchronized in either direction, when it completes a round trip through HTML, ADF or wiki markup, then supported structure is preserved without flattening and executable script or iframe content is removed.
 
 **US14.2** As an engineer, I want inline screenshots and attachments to arrive with the ticket, so that I do not have to open the source system to see the evidence.
 
 - Given a description contains inline images, when it syncs, then those images transfer as attachments and are referenced at their original positions in the body.
 - Given an attachment exceeds the target's size limit, when transfer is attempted, then the sync records a typed warning and links back to the source instead of failing the whole record.
+- Given attachment synchronization rules specify a direction, MIME allow-list or size cap, when media is evaluated, then only permitted files cross the connection and the decision is recorded.
 
 ## Epic 15 — Agentic AI subsystem
 
@@ -263,16 +290,19 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given an incoming incident whose text embedding exceeds the configured cosine-similarity threshold against an open incident, when it is ingested, then it is suppressed and linked as a child of the master incident.
 - Given similarity falls below the threshold, when the incident is ingested, then it is created normally and no duplicate link is made.
+- Given the default similarity threshold of 0.88 is exceeded, when the duplicate is presented to an agent, then the score, matched master and a consolidation recommendation are shown.
 
 **US15.2** As a triage engineer, I want components and affected versions inferred from stack traces, so that routing does not depend on a reporter filling fields in correctly.
 
 - Given an incident body containing a stack trace or error log, when it is triaged, then component and affected-version fields are populated from extracted entities and flagged as machine-derived.
 - Given extraction confidence falls below the configured threshold, when triage runs, then the fields are left unset and the item is flagged for human triage rather than filled with a guess.
+- Given hostnames, IP addresses or error codes are extracted, when matching CMDB records exist, then the affected CI and Jira component are proposed with the supporting entity matches.
 
 **US15.3** As a CAB member, I want a quantitative risk score on each change, so that approval effort is proportionate to real risk instead of uniform across every request.
 
 - Given a change references a release, when it is submitted for review, then a risk score is computed from historical delivery velocity, prior change-failure rate, and the blast radius of the affected services.
 - Given the score exceeds the configured high-risk threshold, when the change is routed, then it requires the elevated approval tier and the contributing factors are shown alongside the score.
+- Given a 0–100 score is below the configured low-risk threshold, when policy allows automatic approval, then the release is approved with the decision and contributing evidence recorded.
 
 ## Epic 16 — Integration resilience & network topology
 
@@ -280,6 +310,7 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given a target enforces a request quota, when the platform approaches that quota, then outbound calls are shaped to stay within it rather than failing at the boundary.
 - Given a target responds 429 with a `Retry-After` header, when that response is received, then the stated delay is honoured and the queued work resumes without loss.
+- Given no explicit retry delay is supplied, when throttling or semaphore pressure is detected, then exponential backoff with jitter is applied and backlog, quota and retry metrics are exported for operational dashboards.
 
 **US16.2** As an integration engineer, I want outbound queries constrained to indexed fields, so that a poorly shaped query never exhausts the target's database semaphores.
 
@@ -290,3 +321,66 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given an on-premise target, when connectivity is established, then a relay behind the firewall opens outbound HTTPS on port 443 and long-polls for queued work, requiring no inbound port.
 - Given the relay loses connectivity, when it reconnects, then queued work is delivered in order with no duplicate execution.
+
+**US16.4** As a platform operator, I want a persistent FIFO queue per synchronized record pair, so that changes remain ordered through network failures and maintenance windows.
+
+- Given multiple changes for one twin, when they are accepted, then they execute strictly in source order from durable storage while unrelated twins may proceed concurrently.
+- Given target connectivity is lost, when it returns, then the twin queue resumes automatically without reordering, loss or duplicate execution.
+
+**US16.5** As an integration engineer, I want failures isolated to the affected twin, so that one malformed record cannot block global synchronization traffic.
+
+- Given an unhandled schema or transformation error, when a twin exhausts its retries, then only that twin pauses while all unrelated queues continue.
+- Given a paused twin, when an operator opens its DLQ entry, then the payload, error and attempt history are visible and a corrected payload can be re-injected into that twin's ordered queue.
+
+## Epic 17 — Connector, mapping & ingestion automation
+
+**US17.1** As an enterprise administrator, I want native connector and entity discovery across major ITSM, SDLC and work-management platforms, so that integrations do not begin with custom API code.
+
+- Given configured credentials, when discovery runs against ServiceNow, Jira, Azure DevOps, Zendesk, Salesforce, GitHub or Asana, then supported entities and standard/custom fields are enumerated through the platform's native API.
+- Given a connector lacks a required entity or field capability, when configuration is attempted, then the limitation is reported before publishing rather than failing during synchronization.
+
+**US17.2** As an integration administrator, I want visual field mappings with a constrained scripting escape hatch, so that common transformations require no code and exceptional cases remain safely extensible.
+
+- Given source and target schemas, when a mapping is configured, then picklists, references and assignment groups can be transformed through visual value tables and conditional rules.
+- Given a custom JS/TS transform is required, when it runs, then it executes in an isolated sandbox with a 500ms timeout, memory cap and no ambient network or filesystem access.
+
+**US17.3** As an integration specialist, I want scheduled native-query triggers, so that selected or legacy records can be incrementally synchronized without full-table scans.
+
+- Given a validated JQL, WIQL or ServiceNow encoded query, when its schedule runs, then matching records changed since the saved watermark are enqueued.
+- Given a query would require an unbounded full scan, when it is validated, then publishing is blocked with an actionable indexing or watermark error.
+
+**US17.4** As a migration lead, I want governed bulk synchronization and historical backfill, so that existing records become linked twins without overwhelming either platform.
+
+- Given a historical backfill job, when it runs, then records are processed in resumable chunks under adaptive concurrency and rate limits.
+- Given a bulk job is active or complete, when I inspect it, then processed, queued and failed counts are visible and a CSV audit report can be exported.
+
+## Epic 18 — Cross-organization federation & proxy identity
+
+**US18.1** As an MSP security lead, I want organizations paired through independently governed invitation-based nodes, so that neither party needs administrative credentials to the other's systems.
+
+- Given an organization initiates a pairing, when the other party accepts a single-use time-bound invitation, then a signed node connection is established without sharing target-system credentials.
+- Given a node pair is active, when a payload crosses it, then each organization independently applies its own ingress and egress rules before data leaves or enters its boundary.
+
+**US18.2** As an enterprise security auditor, I want proxy service identities separated from console administrators and scoped to specific projects, so that integrations never require global administrator access.
+
+- Given an administrator signs into the Cadena console through OIDC/OAuth2, when a connector executes, then it uses a distinct proxy credential rather than the administrator's session.
+- Given a proxy identity is provisioned, when it calls a target platform, then its permissions are limited to the configured projects, tables and read/write operations.
+
+## Epic 19 — Configuration lifecycle & simulation
+
+**US19.1** As an integration administrator, I want draft and published configuration versions with visual diffs and rollback, so that mapping changes are reviewable and recoverable.
+
+- Given a mapping or rule is edited, when it is saved, then it creates a draft version without changing the active published configuration.
+- Given two versions or a historical release, when an administrator compares or restores them, then a side-by-side diff is shown and rollback creates an auditable new published version.
+
+**US19.2** As a systems tester, I want to dry-run draft mappings against representative live records, so that payload and schema problems are found without writing to a target system.
+
+- Given a draft and selected source records, when a dry run executes, then no target write occurs and the source, transformed payload and predicted target state are displayed as a visual diff.
+- Given the draft contains mapping, script or target-schema errors, when simulation completes, then each error is tied to its rule and field before publishing is allowed.
+
+## Epic 20 — In-context synchronization experience
+
+**US20.1** As a support agent or developer, I want an in-context browser panel on Jira and ServiceNow records, so that I can inspect and operate synchronization without leaving my primary workspace.
+
+- Given a record has a linked twin, when its Jira or ServiceNow page opens in a supported Chrome/Edge extension, then current sync status and a direct link to the remote twin are shown.
+- Given the user has the required RBAC permission, when they request resync or unlink from the panel, then the action is executed through the same audited platform API and its outcome is displayed.

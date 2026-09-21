@@ -303,6 +303,15 @@ export class DatabaseService {
         UNIQUE (consumer, event_id)
       );
 
+      CREATE TABLE IF NOT EXISTS sla_emissions (
+        work_item_id UUID NOT NULL,
+        state TEXT NOT NULL,
+        entered_state_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        kind TEXT NOT NULL,
+        emitted_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (work_item_id, state, entered_state_at, kind)
+      );
+
       CREATE TABLE IF NOT EXISTS sla_policies (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),

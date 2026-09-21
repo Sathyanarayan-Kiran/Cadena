@@ -49,6 +49,8 @@ export function buildModel() {
         phase: status.phase,
         note: status.note,
         isNew: Boolean(status.isNew),
+        addedIn: status.addedIn ?? null,
+        expandedIn: status.expandedIn ?? null,
         statement: story.statement,
         criteria: story.acceptance_criteria.length,
       };
@@ -59,6 +61,7 @@ export function buildModel() {
       title: epic.title,
       rollout: meta?.rollout ?? 'Unassigned',
       isNew: Boolean(meta?.isNew),
+      addedIn: meta?.addedIn ?? null,
       stories,
     };
   });
@@ -67,7 +70,34 @@ export function buildModel() {
     if (!seen.has(id)) problems.push(`implementation-status.json describes ${id}, which is not in backlog.json`);
   }
 
-  return { epics, problems, specPhases: overlay.spec_phases, rollouts: overlay.rollout_phases };
+  const latestDelta = overlay.latest_delta ?? null;
+  if (latestDelta) {
+    const epicIds = new Set(epics.map((epic) => epic.id));
+    const storyIds = new Set(epics.flatMap((epic) => epic.stories.map((story) => story.id)));
+    if (latestDelta.current_epics !== epics.length || latestDelta.current_stories !== storyIds.size) {
+      problems.push('latest_delta current counts do not match the canonical backlog');
+    }
+    for (const id of latestDelta.added_epics) {
+      if (!epicIds.has(id)) problems.push(`latest_delta added epic ${id} is not in backlog.json`);
+      if (overlay.epics[id]?.addedIn !== latestDelta.id) problems.push(`${id} is missing addedIn=${latestDelta.id}`);
+    }
+    for (const id of latestDelta.added_stories) {
+      if (!storyIds.has(id)) problems.push(`latest_delta added story ${id} is not in backlog.json`);
+      if (overlay.stories[id]?.addedIn !== latestDelta.id) problems.push(`${id} is missing addedIn=${latestDelta.id}`);
+    }
+    for (const id of latestDelta.expanded_stories) {
+      if (!storyIds.has(id)) problems.push(`latest_delta expanded story ${id} is not in backlog.json`);
+      if (overlay.stories[id]?.expandedIn !== latestDelta.id) problems.push(`${id} is missing expandedIn=${latestDelta.id}`);
+    }
+  }
+
+  return {
+    epics,
+    problems,
+    specPhases: overlay.spec_phases,
+    rollouts: overlay.rollout_phases,
+    latestDelta,
+  };
 }
 
 function page(model, meta) {
@@ -75,6 +105,7 @@ function page(model, meta) {
     epics: model.epics,
     specPhases: model.specPhases,
     rollouts: model.rollouts,
+    latestDelta: model.latestDelta,
   });
 
   return `<title>Cadena Delivery Ledger</title>
@@ -121,11 +152,11 @@ function page(model, meta) {
   .standfirst { font-family:var(--serif); font-size:17px; line-height:1.55; color:var(--ink-2); max-width:62ch; margin:0 0 16px; }
   .provenance { display:flex; flex-wrap:wrap; gap:8px 22px; font-family:var(--mono); font-size:11.5px; color:var(--ink-3); }
   .provenance b { color:var(--ink-2); font-weight:500; }
-  .tally-band { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); margin-bottom:8px; }
+  .tally-band { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); margin-bottom:8px; }
   .tally { background:var(--surface); padding:16px 18px; }
   .tally-n { font-family:var(--mono); font-size:30px; font-weight:600; line-height:1; font-variant-numeric:tabular-nums; }
   .tally-l { font-size:11.5px; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); margin-top:7px; font-weight:600; }
-  .tally.done .tally-n { color:var(--done); } .tally.partial .tally-n { color:var(--partial); } .tally.idle .tally-n { color:var(--ink-3); }
+  .tally.done .tally-n { color:var(--done); } .tally.partial .tally-n { color:var(--partial); } .tally.idle .tally-n { color:var(--ink-3); } .tally.delta .tally-n { color:var(--accent); }
   .meter { display:flex; height:10px; border:1px solid var(--line); border-top:0; overflow:hidden; margin-bottom:34px; }
   .meter span { display:block; }
   .meter .s-done { background:var(--done); } .meter .s-partial { background:var(--partial); } .meter .s-idle { background:var(--idle-soft); }
@@ -147,6 +178,8 @@ function page(model, meta) {
   .callout p:last-child { margin-bottom:0; }
   .callout ul { margin:0 0 10px; padding-left:18px; font-size:13.5px; color:var(--ink-2); }
   .callout li { margin-bottom:5px; }
+  .callout.delta-callout { border-left-color:var(--accent); }
+  .callout.delta-callout h3 { color:var(--accent); }
   .callout code, .prose code, .story-note code, .provenance code { font-family:var(--mono); font-size:.89em; background:var(--surface-2); padding:1px 5px; border-radius:2px; }
   .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-bottom:26px; position:sticky; top:env(safe-area-inset-top,0px); background:var(--ground); z-index:5; }
   .ctl-label { font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin-right:2px; }
@@ -211,6 +244,7 @@ function page(model, meta) {
       <div class="tally done"><div class="tally-n" id="t-done">0</div><div class="tally-l">Done &amp; test-verified</div></div>
       <div class="tally partial"><div class="tally-n" id="t-partial">0</div><div class="tally-l">Partial, gap named</div></div>
       <div class="tally idle"><div class="tally-n" id="t-idle">0</div><div class="tally-l">Not started</div></div>
+      <div class="tally delta"><div class="tally-n" id="t-delta">0</div><div class="tally-l">New in latest master</div></div>
     </div>
     <div class="meter" id="meter" role="img" aria-label="Overall delivery progress"></div>
   </section>
@@ -221,6 +255,17 @@ function page(model, meta) {
       <p class="sec-note">Phases from &sect;15 of the technical specification. Each is independently shippable.</p>
     </div>
     <div class="phases" id="phases"></div>
+  </section>
+
+  <section class="callout delta-callout">
+    <h3>Latest consolidation delta &middot; ${model.latestDelta?.date ?? 'not recorded'}</h3>
+    <p><code>${model.latestDelta?.source ?? 'No source recorded'}</code> was reconciled against the canonical backlog instead of appended with conflicting identifiers. The scope moves from <b>${model.latestDelta?.baseline_epics ?? 0} epics / ${model.latestDelta?.baseline_stories ?? 0} stories</b> to <b>${model.latestDelta?.current_epics ?? model.epics.length} epics / ${model.latestDelta?.current_stories ?? 0} stories</b>.</p>
+    <ul>
+      <li><b>+${model.latestDelta?.added_epics.length ?? 0} epics:</b> ${model.latestDelta?.added_epics.join(', ') ?? 'none'}.</li>
+      <li><b>+${model.latestDelta?.added_stories.length ?? 0} genuinely new stories:</b> ${model.latestDelta?.added_stories.join(', ') ?? 'none'}.</li>
+      <li><b>${model.latestDelta?.expanded_stories.length ?? 0} existing stories expanded:</b> ${model.latestDelta?.expanded_stories.join(', ') ?? 'none'}.</li>
+    </ul>
+    <p>Use <b>Latest master delta</b> below to show both the newly added stories and the existing stories whose acceptance criteria changed.</p>
   </section>
 
   <section class="callout">
@@ -250,7 +295,8 @@ function page(model, meta) {
       <button class="chip" type="button" data-status="done" aria-pressed="false">Done</button>
       <button class="chip" type="button" data-status="partial" aria-pressed="false">Partial</button>
       <button class="chip" type="button" data-status="idle" aria-pressed="false">Not started</button>
-      <button class="chip" type="button" data-status="new" aria-pressed="false">New from research</button>
+      <button class="chip" type="button" data-status="delta" aria-pressed="false">Latest master delta</button>
+      <button class="chip" type="button" data-status="new" aria-pressed="false">All scope additions</button>
     </div>
     <div id="ledger"></div>
   </section>
@@ -283,6 +329,7 @@ function renderTallies() {
   document.getElementById("t-done").textContent = count(ALL, "done");
   document.getElementById("t-partial").textContent = count(ALL, "partial");
   document.getElementById("t-idle").textContent = count(ALL, "idle");
+  document.getElementById("t-delta").textContent = MODEL.latestDelta?.added_stories.length ?? 0;
   const meter = document.getElementById("meter");
   meter.replaceChildren();
   [["done", count(ALL,"done")], ["partial", count(ALL,"partial")], ["idle", count(ALL,"idle")]].forEach(([k,n]) => {
@@ -310,7 +357,12 @@ function renderPhases() {
 
 function storyRow(s) {
   const row = el("div","story"), mid = el("div");
-  mid.append(el("div","story-name", s.name + (s.isNew ? ' <span class="tag-new">NEW</span>' : "")),
+  const deltaBadge = s.addedIn === MODEL.latestDelta?.id
+    ? ' <span class="tag-new">NEW MASTER</span>'
+    : s.expandedIn === MODEL.latestDelta?.id
+      ? ' <span class="tag-new">EXPANDED</span>'
+      : s.isNew ? ' <span class="tag-new">ADDED SCOPE</span>' : "";
+  mid.append(el("div","story-name", s.name + deltaBadge),
              el("div","story-note", s.note));
   row.append(el("div","story-id", s.id), mid,
     el("div","", '<span class="pill '+s.status+'">'+LABEL[s.status]+'</span>'),
@@ -325,8 +377,11 @@ function epicBlock(epic, stories) {
   const bd = el("i"); bd.style.width = (d/stories.length*100)+"%";
   const bp = el("i","p"); bp.style.width = (pa/stories.length*100)+"%";
   bar.append(bd,bp);
+  const epicBadge = epic.addedIn === MODEL.latestDelta?.id
+    ? ' <span class="tag-new">NEW MASTER</span>'
+    : epic.isNew ? ' <span class="tag-new">ADDED SCOPE</span>' : "";
   head.append(el("span","epic-id",epic.id),
-    el("span","epic-title", epic.title + (epic.isNew ? ' <span class="tag-new">NEW</span>' : "")),
+    el("span","epic-title", epic.title + epicBadge),
     bar, el("span","epic-ratio", d+"/"+stories.length));
   block.appendChild(head);
   stories.forEach(s => block.appendChild(storyRow(s)));
@@ -336,7 +391,11 @@ function epicBlock(epic, stories) {
 function render() {
   const host = document.getElementById("ledger");
   host.replaceChildren();
-  const match = s => state.status === "all" ? true : state.status === "new" ? Boolean(s.isNew) : s.status === state.status;
+  const match = s => state.status === "all"
+    ? true
+    : state.status === "delta"
+      ? s.addedIn === MODEL.latestDelta?.id || s.expandedIn === MODEL.latestDelta?.id
+      : state.status === "new" ? Boolean(s.isNew) : s.status === state.status;
 
   if (state.group === "epic") {
     let shown = 0;

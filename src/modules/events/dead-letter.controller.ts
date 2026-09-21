@@ -55,9 +55,9 @@ export class DeadLetterController {
 
   @Get(':id')
   async get(@Param('id') id: string, @Headers('x-org-id') orgId?: string) {
-    requireOrg(orgId);
+    const tenant = requireOrg(orgId);
     try {
-      return await this.service.get(id);
+      return await this.service.get(id, tenant);
     } catch (error) {
       toHttpError(error);
     }
@@ -69,9 +69,9 @@ export class DeadLetterController {
     @Body() body: { payload?: Record<string, unknown> },
     @Headers('x-org-id') orgId?: string,
   ) {
-    requireOrg(orgId);
+    const tenant = requireOrg(orgId);
     try {
-      return await this.service.replay(id, body?.payload);
+      return await this.service.replay(id, tenant, body?.payload);
     } catch (error) {
       toHttpError(error);
     }
@@ -83,9 +83,9 @@ export class DeadLetterController {
     @Body() body: { reason?: string },
     @Headers('x-org-id') orgId?: string,
   ) {
-    requireOrg(orgId);
+    const tenant = requireOrg(orgId);
     try {
-      return await this.service.discard(id, body?.reason);
+      return await this.service.discard(id, tenant, body?.reason);
     } catch (error) {
       toHttpError(error);
     }
