@@ -8,8 +8,15 @@ import {
   Post,
   Query,
   Headers,
+  Res,
 } from '@nestjs/common';
-import { InvalidEdgeTypeError, LineageService } from './lineage.service';
+import type { Response } from 'express';
+import {
+  InvalidEdgeTypeError,
+  LineageExportNotFoundError,
+  LineageService,
+  LineageWorkItemNotFoundError,
+} from './lineage.service';
 import { CreateLinkDto } from './lineage.types';
 
 @Controller('workitems')
@@ -87,5 +94,50 @@ export class LineageController {
       depth: d,
       edgeTypes: edges,
     });
+  }
+
+  @Post(':id/lineage-exports')
+  async createLineageExport(
+    @Param('id') id: string,
+    @Headers('x-org-id') headerOrgId?: string,
+    @Headers('x-actor-id') actorId?: string,
+    @Res({ passthrough: true }) response?: Response,
+  ) {
+    const orgId = headerOrgId || '00000000-0000-0000-0000-000000000099';
+    try {
+      const report = await this.service.createLineageExport(id, orgId, actorId || 'user-1');
+      response?.setHeader('Location', report.download_url);
+      return report;
+    } catch (err: any) {
+      if (err instanceof LineageWorkItemNotFoundError) {
+        throw new HttpException(err.message, HttpStatus.NOT_FOUND);
+      }
+      throw new HttpException(err.message || 'Failed to export lineage', HttpStatus.BAD_REQUEST);
+    }
+  }
+
+  @Get(':id/lineage-exports/:exportId')
+  async downloadLineageExport(
+    @Param('id') id: string,
+    @Param('exportId') exportId: string,
+    @Headers('x-org-id') headerOrgId?: string,
+    @Res({ passthrough: true }) response?: Response,
+  ) {
+    const orgId = headerOrgId || '00000000-0000-0000-0000-000000000099';
+    try {
+      const report = await this.service.getLineageExport(id, exportId, orgId);
+      const safeKey = report.root_key.replace(/[^A-Za-z0-9_-]/g, '-');
+      response?.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${safeKey}-lineage-${report.export_id}.json"`,
+      );
+      response?.setHeader('Cache-Control', 'private, immutable');
+      return report;
+    } catch (err: any) {
+      if (err instanceof LineageExportNotFoundError) {
+        throw new HttpException(err.message, HttpStatus.NOT_FOUND);
+      }
+      throw new HttpException(err.message || 'Failed to download lineage export', HttpStatus.BAD_REQUEST);
+    }
   }
 }

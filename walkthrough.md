@@ -407,7 +407,7 @@ Pick `SVC-CHECKOUT-API`, set depth to 3–4, and the view lists every implicated
 
 ### 4. Import the real backlog and trace lineage
 
-**Pilot actions → Import 12-epic backlog** creates 12 epics, 38 stories and 38 parent-child relationships. Filter by **Epics**, open any story, and **Trace lineage → Upstream** walks the `child_of` edge to its parent epic.
+**Pilot actions → Import 12-epic backlog** creates 12 epics, 38 stories and 38 parent-child relationships. Filter by **Epics**, open any story, and **Trace lineage → Upstream** walks the `child_of` edge to its parent epic. Choose **Export full report** to download a timestamped JSON snapshot of the complete connected graph; that stored report remains unchanged if the live graph is edited later.
 
 ### 5. Watch SLA aging bite, and see who gets told
 
@@ -429,8 +429,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  32 passed (32)
-      Tests  116 passed (116)
+ Test Files  34 passed (34)
+      Tests  121 passed (121)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -438,7 +438,7 @@ Plus the browser smoke suite, run separately because it builds and takes ~140 se
 ```
 npm run test:ui
  Test Files  1 passed (1)
-      Tests  11 passed (11)
+      Tests  12 passed (12)
 ```
 
 | Area | Tests |
@@ -446,7 +446,7 @@ npm run test:ui
 | Canonical model, custom fields, tenant isolation | `us1.1`, `us1.2`, `us1.3` |
 | Versioned workflows, guards, external automation | `us2.1`, `us2.2`, `us2.3` |
 | Aging & SLA across both calendars, including durable hold-state suspension | `us3.1`, `us3.2`, `us3.3`, **`us3.4`** |
-| Typed links, lineage, **service impact** | `us4.1`, `us4.2`, **`us4.3`** |
+| Typed links, lineage, **service impact and immutable report export** | `us4.1`, `us4.2`, **`us4.3`, `us4.4`** |
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
 | **Executive rollup, DORA & ITIL flow metrics** | **`us9.2`, `us9.4`** |
 | **Datastore persistence** | **`persistence`** |
@@ -454,7 +454,7 @@ npm run test:ui
 | **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
 | Authenticated tenant identity, RBAC, backlog fixture | **`us10.9`**, `us10.3`, `backlog-fixture` |
-| **Rendered heatmap ordering and executive overview** | **`ui-smoke`** |
+| **Rendered heatmap ordering, lineage export and executive overview** | **`ui-smoke`** |
 
 **QA coverage:** UI work is now verified in headless Chrome against the built server, including console-error and responsive checks. Not covered: visual regression (no screenshot baselines), cross-browser behaviour (Chrome only), and accessibility auditing beyond the keyboard and ARIA attributes already in the markup.
 

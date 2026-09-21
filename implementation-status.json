@@ -245,9 +245,9 @@
     },
     "US4.4": {
       "name": "Exportable lineage report",
-      "status": "idle",
+      "status": "done",
       "phase": 2,
-      "note": "No export endpoint exists. Lineage is queryable as JSON but cannot be emitted as an audit artefact."
+      "note": "Verified by <code>test/us4.4.spec.ts</code> and the browser smoke suite — the full tenant-scoped connected graph is persisted as a timestamped JSON snapshot, remains unchanged after the live graph changes, and downloads from the Traceability dialog."
     },
     "US5.1": {
       "name": "Schema-registered domain events",

@@ -13,7 +13,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Runtime & Framework**: TypeScript throughout, NestJS backend API.
 - **Datastore**: PostgreSQL with `pgvector` enabled via the `@electric-sql/pglite` in-process WASM engine, persisting to `CADENA_DATA_DIR` and in-memory when that is unset.
 - **Workflow Engine**: Hand-rolled state-machine engine implementing Spec §4, supporting versioned definitions, role guards, required fields, and reachability validation.
-- **Traceability Graph**: Typed edge table (`work_item_links`) supporting upstream and downstream recursive lineage traversal, plus depth-limited impact analysis from a Service across the `affects` edge.
+- **Traceability Graph**: Typed edge table (`work_item_links`) supporting upstream/downstream traversal, Service impact analysis, and immutable point-in-time JSON lineage reports.
 - **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, warning/breach events, and durable pause/resume semantics for configured hold states.
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
@@ -21,7 +21,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Transactional Event Backbone**: Canonical work-item creation, transitions and typed links commit their immutable event and outbox marker atomically; inbound webhooks persist before returning HTTP 202 and process from a queryable queue; pending envelopes recover on bootstrap with the same event id, and every consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
 - **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
-- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, executive overview, item details, linking, lineage exploration, service impact, monitoring evidence, and notification delivery logs.
+- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, executive overview, item details, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs.
 - **Testing**: Vitest + NestJS Testing + Supertest running 120 automated tests across 33 test files, plus an 11-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
@@ -51,6 +51,7 @@ Expected output:
  ✓ test/us4.1.spec.ts (2 tests)
  ✓ test/us4.2.spec.ts (1 test)
  ✓ test/us4.3.spec.ts (6 tests)
+ ✓ test/us4.4.spec.ts (1 test)
  ✓ test/us6.1.spec.ts (2 tests)
  ✓ test/us6.2.spec.ts (1 test)
  ✓ test/us6.3.spec.ts (1 test)
@@ -65,14 +66,15 @@ Expected output:
  ✓ test/tracker.spec.ts (6 tests)
  ✓ test/persistence.spec.ts (5 tests)
  ✓ test/us5.1.spec.ts (4 tests)
+ ✓ test/us5.4.spec.ts (4 tests)
  ✓ test/us5.spec.ts (10 tests)
  ✓ test/review-regressions.spec.ts (7 tests)
  ✓ test/us10.3.spec.ts (1 test)
  ✓ test/us10.9.spec.ts (13 tests)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  32 passed (32)
-      Tests  116 passed (116)
+ Test Files  34 passed (34)
+      Tests  121 passed (121)
 ```
 
 ### 2. Run the Server
@@ -294,6 +296,26 @@ x-org-id: 00000000-0000-0000-0000-000000000099
 POST /services/:id/work-items
 { "work_item_id": "<incident id>" }
 ```
+
+---
+
+## Lineage Report Export (US4.4)
+
+Create a tenant-scoped, point-in-time JSON snapshot of the entire connected work-item graph:
+
+```http
+POST /workitems/:id/lineage-exports
+x-org-id: 00000000-0000-0000-0000-000000000099
+x-actor-id: compliance-reviewer
+```
+
+The `cadena.lineage-report.v1` response contains the generation actor/time, root item, node/edge counts, every connected node with creation/update timestamps, and every typed edge with its creation timestamp. Its `download_url` retrieves the same stored document with an attachment filename:
+
+```http
+GET /workitems/:id/lineage-exports/:exportId
+```
+
+Downloads never recalculate the graph. Links and states added later therefore do not rewrite evidence already captured. Cross-tenant retrieval returns 404. The same action is available as **Trace lineage → Export full report** in the pilot UI.
 
 ---
 
@@ -566,6 +588,8 @@ The specification's Phase 1 operational-visibility scope is now complete: SLA cl
 | **US4.3** | Filters the traversal to named edge types | `test/us4.3.spec.ts` | **PASS** |
 | **US4.3** | Scopes impact analysis and `affects` edge creation to the owning tenant | `test/us4.3.spec.ts` | **PASS** |
 | **US4.3** | Reflects incident resolution in the impact summary | `test/us4.3.spec.ts` | **PASS** |
+| **US4.4** | Exports the complete connected lineage graph with node/edge timestamps | `test/us4.4.spec.ts` | **PASS** |
+| **US4.4** | Preserves the original snapshot after live graph changes and rejects cross-tenant retrieval | `test/us4.4.spec.ts` | **PASS** |
 | **US5.1** | Commits work-item creation, state transitions and typed links with their immutable outbox event | `test/us5.1.spec.ts` | **PASS** |
 | **US5.1** | Rolls back state and audit writes on outbox failure and recovers pending envelopes with the original event id | `test/us5.1.spec.ts` | **PASS** |
 | **US5.4** | Persists valid webhooks and returns HTTP 202 before downstream work-item mutation | `test/us5.4.spec.ts` | **PASS** |

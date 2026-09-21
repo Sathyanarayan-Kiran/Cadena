@@ -26,6 +26,31 @@ export interface CreateLinkDto {
   link_type: LinkType;
 }
 
+export interface LineageExportDocument {
+  schema: 'cadena.lineage-report.v1';
+  export_id: string;
+  root_work_item_id: string;
+  root_key: string;
+  org_id: string;
+  generated_at: string;
+  generated_by: string;
+  download_url: string;
+  summary: {
+    node_count: number;
+    edge_count: number;
+  };
+  nodes: Array<{
+    id: string;
+    key: string;
+    type: string;
+    title: string;
+    status: string;
+    created_at: string;
+    updated_at: string;
+  }>;
+  edges: WorkItemLink[];
+}
+
 export const ALLOWED_EDGES_BY_PAIR: Record<string, LinkType[]> = {
   'epic:epic': ['parent_of', 'child_of', 'blocks', 'blocked_by', 'relates_to', 'duplicate_of'],
   'epic:story': ['parent_of', 'blocks', 'relates_to'],

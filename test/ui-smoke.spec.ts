@@ -300,6 +300,63 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await closeAnyDialog();
   });
 
+  it('exports a full lineage snapshot from the Traceability dialog', async () => {
+    await closeAnyDialog();
+    const incidents = await api('/workitems?type=incident');
+    const target = incidents.find((item: any) => item.custom_fields?.alert_dedupe_key === 'ui-smoke-latency');
+    expect(target).toBeTruthy();
+
+    await page.select('#typeFilter', 'incident');
+    await page.waitForFunction(() => document.querySelectorAll('.work-card').length > 0, { timeout: 10000 });
+    await openCardByKey(target.key);
+    await page.waitForSelector('#itemDialog[open]', { timeout: 10000 });
+    await page.evaluate(() => {
+      const button = Array.from(document.querySelectorAll<HTMLButtonElement>('#detailBody button'))
+        .find((candidate) => candidate.textContent?.trim() === 'Trace lineage');
+      button?.click();
+    });
+    await page.waitForSelector('#lineageDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => !document.querySelector('#lineageContent .skeleton'), { timeout: 10000 });
+
+    // Capture the client-side download without writing a browser download into the test host.
+    await page.evaluate(() => {
+      const originalClick = HTMLAnchorElement.prototype.click;
+      (window as any).__restoreDownloadClick = () => {
+        HTMLAnchorElement.prototype.click = originalClick;
+      };
+      HTMLAnchorElement.prototype.click = function captureDownload() {
+        if (this.download) {
+          (window as any).__capturedDownloadName = this.download;
+          return;
+        }
+        originalClick.call(this);
+      };
+    });
+
+    const responsePromise = page.waitForResponse(
+      (response) => response.request().method() === 'POST'
+        && response.url().endsWith(`/workitems/${target.id}/lineage-exports`),
+    );
+    await page.click('#exportLineageButton');
+    const response = await responsePromise;
+    expect(response.status()).toBe(201);
+    const report = await response.json() as any;
+    expect(report.schema).toBe('cadena.lineage-report.v1');
+    expect(report.summary.node_count).toBeGreaterThanOrEqual(2);
+    expect(report.summary.edge_count).toBeGreaterThanOrEqual(1);
+    await page.waitForFunction(() => document.querySelector('#toastRegion')?.textContent?.includes('Exported'));
+
+    const downloadName = await page.evaluate(() => {
+      const name = (window as any).__capturedDownloadName;
+      (window as any).__restoreDownloadClick?.();
+      return name;
+    });
+    expect(downloadName).toContain(`${target.key}-lineage-`);
+
+    await closeAnyDialog();
+    await page.select('#typeFilter', '');
+  });
+
   it('shows the notification delivery log including the Slack to email fallback', async () => {
     await closeAnyDialog();
     await page.click('#openNotificationsFromNav');

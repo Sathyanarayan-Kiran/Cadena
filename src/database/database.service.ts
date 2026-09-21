@@ -138,6 +138,15 @@ export class DatabaseService {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
+      CREATE TABLE IF NOT EXISTS lineage_exports (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        root_work_item_id UUID NOT NULL REFERENCES work_items(id),
+        created_by TEXT NOT NULL,
+        report JSONB NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS audit_events (
         id UUID PRIMARY KEY,
         event_type TEXT NOT NULL,
@@ -372,6 +381,8 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS integration_deliveries_queue ON integration_deliveries (status, created_at);
       CREATE INDEX IF NOT EXISTS dlq_consumer_status ON dead_letter_events (consumer, status);
       CREATE INDEX IF NOT EXISTS api_credentials_hash ON api_credentials (token_hash);
+      CREATE INDEX IF NOT EXISTS lineage_exports_root_time
+        ON lineage_exports (org_id, root_work_item_id, created_at);
     `);
     await this.db.exec(`
       UPDATE work_items

@@ -1,7 +1,12 @@
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
 import { EventOutboxService } from '../events/event-outbox.service';
-import { ALLOWED_EDGES_BY_PAIR, LinkType, WorkItemLink } from './lineage.types';
+import {
+  ALLOWED_EDGES_BY_PAIR,
+  LineageExportDocument,
+  LinkType,
+  WorkItemLink,
+} from './lineage.types';
 import { WorkItemService } from '../work-items/work-item.service';
 
 export class InvalidEdgeTypeError extends Error {
@@ -15,6 +20,20 @@ export class InvalidEdgeTypeError extends Error {
       `Edge type '${linkType}' is not allowed between '${sourceType}' and '${targetType}'`,
     );
     this.name = 'InvalidEdgeTypeError';
+  }
+}
+
+export class LineageExportNotFoundError extends Error {
+  constructor(exportId: string) {
+    super(`Lineage export '${exportId}' not found`);
+    this.name = 'LineageExportNotFoundError';
+  }
+}
+
+export class LineageWorkItemNotFoundError extends Error {
+  constructor(workItemId: string) {
+    super(`Work item '${workItemId}' not found`);
+    this.name = 'LineageWorkItemNotFoundError';
   }
 }
 
@@ -211,6 +230,113 @@ export class LineageService {
       edges: resultEdges,
       chain: nodes,
     };
+  }
+
+  /**
+   * Captures the complete connected component around a work item as an immutable report.
+   * The report is stored rather than recreated on download so an audit keeps the exact
+   * graph, labels and timestamps that existed when the reviewer requested it.
+   */
+  public async createLineageExport(
+    workItemId: string,
+    orgId: string,
+    actorId: string,
+  ): Promise<LineageExportDocument> {
+    await this.dbService.initialize();
+
+    const root = await this.workItemService.getWorkItemById(workItemId, orgId);
+    if (!root) throw new LineageWorkItemNotFoundError(workItemId);
+
+    const visitedNodeIds = new Set<string>([workItemId]);
+    const visitedEdgeIds = new Set<string>();
+    const orderedNodeIds = [workItemId];
+    const queue = [workItemId];
+    const edges: WorkItemLink[] = [];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const result = await this.dbService.db.query<any>(
+        `SELECT link.* FROM work_item_links link
+         JOIN work_items source_item ON source_item.id = link.source_id
+         JOIN work_items target_item ON target_item.id = link.target_id
+         WHERE (link.source_id = $1 OR link.target_id = $1)
+           AND source_item.org_id = $2 AND target_item.org_id = $2
+         ORDER BY link.created_at ASC, link.id ASC`,
+        [currentId, orgId],
+      );
+
+      for (const row of result.rows || []) {
+        const link = this.mapRowToLink(row);
+        if (!visitedEdgeIds.has(link.id)) {
+          visitedEdgeIds.add(link.id);
+          edges.push(link);
+        }
+
+        const connectedId = link.source_id === currentId ? link.target_id : link.source_id;
+        if (!visitedNodeIds.has(connectedId)) {
+          visitedNodeIds.add(connectedId);
+          orderedNodeIds.push(connectedId);
+          queue.push(connectedId);
+        }
+      }
+    }
+
+    const nodes: LineageExportDocument['nodes'] = [];
+    for (const id of orderedNodeIds) {
+      const item = await this.workItemService.getWorkItemById(id, orgId);
+      if (!item) continue;
+      nodes.push({
+        id: item.id,
+        key: item.key,
+        type: item.type,
+        title: item.title,
+        status: item.status,
+        created_at: item.created_at,
+        updated_at: item.updated_at,
+      });
+    }
+
+    const exportId = randomUUID();
+    const generatedAt = new Date().toISOString();
+    const report: LineageExportDocument = {
+      schema: 'cadena.lineage-report.v1',
+      export_id: exportId,
+      root_work_item_id: workItemId,
+      root_key: root.key,
+      org_id: orgId,
+      generated_at: generatedAt,
+      generated_by: actorId,
+      download_url: `/workitems/${workItemId}/lineage-exports/${exportId}`,
+      summary: { node_count: nodes.length, edge_count: edges.length },
+      nodes,
+      edges,
+    };
+
+    await this.dbService.db.query(
+      `INSERT INTO lineage_exports
+       (id, org_id, root_work_item_id, created_by, report, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [exportId, orgId, workItemId, actorId, JSON.stringify(report), generatedAt],
+    );
+
+    return report;
+  }
+
+  public async getLineageExport(
+    workItemId: string,
+    exportId: string,
+    orgId: string,
+  ): Promise<LineageExportDocument> {
+    await this.dbService.initialize();
+    const result = await this.dbService.db.query<any>(
+      `SELECT report FROM lineage_exports
+       WHERE id = $1 AND root_work_item_id = $2 AND org_id = $3`,
+      [exportId, workItemId, orgId],
+    );
+    if (!result.rows?.length) throw new LineageExportNotFoundError(exportId);
+
+    const value = result.rows[0].report;
+    return (typeof value === 'string' ? JSON.parse(value) : value) as LineageExportDocument;
   }
 
   private getNextNodeId(link: WorkItemLink, currentId: string, direction: 'up' | 'down'): string | null {

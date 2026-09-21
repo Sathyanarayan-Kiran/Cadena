@@ -2,6 +2,66 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex US4.4 lineage-report export update — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older dated notes below that correctly recorded US4.4 as not started at the time they were written; those sections remain unchanged as delivery history.
+
+**Status:** Complete. US4.4 moved from not started to done, completing Epic 4. The delivery ledger is now **30 done / 5 partial / 37 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+US4.1–US4.3 already provided typed relationships, semantic upstream/downstream traversal and service-impact analysis. US4.4 was the only remaining Phase 2 story that did not depend on a real external channel transport or an authoritative CMDB. The live lineage query was useful for investigation, but it could not preserve what reviewers saw at a point in time or produce a portable audit artefact.
+
+### Scope delivered by Codex
+
+- Added `POST /workitems/:id/lineage-exports` to walk the complete connected work-item graph in both directions and create a tenant-scoped `cadena.lineage-report.v1` JSON document.
+- Included every exported node and edge with its identifiers, type or relationship, current state, title and persisted creation/update timestamps, plus report generation time, actor and counts.
+- Persisted the complete report in the new `lineage_exports` table. A later download reads the stored JSON rather than recalculating the live graph, so new links or state changes cannot rewrite historical evidence.
+- Added `GET /workitems/:id/lineage-exports/:exportId` with attachment metadata, immutable private caching semantics and a tenant-qualified lookup that returns 404 across tenant boundaries.
+- Added **Export full report** to the existing Traceability dialog. It creates the snapshot, downloads a formatted JSON file and confirms the exported node/relationship count to the user.
+- Updated the canonical implementation overlay and regenerated `public/status.html`; Epic 4 now correctly renders as complete.
+
+### Acceptance criteria proved
+
+| Acceptance criterion | Evidence |
+| --- | --- |
+| A completed Incident produces a document listing every node and edge in its chain, with timestamps | `test/us4.4.spec.ts` builds a completed Incident-to-Release-to-Story-to-Epic graph, exports it and asserts all four nodes, all three edges and their timestamps. |
+| The audit artefact remains a point-in-time record | The acceptance test adds a new live relationship after export and proves the downloaded report is JSON-equivalent to the original snapshot and excludes the later node. |
+| Reports are tenant-scoped and downloadable | The same test verifies attachment headers and a 404 for another tenant; `test/ui-smoke.spec.ts` drives the visible Traceability export action against the built server. |
+
+### Files added by Codex
+
+- `test/us4.4.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/lineage/lineage.types.ts`
+- `src/modules/lineage/lineage.service.ts`
+- `src/modules/lineage/lineage.controller.ts`
+- `public/index.html`
+- `test/ui-smoke.spec.ts`
+- `implementation-status.json`
+- `scripts/build-tracker.mjs`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- TypeScript build: **PASS**
+- Focused lineage acceptance and regression suite: **PASS — 3 test files, 8 tests**
+- Full non-browser regression: **PASS — 34 test files, 121 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 30 done / 5 partial / 37 not started**
+- Browser smoke suite against the built production server: **PASS — 12 tests**
+
+### Deliberate boundaries
+
+- The report is JSON, not a styled PDF. JSON is the portable, lossless pilot artefact; a presentation format can be generated later without changing the immutable source snapshot.
+- Snapshot immutability is enforced by the API surface: exports can be created and retrieved, but never updated. Database-level append-only permissions and cryptographic verification remain part of US10.7 rather than being overstated here.
+- The connected-component walk is intentionally work-item-only. Service-registry impact evidence remains available through US4.3 and can be folded into a later composite postmortem package without changing this story's canonical work-item lineage contract.
+
 ## Codex US5.4 asynchronous webhook-ingestion update — 2026-09-21
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older dated notes below that correctly recorded US5.4 as deferred or not started at the time they were written; those sections remain unchanged as delivery history.
