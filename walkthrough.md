@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, Epic 5 consumption reliability, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.4 flow metrics and US10.9 authenticated tenant identity. The canonical backlog is **20 epics / 72 stories**, with **27 done / 6 partial / 39 not started**.
-**Verification:** 112 automated tests across 31 test files, plus 11 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, Epic 5 transactional event delivery and consumption reliability, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.4 flow metrics and US10.9 authenticated tenant identity. The canonical backlog is **20 epics / 72 stories**, with **28 done / 5 partial / 39 not started**.
+**Verification:** 116 automated tests across 32 test files, plus 11 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,22 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-21 — Transactional outbox: a committed work-item change cannot lose its event
+
+Durable event history existed, but it was written immediately after the business mutation. A process stop between those two statements left a changed work item with no event, exactly the failure US5.1 exists to prevent.
+
+**What changed**
+
+- Work-item creation, workflow transitions and typed-link creation now insert the business write, immutable `domain_events` envelope and pending `event_outbox` marker in one PGlite transaction.
+- Publication happens only after commit and uses the already-committed `event_id`; it never invents a second logical event.
+- Application bootstrap drains pending rows. A stop after commit but before publication therefore becomes an at-least-once redelivery, which the existing per-consumer idempotency layer safely deduplicates.
+- A transition update now includes its expected source state. If another caller changes the item between validation and commit, the stale transition is rejected instead of overwriting the newer state.
+- `test/us5.1.spec.ts` proves atomic create/transition/link events, full rollback when enqueue fails, and recovery of an undispatched envelope with the original identity.
+
+US5.1 moves from partial to **done**, taking the canonical ledger to **28 done / 5 partial / 39 not started**. The complete non-browser regression passes **116 tests across 32 files**.
+
+**Boundary:** the dispatcher remains in-process and bootstrap-driven. US5.4 asynchronous HTTP ingestion, continuous multi-worker dispatch and Kafka/MSK remain open; the delivered guarantee is the US5.1 mutation-to-event transaction boundary.
 
 ### 2026-09-21 — Phase 1 operational visibility: fair clocks, ordered attention, executive evidence
 
@@ -109,7 +125,7 @@ Before this, `NotificationService` caught its own errors and logged them. A pers
 | US5.2 idempotent processing | **Done** |
 | US5.3 DLQ with alerting | **Done** |
 | US5.5 replay console | **Done** |
-| US5.1 outbox | Partial — events persist, but outside the mutation's transaction |
+| US5.1 outbox | Partial at this 2026-09-20 increment — completed by the 2026-09-21 update above |
 | US5.4 HTTP 202 ingestion | Not started — deferred, see below |
 
 **US5.4 was deliberately deferred.** Making webhook ingestion asynchronous changes the response contract that ten Epic 6 and 7 tests assert against. It deserves its own slice with a considered migration, not a change smuggled in beside a consumer framework.
@@ -323,7 +339,7 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 112 tests across 31 files
+npm test        # 116 tests across 32 files
 npm run test:ui # 11 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
@@ -396,8 +412,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  31 passed (31)
-      Tests  112 passed (112)
+ Test Files  32 passed (32)
+      Tests  116 passed (116)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -417,7 +433,7 @@ npm run test:ui
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
 | **Executive rollup, DORA & ITIL flow metrics** | **`us9.2`, `us9.4`** |
 | **Datastore persistence** | **`persistence`** |
-| **Idempotency, retry, dead letters** | **`us5`** |
+| **Transactional outbox, recovery, idempotency, retry and dead letters** | **`us5.1`, `us5`** |
 | **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
 | Authenticated tenant identity, RBAC, backlog fixture | **`us10.9`**, `us10.3`, `backlog-fixture` |
@@ -431,7 +447,7 @@ npm run test:ui
 
 Named plainly so nobody mistakes the pilot for a product:
 
-- **Epic 5** — consumption is now reliable (idempotent, retried, dead-lettered), but the bus is still in-process. No Kafka, no transactional outbox, and webhook ingestion is still synchronous (US5.4).
+- **Epic 5 remaining boundary** — work-item mutations use a transactional outbox and consumption is idempotent, retried and dead-lettered, but the dispatcher is still in-process and bootstrap-driven. There is no Kafka/MSK, continuous multi-worker poller or asynchronous webhook ingestion (US5.4).
 - **Epic 8 transports** — routing, fallback and the delivery log are real, but no message actually leaves the process. The channel adapters are stubs awaiting SES/SendGrid, the Slack Web API and Microsoft Graph. `IncidentAutoCreated` is also not yet routed; only the three SLA events are.
 - **Identity hardening** — bearer credentials now prove tenant and principal in production mode, but SSO/OIDC/SAML, SCIM, a login UI and provider-specific integration credentials are not built. Dev mode still permits explicit header identity for the pilot UI.
 - **Epic 11** — no CMDB federation. Alert-discovered Services are lightweight stubs flagged `monitoring_discovery`.

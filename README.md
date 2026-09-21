@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's core thesis: **one canonical work-item model** and **one state-machine engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them.
 
-> **Current status (Codex update, 2026-09-21):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 8 notification and escalation service, the Phase 1 team heatmap and cross-team executive rollup, US9.4 DORA/ITIL metrics, and the integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog contains **20 epics and 72 stories**, with **27 done / 6 partial / 39 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger.
+> **Current status (Codex update, 2026-09-21):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox and reliable-consumption paths, the Epic 8 notification and escalation service, the Phase 1 team heatmap and cross-team executive rollup, US9.4 DORA/ITIL metrics, and the integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog contains **20 epics and 72 stories**, with **28 done / 5 partial / 39 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger.
 
 ---
 
@@ -18,11 +18,11 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
-- **Reliable Consumption**: Every event consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
-- **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
+- **Transactional Event Backbone**: Canonical work-item creation, transitions and typed links commit their immutable event and outbox marker atomically; pending envelopes recover on bootstrap with the same event id, and every consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
+- **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, executive overview, item details, linking, lineage exploration, service impact, monitoring evidence, and notification delivery logs.
-- **Testing**: Vitest + NestJS Testing + Supertest running 112 automated tests across 31 test files, plus an 11-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 116 automated tests across 32 test files, plus an 11-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -64,14 +64,15 @@ Expected output:
  ✓ test/us9.4.spec.ts (7 tests)
  ✓ test/tracker.spec.ts (6 tests)
  ✓ test/persistence.spec.ts (5 tests)
+ ✓ test/us5.1.spec.ts (4 tests)
  ✓ test/us5.spec.ts (10 tests)
- ✓ test/review-regressions.spec.ts (6 tests)
+ ✓ test/review-regressions.spec.ts (7 tests)
  ✓ test/us10.3.spec.ts (1 test)
  ✓ test/us10.9.spec.ts (13 tests)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  31 passed (31)
-      Tests  112 passed (112)
+ Test Files  32 passed (32)
+      Tests  116 passed (116)
 ```
 
 ### 2. Run the Server
@@ -415,11 +416,13 @@ Change failure rate is the figure that pays for the traceability graph. In a two
 
 The response also reports coverage, because a metric computed over partial evidence should say so: lead time counts only deployments whose work items also carry a linked commit, and time to restore counts only incidents with a recorded resolution.
 
-### Durable event history
+### Transactional outbox and durable event history
 
 `GET /events` exposes the `domain_events` table, which records every event the platform publishes, filterable by type, work item and time range. It is what makes the metrics computable from history rather than from current state.
 
-**Boundary:** this is durable history, not yet the transactional outbox US5.1 asks for. The write lands immediately after the mutation rather than inside its transaction, so a crash in that gap still loses an event.
+For the canonical work-item mutation paths, `WorkItemCreated`, `WorkItemStateChanged` and `LinkCreated` are inserted into `domain_events` together with a pending `event_outbox` marker in the same database transaction as the business write. Publication happens after commit. If the process stops in that gap, application bootstrap drains the pending row with its original `event_id`; consumer idempotency makes an at-least-once redelivery safe.
+
+**Boundary:** the pilot dispatcher is still in-process. The outbox closes the mutation-to-event crash gap for the work-item writes named by US5.1, but Kafka/MSK, continuous background polling across multiple workers and HTTP 202 webhook ingestion remain later event-backbone work.
 
 ---
 
@@ -511,7 +514,7 @@ The pilot is deliberately explicit about what is not production-ready:
    - timestamp-based replay rejection in addition to the existing delivery-id deduplication;
    - per-provider adapters translating raw provider payloads into the normalized contract above.
 2. **Integration-specific identity is not authenticated.** The API bearer credential proves a tenant and principal, but it is not yet bound to one configured provider installation. `automation_actor_role` also grants a workflow role by configuration rather than by binding the external actor to a first-class RBAC principal. Guards still evaluate that role — it is not a bypass — but provider-scoped credentials and actor mapping remain hardening work.
-3. **Delivery durability stops short of a broker.** Consumption is idempotent, retried and dead-lettered with operator replay, and history is persisted. Still outstanding: the transactional outbox (US5.1), asynchronous HTTP 202 ingestion (US5.4), and a real broker such as Kafka or AWS MSK in place of the in-process bus.
+3. **Delivery durability stops short of a broker.** Canonical work-item mutations now use a transactional outbox, and consumption is idempotent, retried and dead-lettered with operator replay. Still outstanding: asynchronous HTTP 202 ingestion (US5.4), continuous multi-worker dispatch, and a real broker such as Kafka or AWS MSK in place of the in-process bus.
 4. **Retries are in-process and immediate.** A consumer whose dependency is down for minutes exhausts its attempts and dead-letters rather than waiting it out. Scheduled redelivery with longer backoff belongs with that broker.
 5. **No notification actually leaves the process.** Channel adapters are stubs; the `notifications` table is the delivery record. Routing, fallback and idempotency are real and tested, but SES/SendGrid, the Slack Web API and Microsoft Graph are not wired in.
 6. **The Service registry is not a CMDB.** Auto-registered entries are lightweight stubs flagged `monitoring_discovery`. Live federation, staleness flagging, and authoritative ownership are Epic 11 (US11.1, US11.2).
@@ -523,7 +526,7 @@ The pilot is deliberately explicit about what is not production-ready:
 The specification's Phase 1 operational-visibility scope is now complete: SLA clocks can pause on hold, the team heatmap is browser-verified, and the executive rollup reports SLA compliance, cycle time and aging distribution per team and business unit. The next extension work is:
 
 1. **Remaining Event Backbone (Epic 5)**:
-   - Consumption is reliable: idempotent, retried, dead-lettered, replayable. Still open: the transactional outbox (US5.1), asynchronous HTTP 202 ingestion (US5.4), and replacing the in-process bus with Kafka / AWS MSK.
+   - Mutation-to-event delivery and consumption are reliable: transactional, idempotent, retried, dead-lettered and replayable. Still open: asynchronous HTTP 202 ingestion (US5.4), a continuously polling multi-worker dispatcher, and replacing the in-process bus with Kafka / AWS MSK.
 
 2. **Real Notification Transports (Epic 8 hardening)**:
    - Replace the pilot channel adapters with SES/SendGrid, the Slack Web API, and Microsoft Graph. Routing, fallback, and the delivery log already work and are transport-independent.
@@ -563,6 +566,8 @@ The specification's Phase 1 operational-visibility scope is now complete: SLA cl
 | **US4.3** | Filters the traversal to named edge types | `test/us4.3.spec.ts` | **PASS** |
 | **US4.3** | Scopes impact analysis and `affects` edge creation to the owning tenant | `test/us4.3.spec.ts` | **PASS** |
 | **US4.3** | Reflects incident resolution in the impact summary | `test/us4.3.spec.ts` | **PASS** |
+| **US5.1** | Commits work-item creation, state transitions and typed links with their immutable outbox event | `test/us5.1.spec.ts` | **PASS** |
+| **US5.1** | Rolls back state and audit writes on outbox failure and recovers pending envelopes with the original event id | `test/us5.1.spec.ts` | **PASS** |
 | **US6.1** | Stores commits and links recognized work-item keys while retaining unlinked commits | `test/us6.1.spec.ts` | **PASS** |
 | **US6.2** | Auto-transitions a linked Story when its pull request is merged | `test/us6.2.spec.ts` | **PASS** |
 | **US6.3** | Links deployments to Stories/Releases, advances the Release, and deduplicates delivery replay | `test/us6.3.spec.ts` | **PASS** |

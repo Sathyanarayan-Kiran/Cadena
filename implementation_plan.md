@@ -2,6 +2,72 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex US5.1 transactional-outbox update — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older dated notes below that correctly recorded US5.1 as partial at the time they were written; those sections remain unchanged as delivery history.
+
+**Status:** Complete. US5.1 moved from partial to done. The delivery ledger is now **28 done / 5 partial / 39 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+The platform already persisted every published event and made consumers idempotent, retried and recoverable. The remaining failure window sat before publication: a work-item mutation committed first and its event was written second. A process stop between those operations produced durable state with no durable fact describing how it changed.
+
+### Scope delivered by Codex
+
+- Added `event_outbox`, keyed to the immutable `domain_events` envelope and carrying pending/dispatched status, attempt count, error evidence and dispatch timestamps.
+- Added `EventOutboxService`, which creates a versioned envelope inside a caller-supplied database transaction, publishes that committed envelope after commit, and recovers pending envelopes during application bootstrap.
+- Added `InProcessEventBus.publishEnvelope()` so recovery reuses the original `event_id` instead of creating a second logical event.
+- Moved all currently event-emitting canonical work-item writes into the outbox boundary:
+  - work-item creation and `WorkItemCreated`;
+  - workflow state/audit mutation and `WorkItemStateChanged`;
+  - typed relationship creation and `LinkCreated`.
+- Added an expected-source-state condition to transition commits. A stale concurrent transition now fails rather than overwriting a newer state.
+- Retained synchronous post-commit delivery for current callers, so notification, automation and test behaviour remains compatible while durability improves underneath it.
+- Added `test/us5.1.spec.ts` with four acceptance tests covering atomic creation, transition rollback on enqueue failure, atomic transition/link envelopes, and bootstrap recovery with stable event identity.
+
+### Crash guarantees now proved
+
+| Failure point | Result |
+| --- | --- |
+| Before transaction commit | Business write, audit row and event all roll back |
+| After commit, before publication | Business write and event remain durable; pending envelope is recovered on bootstrap |
+| During or after consumer delivery | The original event id is redelivered; US5.2 consumer claims suppress duplicate side effects |
+
+### Files added by Codex
+
+- `src/modules/events/event-outbox.service.ts`
+- `test/us5.1.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/events/event-bus.ts`
+- `src/modules/events/event-store.service.ts`
+- `src/modules/metrics/metrics.module.ts`
+- `src/modules/work-items/work-item.service.ts`
+- `src/modules/workflow/workflow.service.ts`
+- `src/modules/lineage/lineage.service.ts`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused US5.1 acceptance suite: **PASS — 4 tests**
+- Full non-browser regression: **PASS — 32 test files, 116 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 28 done / 5 partial / 39 not started**
+- `git diff --check`: **PASS**
+
+### Deliberate boundaries
+
+- This closes US5.1 for canonical work-item mutations. Scheduled SLA and integration-adapter events still use the wildcard event-store subscriber because their source writes are outside the WorkItem mutation scope.
+- The dispatcher is in-process and recovery runs on bootstrap. Continuous polling, multi-worker claims and partition ordering belong with the broker implementation.
+- US5.4 remains not started: provider webhooks are still processed synchronously rather than acknowledged with HTTP 202 and queued.
+- Kafka/MSK/EventBridge remains a target transport. The outbox preserves the envelope and at-least-once contract that transport will consume later.
+
 ## Codex Phase 1 operational-visibility update — 2026-09-21
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. Earlier Codex records and the original Gemini plan remain below as history.

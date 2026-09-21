@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
-import { InProcessEventBus } from '../events/event-bus';
+import { EventOutboxService } from '../events/event-outbox.service';
 import { ALLOWED_EDGES_BY_PAIR, LinkType, WorkItemLink } from './lineage.types';
 import { WorkItemService } from '../work-items/work-item.service';
 
@@ -36,8 +36,9 @@ export interface LineageResult {
 
 export class LineageService {
   private dbService = DatabaseService.getInstance();
-  private eventBus = InProcessEventBus.getInstance();
   private workItemService = new WorkItemService();
+
+  constructor(private readonly outbox = new EventOutboxService()) {}
 
   public async createLink(
     sourceId: string,
@@ -83,12 +84,6 @@ export class LineageService {
     const linkId = randomUUID();
     const now = new Date().toISOString();
 
-    await this.dbService.db.query(
-      `INSERT INTO work_item_links (id, source_id, target_id, link_type, created_at)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [linkId, sourceId, targetId, linkType, now],
-    );
-
     const link: WorkItemLink = {
       id: linkId,
       source_id: sourceId,
@@ -97,12 +92,24 @@ export class LineageService {
       created_at: now,
     };
 
-    await this.eventBus.publish(
-      'LinkCreated',
-      sourceId,
-      { type: 'user', id: actorId },
-      { link },
-    );
+    const tenantId = sourceRes.rows[0].org_id;
+    const event = await this.dbService.db.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO work_item_links (id, source_id, target_id, link_type, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [linkId, sourceId, targetId, linkType, now],
+      );
+      return this.outbox.enqueue(tx, {
+        event_type: 'LinkCreated',
+        work_item_id: sourceId,
+        org_id: tenantId,
+        actor: { type: 'user', id: actorId },
+        payload: { org_id: tenantId, link },
+        timestamp: now,
+      });
+    });
+
+    await this.outbox.dispatch(event);
 
     return link;
   }

@@ -251,9 +251,9 @@
     },
     "US5.1": {
       "name": "Schema-registered domain events",
-      "status": "partial",
+      "status": "done",
       "phase": 3,
-      "note": "Events are persisted to <code>domain_events</code> on a datastore that survives a restart, queryable at <code>GET /events</code>, and the <code>org_id</code> addition to <code>WorkItemStateChanged</code> was additive as the story requires. Still partial: the write happens just after the mutation rather than inside its transaction, so the outbox guarantee is unmet."
+      "note": "Verified by <code>test/us5.1.spec.ts</code> — WorkItem creation, state transitions and typed-link writes commit their immutable event and pending outbox marker in the same transaction; bootstrap recovers a committed-but-undispatched envelope with its original event id, and an outbox insert failure rolls back the business and audit writes."
     },
     "US5.2": {
       "name": "Idempotent event processing",

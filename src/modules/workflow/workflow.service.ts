@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
-import { InProcessEventBus } from '../events/event-bus';
+import { EventOutboxService } from '../events/event-outbox.service';
 import { SlaCalculatorService, SlaCalendar } from '../sla/sla-calculator.service';
 import { PublishedWorkflowRecord, WorkflowDefinition } from './workflow.types';
 
@@ -111,8 +111,9 @@ export interface TransitionContext {
 
 export class WorkflowService {
   private dbService = DatabaseService.getInstance();
-  private eventBus = InProcessEventBus.getInstance();
   private slaCalculator = new SlaCalculatorService();
+
+  constructor(private readonly outbox = new EventOutboxService()) {}
 
   public validateWorkflowDefinition(def: WorkflowDefinition): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
@@ -376,19 +377,6 @@ export class WorkflowService {
       clockStartedAt = null;
     }
 
-    await this.dbService.db.query(
-      `UPDATE work_items
-       SET status = $1,
-           entered_state_at = $2,
-           custom_fields = $3,
-           updated_at = $4,
-           sla_elapsed_minutes = $5,
-           sla_clock_started_at = $6,
-           sla_suspended = $7
-       WHERE id = $8`,
-      [ctx.toState, now, JSON.stringify(mergedFields), now, elapsedBase, clockStartedAt, suspended, ctx.workItemId],
-    );
-
     // 6. Record Audit Event
     const auditId = randomUUID();
     const auditPayload = {
@@ -400,19 +388,46 @@ export class WorkflowService {
     // and the spec §8.2 envelope has no org field, so it travels in the payload.
     const eventPayload = { ...auditPayload, org_id: ctx.orgId, item_type: itemType };
 
-    await this.dbService.db.query(
-      `INSERT INTO audit_events (id, event_type, work_item_id, actor_id, payload, timestamp)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [auditId, 'WorkItemStateChanged', ctx.workItemId, ctx.actorId, JSON.stringify(auditPayload), now],
-    );
+    const event = await this.dbService.db.transaction(async (tx) => {
+      const updated = await tx.query<any>(
+        `UPDATE work_items
+         SET status = $1,
+             entered_state_at = $2,
+             custom_fields = $3,
+             updated_at = $4,
+             sla_elapsed_minutes = $5,
+             sla_clock_started_at = $6,
+             sla_suspended = $7
+         WHERE id = $8 AND org_id = $9 AND status = $10
+         RETURNING id`,
+        [
+          ctx.toState, now, JSON.stringify(mergedFields), now, elapsedBase,
+          clockStartedAt, suspended, ctx.workItemId, ctx.orgId, fromState,
+        ],
+      );
+      if (updated.rows.length === 0) {
+        throw new InvalidTransitionError('Work item changed before this transition could commit; retry against its current state');
+      }
 
-    // 7. Publish Event
-    await this.eventBus.publish(
-      'WorkItemStateChanged',
-      ctx.workItemId,
-      { type: ctx.actorType || 'user', id: ctx.actorId },
-      eventPayload,
-    );
+      await tx.query(
+        `INSERT INTO audit_events (id, event_type, work_item_id, actor_id, payload, timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [auditId, 'WorkItemStateChanged', ctx.workItemId, ctx.actorId, JSON.stringify(auditPayload), now],
+      );
+
+      return this.outbox.enqueue(tx, {
+        event_type: 'WorkItemStateChanged',
+        work_item_id: ctx.workItemId,
+        org_id: ctx.orgId,
+        actor: { type: ctx.actorType || 'user', id: ctx.actorId },
+        payload: eventPayload,
+        timestamp: now,
+      });
+    });
+
+    // Publication is deliberately after commit. A stop in this gap is recovered from the
+    // pending outbox row with the same event id.
+    await this.outbox.dispatch(event);
 
     return {
       id: ctx.workItemId,

@@ -55,6 +55,18 @@ export class InProcessEventBus {
       payload,
     };
 
+    await this.publishEnvelope(event);
+    return event;
+  }
+
+  /**
+   * Delivers an envelope whose identity was allocated before publication.
+   *
+   * The transactional outbox uses this after the mutation and envelope commit together.
+   * Reusing the committed event id is what makes crash recovery an at-least-once redelivery
+   * rather than a new logical event.
+  */
+  public async publishEnvelope(event: DomainEventEnvelope): Promise<void> {
     this.emittedEvents.push(event);
 
     // Wildcard handlers run first so the event is durable before any consumer acts on it.
@@ -62,12 +74,10 @@ export class InProcessEventBus {
       await handler(event);
     }
 
-    const handlers = this.handlers.get(eventType) || [];
+    const handlers = this.handlers.get(event.event_type) || [];
     for (const handler of handlers) {
       await handler(event);
     }
-
-    return event;
   }
 
   public clearEmittedEvents(): void {

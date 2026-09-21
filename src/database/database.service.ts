@@ -281,6 +281,16 @@ export class DatabaseService {
         occurred_at TIMESTAMP WITH TIME ZONE NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS event_outbox (
+        event_id UUID PRIMARY KEY REFERENCES domain_events(event_id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        last_error TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        last_attempt_at TIMESTAMP WITH TIME ZONE,
+        dispatched_at TIMESTAMP WITH TIME ZONE
+      );
+
       CREATE TABLE IF NOT EXISTS event_consumptions (
         consumer TEXT NOT NULL,
         event_id UUID NOT NULL,
@@ -352,6 +362,7 @@ export class DatabaseService {
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS domain_events_org_time ON domain_events (org_id, occurred_at);
       CREATE INDEX IF NOT EXISTS domain_events_type_time ON domain_events (event_type, occurred_at);
+      CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (status, created_at);
       CREATE INDEX IF NOT EXISTS dlq_consumer_status ON dead_letter_events (consumer, status);
       CREATE INDEX IF NOT EXISTS api_credentials_hash ON api_credentials (token_hash);
     `);

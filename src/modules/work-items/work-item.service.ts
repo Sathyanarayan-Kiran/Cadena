@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
-import { InProcessEventBus } from '../events/event-bus';
+import { EventOutboxService } from '../events/event-outbox.service';
 import { CustomFieldSchemaService } from './custom-field-schema.service';
 import { WorkflowService } from '../workflow/workflow.service';
 import {
@@ -37,9 +37,10 @@ export interface ListWorkItemsFilter {
 
 export class WorkItemService {
   private dbService = DatabaseService.getInstance();
-  private eventBus = InProcessEventBus.getInstance();
   private schemaService = new CustomFieldSchemaService();
   private workflowService = new WorkflowService();
+
+  constructor(private readonly outbox = new EventOutboxService()) {}
 
   public async createWorkItem(dto: CreateWorkItemDto, actorId: string = 'system'): Promise<WorkItem> {
     if (!VALID_WORK_ITEM_TYPES.includes(dto.type as WorkItemType)) {
@@ -73,31 +74,6 @@ export class WorkItemService {
 
     await this.dbService.initialize();
 
-    await this.dbService.db.query(
-      `INSERT INTO work_items (
-        id, item_key, type, title, description, status, workflow_version, priority, severity, owner_id, team_id, org_id, entered_state_at, custom_fields, tags, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
-      [
-        id,
-        itemKey,
-        type,
-        dto.title,
-        description,
-        initialStatus,
-        workflowVersion,
-        priority,
-        severity,
-        dto.owner_id || null,
-        dto.team_id,
-        dto.org_id,
-        now,
-        JSON.stringify(customFields),
-        tags,
-        now,
-        now,
-      ],
-    );
-
     const mergedCustomFields = schemaDef?.defaults
       ? { ...schemaDef.defaults, ...customFields }
       : customFields;
@@ -127,7 +103,42 @@ export class WorkItemService {
       escalated_at: null,
     };
 
-    await this.eventBus.publish('WorkItemCreated', id, { type: 'user', id: actorId }, { work_item: item });
+    const event = await this.dbService.db.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO work_items (
+          id, item_key, type, title, description, status, workflow_version, priority, severity, owner_id, team_id, org_id, entered_state_at, custom_fields, tags, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)`,
+        [
+          id,
+          itemKey,
+          type,
+          dto.title,
+          description,
+          initialStatus,
+          workflowVersion,
+          priority,
+          severity,
+          dto.owner_id || null,
+          dto.team_id,
+          dto.org_id,
+          now,
+          JSON.stringify(customFields),
+          tags,
+          now,
+          now,
+        ],
+      );
+      return this.outbox.enqueue(tx, {
+        event_type: 'WorkItemCreated',
+        work_item_id: id,
+        org_id: dto.org_id,
+        actor: { type: 'user', id: actorId },
+        payload: { work_item: item },
+        timestamp: now,
+      });
+    });
+
+    await this.outbox.dispatch(event);
 
     return item;
   }

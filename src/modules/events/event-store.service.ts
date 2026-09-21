@@ -31,10 +31,10 @@ export interface EventQuery {
  * event and writes it to `domain_events`, which gives the flow metrics (US9.4) a real
  * substrate and gives US5.2 a durable basis for "have I seen this event id before".
  *
- * Boundary: this is durable history, not yet the transactional outbox US5.1 asks for. The
- * write happens immediately after the mutation rather than inside its transaction, so a
- * crash in the gap would still lose an event. Closing that needs the mutation paths to
- * share a transaction with the event insert.
+ * Canonical work-item mutations write here through `EventOutboxService` in the same
+ * transaction as their business change. The wildcard subscription remains for events from
+ * scheduled engines and integration adapters; `ON CONFLICT` makes the outbox delivery path
+ * idempotent when its already-durable envelope reaches the in-process bus.
  */
 @Injectable()
 export class EventStoreService implements OnModuleInit {
