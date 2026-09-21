@@ -51,8 +51,48 @@ export interface FlowMetrics {
   };
 }
 
+export interface AgingDistribution {
+  green: number;
+  amber: number;
+  red: number;
+}
+
+export interface ExecutiveMetricRow {
+  total_items: number;
+  governed_items: number;
+  sla_compliance_percent: number | null;
+  average_cycle_time_hours: number | null;
+  completed_items: number;
+  aging_distribution: AgingDistribution;
+}
+
+export interface ExecutiveMetrics {
+  generated_at: string;
+  overall: ExecutiveMetricRow;
+  teams: Array<ExecutiveMetricRow & { team_id: string; team_name: string; business_unit: string }>;
+  business_units: Array<ExecutiveMetricRow & { business_unit: string }>;
+  coverage: {
+    cycle_time_items: number;
+    note: string;
+  };
+}
+
+interface ExecutiveAccumulator {
+  total: number;
+  governed: number;
+  compliant: number;
+  aging: AgingDistribution;
+  cycleDurations: number[];
+}
+
 const SUCCESSFUL_DEPLOYMENT_STATUSES = ['success', 'succeeded', 'deployed'];
 const RESOLVED_STATES = ['Resolved', 'Closed'];
+const COMPLETION_STATES: Record<string, string[]> = {
+  epic: ['Done', 'Verified', 'Closed'],
+  story: ['Done', 'Verified', 'Closed'],
+  incident: ['Resolved', 'Closed'],
+  release: ['Deployed', 'Closed'],
+};
 
 function hours(ms: number): number {
   return Math.round((ms / 3_600_000) * 100) / 100;
@@ -77,6 +117,53 @@ function stat(durationsMs: number[]): DurationStat {
     median_hours: median === null ? null : hours(median),
     p90_hours: p90 === null ? null : hours(p90),
     average_hours: hours(average),
+  };
+}
+
+function emptyExecutiveAccumulator(): ExecutiveAccumulator {
+  return {
+    total: 0,
+    governed: 0,
+    compliant: 0,
+    aging: { green: 0, amber: 0, red: 0 },
+    cycleDurations: [],
+  };
+}
+
+function addExecutiveItem(
+  target: ExecutiveAccumulator,
+  item: any,
+  completedAt?: Date,
+): void {
+  target.total += 1;
+  const bucket: keyof AgingDistribution = item.aging_bucket === 'amber' || item.aging_bucket === 'red'
+    ? item.aging_bucket
+    : 'green';
+  target.aging[bucket] += 1;
+  if (item.governed === true) {
+    target.governed += 1;
+    if (Number(item.aging_score || 0) <= 100) target.compliant += 1;
+  }
+  if (completedAt) {
+    const createdAt = new Date(item.created_at);
+    const duration = completedAt.getTime() - createdAt.getTime();
+    if (duration >= 0) target.cycleDurations.push(duration);
+  }
+}
+
+function finishExecutiveAccumulator(target: ExecutiveAccumulator): ExecutiveMetricRow {
+  const average = target.cycleDurations.length
+    ? target.cycleDurations.reduce((sum, value) => sum + value, 0) / target.cycleDurations.length
+    : null;
+  return {
+    total_items: target.total,
+    governed_items: target.governed,
+    sla_compliance_percent: target.governed
+      ? Math.round((target.compliant / target.governed) * 1000) / 10
+      : null,
+    average_cycle_time_hours: average === null ? null : hours(average),
+    completed_items: target.cycleDurations.length,
+    aging_distribution: { ...target.aging },
   };
 }
 
@@ -136,6 +223,104 @@ export class MetricsService {
         incidents_with_resolution_history: restore.stat.count,
         note: 'Lead time covers only deployments whose shipped work items also carry a linked commit; '
           + 'time to restore covers only incidents with a recorded transition into a resolved state.',
+      },
+    };
+  }
+
+  /**
+   * US9.2 — a current operational snapshot rolled up by team and business unit.
+   *
+   * SLA compliance is derived from the same persisted scores the team heatmap displays.
+   * Cycle time is creation through the first recorded completion transition, so a later
+   * aging refresh cannot rewrite the result by changing `updated_at`.
+   */
+  public async getExecutiveMetrics(orgId: string): Promise<ExecutiveMetrics> {
+    await this.dbService.initialize();
+
+    const teamsResult = await this.dbService.db.query<any>(
+      `SELECT id, name, business_unit FROM teams WHERE org_id = $1 ORDER BY business_unit, name`,
+      [orgId],
+    );
+    const itemsResult = await this.dbService.db.query<any>(
+      `SELECT item.id, item.team_id, item.type, item.status, item.created_at,
+              item.aging_bucket, item.aging_score,
+              (policy.id IS NOT NULL) AS governed
+       FROM work_items item
+       LEFT JOIN sla_policies policy
+         ON policy.org_id = item.org_id
+        AND policy.item_type = item.type
+        AND policy.state = item.status
+       WHERE item.org_id = $1`,
+      [orgId],
+    );
+    const auditResult = await this.dbService.db.query<any>(
+      `SELECT audit.work_item_id, audit.payload, audit.timestamp, item.type
+       FROM audit_events audit
+       JOIN work_items item ON item.id = audit.work_item_id AND item.org_id = $1
+       WHERE audit.event_type = 'WorkItemStateChanged'
+       ORDER BY audit.timestamp ASC`,
+      [orgId],
+    );
+
+    const firstCompletion = new Map<string, Date>();
+    for (const row of auditResult.rows || []) {
+      if (firstCompletion.has(row.work_item_id)) continue;
+      const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : (row.payload || {});
+      if (!(COMPLETION_STATES[row.type] || []).includes(payload.to_state)) continue;
+      firstCompletion.set(row.work_item_id, new Date(row.timestamp));
+    }
+
+    const teamMeta = new Map<string, { name: string; businessUnit: string }>();
+    const teamAccumulators = new Map<string, ExecutiveAccumulator>();
+    const unitAccumulators = new Map<string, ExecutiveAccumulator>();
+    for (const team of teamsResult.rows || []) {
+      const businessUnit = team.business_unit || 'Unassigned';
+      teamMeta.set(team.id, { name: team.name, businessUnit });
+      teamAccumulators.set(team.id, emptyExecutiveAccumulator());
+      if (!unitAccumulators.has(businessUnit)) {
+        unitAccumulators.set(businessUnit, emptyExecutiveAccumulator());
+      }
+    }
+
+    const overall = emptyExecutiveAccumulator();
+    for (const item of itemsResult.rows || []) {
+      if (!teamAccumulators.has(item.team_id)) {
+        teamMeta.set(item.team_id, { name: 'Unassigned team', businessUnit: 'Unassigned' });
+        teamAccumulators.set(item.team_id, emptyExecutiveAccumulator());
+      }
+      const meta = teamMeta.get(item.team_id)!;
+      if (!unitAccumulators.has(meta.businessUnit)) {
+        unitAccumulators.set(meta.businessUnit, emptyExecutiveAccumulator());
+      }
+      const completedAt = firstCompletion.get(item.id);
+      addExecutiveItem(teamAccumulators.get(item.team_id)!, item, completedAt);
+      addExecutiveItem(unitAccumulators.get(meta.businessUnit)!, item, completedAt);
+      addExecutiveItem(overall, item, completedAt);
+    }
+
+    const teams = Array.from(teamAccumulators.entries()).map(([teamId, accumulator]) => {
+      const meta = teamMeta.get(teamId)!;
+      return {
+        team_id: teamId,
+        team_name: meta.name,
+        business_unit: meta.businessUnit,
+        ...finishExecutiveAccumulator(accumulator),
+      };
+    }).sort((a, b) => a.business_unit.localeCompare(b.business_unit) || a.team_name.localeCompare(b.team_name));
+
+    const businessUnits = Array.from(unitAccumulators.entries()).map(([businessUnit, accumulator]) => ({
+      business_unit: businessUnit,
+      ...finishExecutiveAccumulator(accumulator),
+    })).sort((a, b) => a.business_unit.localeCompare(b.business_unit));
+
+    return {
+      generated_at: new Date().toISOString(),
+      overall: finishExecutiveAccumulator(overall),
+      teams,
+      business_units: businessUnits,
+      coverage: {
+        cycle_time_items: overall.cycleDurations.length,
+        note: 'SLA compliance covers items whose current state has an SLA policy. Cycle time covers items with a recorded transition into a completed state.',
       },
     };
   }

@@ -117,6 +117,15 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await new Promise((resolve) => setTimeout(resolve, 130000));
     await api('/aging/recompute', {});
 
+    // A fresh item in the same column remains green, giving the browser suite a real
+    // worst-first ordering assertion rather than merely checking that cards have colours.
+    const freshStory = await api('/workitems', {
+      type: 'story', title: 'Fresh story entering review', team_id: TEAM, org_id: ORG,
+    });
+    for (const toState of ['Planned', 'In Progress', 'In Review']) {
+      await api(`/workitems/${freshStory.id}/transitions`, { to_state: toState });
+    }
+
   }
 
   beforeAll(async () => {
@@ -188,6 +197,26 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     );
     expect(columns).toContain('triaged');
     expect(await textOf('#resultSummary')).toMatch(/work item/);
+  });
+
+  it('orders every board column by SLA severity and score, worst first', async () => {
+    const ordering = await page.$$eval('.column-items', (columns) => columns.map((column) => {
+      const cards = Array.from(column.querySelectorAll<HTMLElement>('.work-card'));
+      const values = cards.map((card) => ({
+        bucket: card.dataset.agingBucket || 'none',
+        score: Number(card.dataset.agingScore || 0),
+      }));
+      const rank: Record<string, number> = { red: 3, amber: 2, green: 1, none: 0 };
+      const valid = values.every((value, index) => index === 0
+        || rank[values[index - 1].bucket] > rank[value.bucket]
+        || (rank[values[index - 1].bucket] === rank[value.bucket]
+          && values[index - 1].score >= value.score));
+      return { count: values.length, valid, buckets: values.map((value) => value.bucket) };
+    }));
+
+    expect(ordering.some((column) => column.count > 1)).toBe(true);
+    expect(ordering.every((column) => column.valid)).toBe(true);
+    expect(ordering.some((column) => column.buckets[0] === 'red' && column.buckets.includes('green'))).toBe(true);
   });
 
   it('shows monitoring evidence and the affected service in the Incident drawer', async () => {
@@ -338,6 +367,27 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
       () => document.querySelector('#metricsContent')?.textContent?.includes('DORA') ?? false,
       { timeout: 15000 },
     );
+    await closeAnyDialog();
+  });
+
+  it('renders the executive rollup by business unit and team', async () => {
+    await closeAnyDialog();
+    await page.click('#openExecutiveFromNav');
+    await page.waitForSelector('#executiveDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(
+      () => document.querySelector('#executiveContent')?.textContent?.includes('Business units') ?? false,
+      { timeout: 15000 },
+    );
+
+    const executive = await lowerTextOf('#executiveContent');
+    expect(executive).toContain('portfolio');
+    expect(executive).toContain('sla compliance');
+    expect(executive).toContain('average cycle time');
+    expect(executive).toContain('business units');
+    expect(executive).toContain('engineering');
+    expect(executive).toContain('platform team');
+    expect(executive).toContain('aging distribution');
+    expect(executive).toContain('recorded transition');
     await closeAnyDialog();
   });
 

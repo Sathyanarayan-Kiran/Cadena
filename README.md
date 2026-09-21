@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's core thesis: **one canonical work-item model** and **one state-machine engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them.
 
-> **Current status (Codex update, 2026-09-21):** Phase 0, the Epic 3 aging/SLA engine, the complete Epic 4 traceability graph including US4.3 service impact analysis, the Epic 8 notification and escalation service, US9.4 DORA/ITIL flow metrics, and the Phase 1 integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog now contains **20 epics and 71 stories** after consolidating `cadena-master-epics-and-user-stories.md`; `status.html` identifies the **4 epics and 15 stories newly added** plus 9 expanded stories. See `implementation_plan.md` for the clearly attributed Codex delivery records.
+> **Current status (Codex update, 2026-09-21):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 8 notification and escalation service, the Phase 1 team heatmap and cross-team executive rollup, US9.4 DORA/ITIL metrics, and the integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog contains **20 epics and 72 stories**, with **27 done / 6 partial / 39 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger.
 
 ---
 
@@ -14,15 +14,15 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Datastore**: PostgreSQL with `pgvector` enabled via the `@electric-sql/pglite` in-process WASM engine, persisting to `CADENA_DATA_DIR` and in-memory when that is unset.
 - **Workflow Engine**: Hand-rolled state-machine engine implementing Spec §4, supporting versioned definitions, role guards, required fields, and reachability validation.
 - **Traceability Graph**: Typed edge table (`work_item_links`) supporting upstream and downstream recursive lineage traversal, plus depth-limited impact analysis from a Service across the `affects` edge.
-- **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, and warning/breach events.
+- **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, warning/breach events, and durable pause/resume semantics for configured hold states.
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
 - **Reliable Consumption**: Every event consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
-- **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA and ITIL flow metrics computed from recorded artefacts rather than hand entry.
+- **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
-- **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 107 automated tests across 29 test files, plus a 9-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, executive overview, item details, linking, lineage exploration, service impact, monitoring evidence, and notification delivery logs.
+- **Testing**: Vitest + NestJS Testing + Supertest running 112 automated tests across 31 test files, plus an 11-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -47,6 +47,7 @@ Expected output:
  ✓ test/us3.1.spec.ts (2 tests)
  ✓ test/us3.2.spec.ts (2 tests)
  ✓ test/us3.3.spec.ts (2 tests)
+ ✓ test/us3.4.spec.ts (2 tests)
  ✓ test/us4.1.spec.ts (2 tests)
  ✓ test/us4.2.spec.ts (1 test)
  ✓ test/us4.3.spec.ts (6 tests)
@@ -59,16 +60,18 @@ Expected output:
  ✓ test/us8.1.spec.ts (3 tests)
  ✓ test/us8.2.spec.ts (4 tests)
  ✓ test/us8.3.spec.ts (5 tests)
+ ✓ test/us9.2.spec.ts (3 tests)
  ✓ test/us9.4.spec.ts (7 tests)
  ✓ test/tracker.spec.ts (6 tests)
  ✓ test/persistence.spec.ts (5 tests)
  ✓ test/us5.spec.ts (10 tests)
  ✓ test/review-regressions.spec.ts (6 tests)
  ✓ test/us10.3.spec.ts (1 test)
+ ✓ test/us10.9.spec.ts (13 tests)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  29 passed (29)
-      Tests  107 passed (107)
+ Test Files  31 passed (31)
+      Tests  112 passed (112)
 ```
 
 ### 2. Run the Server
@@ -355,6 +358,32 @@ The channel adapters are stubs: **nothing actually leaves the process**, and the
 
 ---
 
+## Phase 1 Operational Visibility (US3.4, US9.1, US9.2)
+
+An SLA policy can mark its state as clock-suspending:
+
+```http
+POST /sla-policies
+{
+  "item_type": "story",
+  "state": "Blocked",
+  "threshold_minutes": 960,
+  "calendar": "5x8",
+  "suspend_sla": true
+}
+```
+
+Entering that state snapshots accrued business minutes. Recompute ticks and process restarts retain the same score while held; leaving the state resumes from the retained value without restarting or charging the paused interval. The team board labels paused clocks and is browser-tested to order every column red → amber → green → ungoverned, then by descending score.
+
+```http
+GET /metrics/executive
+x-org-id: 00000000-0000-0000-0000-000000000099
+```
+
+The executive response provides current SLA compliance, average cycle time and aging distribution for the overall portfolio, each business unit and each team. Compliance uses only items whose current state has a policy. Cycle time uses creation through the first recorded completion transition rather than `updated_at`, so an aging refresh cannot rewrite history. The response and UI state that evidence boundary explicitly.
+
+---
+
 ## Flow Metrics (US9.4)
 
 DORA and ITIL figures computed from recorded history, never hand-entered.
@@ -476,12 +505,12 @@ Every dead-letter read, depth calculation and mutation takes the tenant as a req
 
 The pilot is deliberately explicit about what is not production-ready:
 
-1. **Webhook signature verification is not implemented.** Both the Git/CI and monitoring endpoints trust the `x-org-id` header and the normalized request body. Before either is exposed to a real provider it needs:
+1. **Webhook signature verification is not implemented.** In production mode the global auth guard supplies a tenant from a valid bearer credential, but the Git/CI and monitoring endpoints still trust the normalized request body. Before either is exposed to a real provider it needs:
    - per-tenant shared-secret registration for each configured integration;
    - provider signature verification computed over the **raw** request body (Datadog `DD-Signature`, GitHub `X-Hub-Signature-256`, PagerDuty/Grafana HMAC), with constant-time comparison;
    - timestamp-based replay rejection in addition to the existing delivery-id deduplication;
    - per-provider adapters translating raw provider payloads into the normalized contract above.
-2. **Integration identity is not authenticated.** Tenant identity arrives in a header rather than from an authenticated integration credential, and `automation_actor_role` grants a workflow role by configuration rather than by binding to a real RBAC principal. Guards still evaluate that role — it is not a bypass — but the binding is US10.3 hardening work.
+2. **Integration-specific identity is not authenticated.** The API bearer credential proves a tenant and principal, but it is not yet bound to one configured provider installation. `automation_actor_role` also grants a workflow role by configuration rather than by binding the external actor to a first-class RBAC principal. Guards still evaluate that role — it is not a bypass — but provider-scoped credentials and actor mapping remain hardening work.
 3. **Delivery durability stops short of a broker.** Consumption is idempotent, retried and dead-lettered with operator replay, and history is persisted. Still outstanding: the transactional outbox (US5.1), asynchronous HTTP 202 ingestion (US5.4), and a real broker such as Kafka or AWS MSK in place of the in-process bus.
 4. **Retries are in-process and immediate.** A consumer whose dependency is down for minutes exhausts its attempts and dead-letters rather than waiting it out. Scheduled redelivery with longer backoff belongs with that broker.
 5. **No notification actually leaves the process.** Channel adapters are stubs; the `notifications` table is the delivery record. Routing, fallback and idempotency are real and tested, but SES/SendGrid, the Slack Web API and Microsoft Graph are not wired in.
@@ -489,9 +518,9 @@ The pilot is deliberately explicit about what is not production-ready:
 
 ---
 
-## Remaining Phase 1 Work (Spec §18.5)
+## Next Extension Work
 
-The aging engine, team workspace, workflow automation, traceability graph, Git/CI integration, monitoring/APM integration, and notification routing are implemented. The remaining Phase 1 work is:
+The specification's Phase 1 operational-visibility scope is now complete: SLA clocks can pause on hold, the team heatmap is browser-verified, and the executive rollup reports SLA compliance, cycle time and aging distribution per team and business unit. The next extension work is:
 
 1. **Remaining Event Backbone (Epic 5)**:
    - Consumption is reliable: idempotent, retried, dead-lettered, replayable. Still open: the transactional outbox (US5.1), asynchronous HTTP 202 ingestion (US5.4), and replacing the in-process bus with Kafka / AWS MSK.
@@ -502,8 +531,8 @@ The aging engine, team workspace, workflow automation, traceability graph, Git/C
 3. **CMDB Federation (Epic 11)**:
    - Replace pilot-discovered Service stubs with a federated read from the authoritative CMDB, including staleness flagging and owning-team resolution.
 
-4. **Remaining Analytics & Executive UI (Epic 9)**:
-   - US9.4 flow metrics are implemented. Still open: the cross-team executive rollup (US9.2), the interactive graph explorer (US9.3), and analytics materialized views so reporting load never contends with the workflow engine.
+4. **Remaining Analytics UI and Scale Boundary (Epic 9)**:
+   - US9.2 executive rollup and US9.4 flow metrics are implemented. Still open: the interactive graph explorer (US9.3) and analytics materialized views so reporting load never contends with the workflow engine at production volume.
 
 ---
 
@@ -524,6 +553,7 @@ The aging engine, team workspace, workflow automation, traceability graph, Git/C
 | **US2.2** | Rejects transition when required fields are missing | `test/us2.2.spec.ts` | **PASS** |
 | **US2.3** | Skips and logs an external-event transition when a workflow guard rejects it | `test/us2.3.spec.ts` | **PASS** |
 | **US3.1–3.3** | Computes calendar-aware aging and emits warning/breach events | `test/us3.*.spec.ts` | **PASS** |
+| **US3.4** | Preserves accrued minutes on hold and resumes without back-filling paused time | `test/us3.4.spec.ts` | **PASS** |
 | **US4.1** | Creates valid typed link & exposes in both items' relationship lists | `test/us4.1.spec.ts` | **PASS** |
 | **US4.1** | Rejects invalid edge type for item pair with allowed edge types | `test/us4.1.spec.ts` | **PASS** |
 | **US4.2** | Queries semantic upstream and downstream lineage chains in order | `test/us4.2.spec.ts` | **PASS** |
@@ -562,6 +592,9 @@ The aging engine, team workspace, workflow automation, traceability graph, Git/C
 | **US8.3** | Falls back to email when the preferred channel is unavailable | `test/us8.3.spec.ts` | **PASS** |
 | **US8.3** | Records a failure when the fallback channel is also unavailable | `test/us8.3.spec.ts` | **PASS** |
 | **US8.3** | Defaults to email and rejects an unknown channel | `test/us8.3.spec.ts` | **PASS** |
+| **US9.1** | Colours the team heatmap by aging bucket and orders each column worst-first | `test/ui-smoke.spec.ts` | **PASS** |
+| **US9.2** | Reports SLA compliance, cycle time and aging distribution per team and business unit | `test/us9.2.spec.ts` | **PASS** |
+| **US9.2** | Renders the executive overview on the built responsive UI | `test/ui-smoke.spec.ts` | **PASS** |
 | **US9.4** | Derives deployment frequency and lead time from delivery artefacts | `test/us9.4.spec.ts` | **PASS** |
 | **US9.4** | Computes change failure rate from the `Incident caused_by Release` edge | `test/us9.4.spec.ts` | **PASS** |
 | **US9.4** | Computes time to restore from incident state history | `test/us9.4.spec.ts` | **PASS** |

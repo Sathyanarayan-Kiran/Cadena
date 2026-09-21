@@ -45,21 +45,24 @@ async function bootstrap() {
     [orgId],
   );
   await db.query(
-    `INSERT INTO teams (id, org_id, name) VALUES ($1, $2, 'Platform Team') ON CONFLICT DO NOTHING`,
+    `INSERT INTO teams (id, org_id, name, business_unit)
+     VALUES ($1, $2, 'Platform Team', 'Engineering') ON CONFLICT DO NOTHING`,
     [teamId, orgId],
   );
 
   const defaultPolicies = [
-    { type: 'story', state: 'In Review', minutes: 960, calendar: '5x8' },
-    { type: 'incident', state: 'Triaged', minutes: 120, calendar: '24x7' },
-    { type: 'incident', state: 'Investigating', minutes: 60, calendar: '24x7' },
+    { type: 'story', state: 'In Progress', minutes: 960, calendar: '5x8', suspend: false },
+    { type: 'story', state: 'In Review', minutes: 960, calendar: '5x8', suspend: false },
+    { type: 'story', state: 'Blocked', minutes: 960, calendar: '5x8', suspend: true },
+    { type: 'incident', state: 'Triaged', minutes: 120, calendar: '24x7', suspend: false },
+    { type: 'incident', state: 'Investigating', minutes: 60, calendar: '24x7', suspend: false },
   ];
   for (const policy of defaultPolicies) {
     await db.query(
-      `INSERT INTO sla_policies (id, org_id, item_type, state, threshold_minutes, calendar)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO sla_policies (id, org_id, item_type, state, threshold_minutes, calendar, suspend_sla)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (org_id, item_type, state) DO NOTHING`,
-      [randomUUID(), orgId, policy.type, policy.state, policy.minutes, policy.calendar],
+      [randomUUID(), orgId, policy.type, policy.state, policy.minutes, policy.calendar, policy.suspend],
     );
   }
 

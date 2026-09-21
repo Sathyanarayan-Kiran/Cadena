@@ -36,6 +36,7 @@ export class SlaController {
       state: string;
       threshold_minutes: number;
       calendar: SlaCalendar;
+      suspend_sla?: boolean;
     },
   ) {
     if (headerOrgId && body.org_id && body.org_id !== headerOrgId) {
@@ -47,9 +48,10 @@ export class SlaController {
       || !Number.isInteger(body.threshold_minutes)
       || body.threshold_minutes <= 0
       || !['5x8', '24x7'].includes(body.calendar)
+      || (body.suspend_sla !== undefined && typeof body.suspend_sla !== 'boolean')
     ) {
       throw new HttpException(
-        'A valid item type, state, positive whole-minute threshold, and calendar are required',
+        'A valid item type, state, positive whole-minute threshold, calendar, and optional suspension flag are required',
         HttpStatus.UNPROCESSABLE_ENTITY,
       );
     }
@@ -58,11 +60,13 @@ export class SlaController {
     const id = randomUUID();
 
     await this.dbService.db.query(
-      `INSERT INTO sla_policies (id, org_id, item_type, state, threshold_minutes, calendar)
-       VALUES ($1, $2, $3, $4, $5, $6)
+      `INSERT INTO sla_policies (id, org_id, item_type, state, threshold_minutes, calendar, suspend_sla)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (org_id, item_type, state)
-       DO UPDATE SET threshold_minutes = EXCLUDED.threshold_minutes, calendar = EXCLUDED.calendar;`,
-      [id, orgId, body.item_type, body.state.trim(), body.threshold_minutes, body.calendar],
+       DO UPDATE SET threshold_minutes = EXCLUDED.threshold_minutes,
+                     calendar = EXCLUDED.calendar,
+                     suspend_sla = EXCLUDED.suspend_sla;`,
+      [id, orgId, body.item_type, body.state.trim(), body.threshold_minutes, body.calendar, body.suspend_sla ?? false],
     );
 
     const res = await this.dbService.db.query(

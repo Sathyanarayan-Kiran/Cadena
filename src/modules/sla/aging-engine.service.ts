@@ -10,6 +10,7 @@ export interface SlaPolicyRow {
   state: string;
   threshold_minutes: number;
   calendar: SlaCalendar;
+  suspend_sla: boolean;
 }
 
 export interface RecomputeSummary {
@@ -125,13 +126,41 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
 
       let newScore = 0;
       let newBucket: 'green' | 'amber' | 'red' = 'green';
+      let elapsedBase = Number(item.sla_elapsed_minutes || 0);
+      let suspended = Boolean(item.sla_suspended);
+      const persistedClock = item.sla_clock_started_at
+        ? new Date(item.sla_clock_started_at)
+        : null;
+      let clockStartedAt = persistedClock;
 
       if (policy) {
-        const res = this.slaCalculator.computeAging(
-          enteredAt,
-          now,
+        if (policy.suspend_sla && !suspended) {
+          // A policy can be changed while an item already occupies the state. Preserve
+          // everything accrued up to that configuration change before stopping the clock.
+          elapsedBase += this.slaCalculator.calculateElapsedMinutes(
+            clockStartedAt || enteredAt,
+            now,
+            policy.calendar,
+          );
+          suspended = true;
+          clockStartedAt = null;
+        } else if (!policy.suspend_sla && suspended) {
+          // Re-enabling an existing policy resumes from the retained elapsed value and
+          // never back-fills the interval during which the clock was suspended.
+          suspended = false;
+          clockStartedAt = now;
+        }
+
+        const elapsedMinutes = elapsedBase + (suspended
+          ? 0
+          : this.slaCalculator.calculateElapsedMinutes(
+              clockStartedAt || enteredAt,
+              now,
+              policy.calendar,
+            ));
+        const res = this.slaCalculator.computeAgingFromElapsed(
+          elapsedMinutes,
           policy.threshold_minutes,
-          policy.calendar,
         );
         newScore = res.agingScore;
         newBucket = res.agingBucket;
@@ -224,10 +253,25 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
         );
       }
 
-      if (item.aging_bucket !== newBucket || Number(item.aging_score) !== newScore) {
+      const previousClock = persistedClock?.toISOString() ?? null;
+      const nextClock = clockStartedAt?.toISOString() ?? null;
+      if (
+        item.aging_bucket !== newBucket
+        || Number(item.aging_score) !== newScore
+        || Number(item.sla_elapsed_minutes || 0) !== elapsedBase
+        || Boolean(item.sla_suspended) !== suspended
+        || previousClock !== nextClock
+      ) {
         await this.dbService.db.query(
-          `UPDATE work_items SET aging_bucket = $1, aging_score = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3;`,
-          [newBucket, newScore, item.id],
+          `UPDATE work_items
+           SET aging_bucket = $1,
+               aging_score = $2,
+               sla_elapsed_minutes = $3,
+               sla_clock_started_at = $4,
+               sla_suspended = $5,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = $6;`,
+          [newBucket, newScore, elapsedBase, nextClock, suspended, item.id],
         );
         updatedCount++;
       }

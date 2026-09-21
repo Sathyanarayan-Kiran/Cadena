@@ -2,6 +2,93 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex Phase 1 operational-visibility update — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. Earlier Codex records and the original Gemini plan remain below as history.
+
+**Status:** Complete. US3.4 and US9.2 moved from not started to done; US9.1 moved from partial to done. The delivery ledger is now **27 done / 6 partial / 39 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+The specification's Phase 1 promise was not actually closed. The team board showed SLA colour but did not prove worst-first ordering, the executive dashboard named in §15 did not exist, and elapsed time continued accumulating while work waited on a customer or third party. These three stories form one operational-visibility slice: calculate time fairly, order the team's attention correctly, and roll the same evidence up for leadership.
+
+### Scope delivered by Codex
+
+#### US3.4 — durable SLA clock suspension
+
+- Added `suspend_sla` to state-level SLA policies and exposed it through `POST /sla-policies`, `GET /sla-policies`, and the policy editor.
+- Added durable `sla_elapsed_minutes`, `sla_clock_started_at`, and `sla_suspended` work-item state. These fields survive a datastore and process restart.
+- Entering a suspending state snapshots business-calendar minutes accrued before the transition. Recompute ticks do not advance the retained value while held.
+- Leaving a suspending state preserves the retained value and resumes from the transition time. The paused interval is neither discarded nor back-filled.
+- Changing an existing policy from active to suspended, or back again, reconciles safely even when an item already occupies that state.
+- The public work-item model and UI expose whether the clock is paused and show `clock paused` beside its retained score.
+
+#### US9.1 — verified team aging heatmap
+
+- Retained the existing red → amber → green → ungoverned ordering, followed by descending score inside each category.
+- Added stable work-card data attributes so the browser suite can inspect the rendered order rather than reimplementing it from API data.
+- Expanded the browser fixture with a fresh green item and an aged red item in the same `In Review` column.
+- Added an explicit browser assertion across every column. US9.1 is no longer credited merely because colours render.
+
+#### US9.2 — cross-team executive rollup
+
+- Added `GET /metrics/executive`, scoped to the authenticated tenant.
+- Added a `business_unit` classification to teams, defaulting safely to `Unassigned` for existing databases and fixtures.
+- Derived current SLA compliance, average cycle time and green/amber/red aging distribution for the overall portfolio, each business unit and each team.
+- SLA compliance includes only governed work whose current state has an SLA policy; the denominator is returned alongside the percentage.
+- Cycle time is creation through the first recorded completion transition in `audit_events`, not `updated_at`, because SLA recomputation also updates a work item and must never rewrite historical cycle time.
+- Returned an evidence-coverage note with the API and rendered it in the UI so partial history is visible rather than implied complete.
+- Added a responsive **Executive overview** with portfolio KPIs and business-unit/team tables, including compact aging-distribution bars.
+
+### Corrections made with this increment
+
+- Corrected US9.2 from Phase 3 to Phase 1 in `implementation-status.json`, matching the technical specification's Phase 1 executive-dashboard commitment.
+- Corrected the README's stale 71-story headline after US10.9 increased the canonical scope to 72.
+- Updated the implementation totals to 27 done / 6 partial / 39 not started and regenerated `public/status.html` from the canonical JSON sources.
+- During regression, normal transitions were found to be redundantly writing `sla_clock_started_at`. That broke the established fixture contract where backdating `entered_state_at` controls an active clock. The redundant timestamp was removed from ordinary transitions; it remains only for the one case that needs it—resuming a policy without a state transition.
+
+### Files added by Codex
+
+- `test/us3.4.spec.ts`
+- `test/us9.2.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/sla/sla-calculator.service.ts`
+- `src/modules/sla/aging-engine.service.ts`
+- `src/modules/sla/sla.controller.ts`
+- `src/modules/workflow/workflow.service.ts`
+- `src/modules/work-items/work-item.service.ts`
+- `src/modules/work-items/work-item.types.ts`
+- `src/modules/metrics/metrics.service.ts`
+- `src/modules/metrics/metrics.controller.ts`
+- `src/server.ts`
+- `public/index.html`
+- `test/ui-smoke.spec.ts`
+- `implementation-status.json`
+- `public/status.html`
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused US3.4 / US9.2 suites: **PASS — 5 tests**
+- Affected SLA and notification regression set after the compatibility correction: **PASS — 14 tests**
+- Full non-browser regression: **PASS — 31 test files, 112 tests**
+- Headless-browser suite against the built server: **PASS — 11 tests**, including explicit heatmap ordering, executive overview, responsive layout and zero console errors
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 27 done / 6 partial / 39 not started**
+- `git diff --check`: **PASS**
+
+### Deliberate boundaries
+
+- The executive endpoint is computed from the transactional pilot store. The technical specification's analytics materialized views remain necessary before production-scale reporting load.
+- Business-unit membership is represented in the schema and pilot seed, but no team-administration UI exists yet.
+- SLA suspension is policy/state based. Calendar exceptions and multi-stage pause reasons remain outside this story.
+- Notification transports remain pilot adapters, so US8.1–US8.3 stay partial even though hold states now prevent unfair warning and breach timing.
+
 ## Codex master-backlog consolidation — 2026-09-21
 
 > **Attribution boundary:** Everything in this section was reviewed and consolidated by **Codex** from `cadena-master-epics-and-user-stories.md` on 2026-09-21. The source document is retained unchanged; the canonical, non-conflicting result lives in `Backlog.md` and `backlog.json`.

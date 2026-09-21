@@ -122,6 +122,8 @@ export class WorkItemService {
       updated_at: now,
       aging_bucket: 'green',
       aging_score: 0,
+      sla_elapsed_minutes: 0,
+      sla_suspended: false,
       escalated_at: null,
     };
 
@@ -219,6 +221,8 @@ export class WorkItemService {
       updated_at: typeof row.updated_at === 'string' ? row.updated_at : new Date(row.updated_at).toISOString(),
       aging_bucket: agingBucket,
       aging_score: agingScore,
+      sla_elapsed_minutes: Number(row.sla_elapsed_minutes || 0),
+      sla_suspended: Boolean(row.sla_suspended),
       escalated_at: row.escalated_at
         ? (typeof row.escalated_at === 'string' ? row.escalated_at : new Date(row.escalated_at).toISOString())
         : null,

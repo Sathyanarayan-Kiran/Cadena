@@ -42,6 +42,11 @@ export class MetricsController {
     }
     return this.metrics.getFlowMetrics(tenant, fromISO, toISO);
   }
+
+  @Get('executive')
+  async getExecutiveMetrics(@Headers('x-org-id') orgId?: string) {
+    return this.metrics.getExecutiveMetrics(requireOrg(orgId));
+  }
 }
 
 @Controller('events')

@@ -34,6 +34,10 @@ export interface WorkItem {
   updated_at: string;
   aging_bucket: 'green' | 'amber' | 'red';
   aging_score: number;
+  /** Accrued SLA minutes retained while the item is in a configured hold state. */
+  sla_elapsed_minutes: number;
+  /** True while SLA accrual is paused by the current state's policy. */
+  sla_suspended: boolean;
   /** Set by the Epic 8 escalation path once an item passes the tenant escalation threshold. */
   escalated_at?: string | null;
 }

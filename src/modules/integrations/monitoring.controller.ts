@@ -33,8 +33,9 @@ function toHttpError(error: unknown): never {
 /**
  * Tenant-scoped monitoring/APM ingestion (Epic 7).
  *
- * Production boundary: this endpoint trusts the `x-org-id` header and the normalized body.
- * Before it is exposed to a real provider it needs per-tenant shared-secret registration and
+ * Production boundary: AuthGuard supplies the authenticated `x-org-id`, but this endpoint still
+ * trusts the normalized body. Before it is exposed to a real provider it needs per-tenant
+ * integration-secret registration and
  * provider signature verification (Datadog `DD-Signature`, PagerDuty/Grafana HMAC over the
  * raw body) plus timestamp-based replay rejection. See README "Production boundaries".
  */

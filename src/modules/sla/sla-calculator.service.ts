@@ -84,6 +84,14 @@ export class SlaCalculatorService {
     calendar: SlaCalendar,
   ): AgingCalculationResult {
     const elapsedMinutes = this.calculateElapsedMinutes(enteredAt, now, calendar);
+    return this.computeAgingFromElapsed(elapsedMinutes, thresholdMinutes);
+  }
+
+  /** Converts persisted elapsed minutes into the same score and bucket as an active clock. */
+  public computeAgingFromElapsed(
+    elapsedMinutes: number,
+    thresholdMinutes: number,
+  ): AgingCalculationResult {
     const agingScore = thresholdMinutes > 0 ? (elapsedMinutes / thresholdMinutes) * 100 : 0;
 
     let agingBucket: 'green' | 'amber' | 'red' = 'green';

@@ -220,10 +220,10 @@
     },
     "US3.4": {
       "name": "SLA clock suspension on hold",
-      "status": "idle",
+      "status": "done",
       "phase": 1,
       "isNew": true,
-      "note": "New from research §3. Time in a hold state such as Waiting for Customer must not consume SLA budget."
+      "note": "Verified by <code>test/us3.4.spec.ts</code> — entering a configured hold state durably preserves accrued business minutes, time on hold does not advance the score, and leaving resumes without restarting or back-filling the paused interval."
     },
     "US4.1": {
       "name": "Typed link creation",
@@ -337,15 +337,15 @@
     },
     "US9.1": {
       "name": "Team aging heatmap",
-      "status": "partial",
+      "status": "done",
       "phase": 1,
-      "note": "The board colours by aging bucket and sorts worst-first, and renders under browser test, but the ordering itself is not asserted."
+      "note": "Verified by <code>test/ui-smoke.spec.ts</code> — every card is coloured by its current aging bucket and each board column is explicitly asserted to sort red, amber, green and ungoverned work worst-first, then by score."
     },
     "US9.2": {
       "name": "Cross-team executive rollup",
-      "status": "idle",
-      "phase": 3,
-      "note": "No SLA compliance, cycle time or aging distribution per team or business unit."
+      "status": "done",
+      "phase": 1,
+      "note": "Verified by <code>test/us9.2.spec.ts</code> and the browser smoke suite — tenant-scoped SLA compliance, average cycle time and aging distribution are derived per team, business unit and overall portfolio, with the evidence boundary shown in the UI."
     },
     "US9.3": {
       "name": "Interactive traceability explorer",

@@ -74,6 +74,7 @@ export class DatabaseService {
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),
         name TEXT NOT NULL,
+        business_unit TEXT NOT NULL DEFAULT 'Unassigned',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
 
@@ -120,6 +121,9 @@ export class DatabaseService {
         entered_state_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         aging_bucket TEXT DEFAULT 'green',
         aging_score NUMERIC DEFAULT 0,
+        sla_elapsed_minutes NUMERIC NOT NULL DEFAULT 0,
+        sla_clock_started_at TIMESTAMP WITH TIME ZONE,
+        sla_suspended BOOLEAN NOT NULL DEFAULT FALSE,
         custom_fields JSONB DEFAULT '{}',
         tags TEXT[] DEFAULT '{}',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -331,6 +335,7 @@ export class DatabaseService {
         state TEXT NOT NULL,
         threshold_minutes INT NOT NULL,
         calendar TEXT NOT NULL,
+        suspend_sla BOOLEAN NOT NULL DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(org_id, item_type, state)
       );
@@ -339,6 +344,11 @@ export class DatabaseService {
     // Safe migration for pilot databases created before stable work-item keys existed.
     await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS item_key TEXT;`);
     await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS escalated_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`ALTER TABLE teams ADD COLUMN IF NOT EXISTS business_unit TEXT NOT NULL DEFAULT 'Unassigned';`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sla_elapsed_minutes NUMERIC NOT NULL DEFAULT 0;`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sla_clock_started_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS sla_suspended BOOLEAN NOT NULL DEFAULT FALSE;`);
+    await this.db.exec(`ALTER TABLE sla_policies ADD COLUMN IF NOT EXISTS suspend_sla BOOLEAN NOT NULL DEFAULT FALSE;`);
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS domain_events_org_time ON domain_events (org_id, occurred_at);
       CREATE INDEX IF NOT EXISTS domain_events_type_time ON domain_events (event_type, occurred_at);

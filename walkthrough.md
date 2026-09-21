@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 5 consumption reliability, Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified. The canonical backlog is **20 epics / 72 stories**.
-**Verification:** 107 automated tests across 29 test files, plus 9 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, Epic 5 consumption reliability, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.4 flow metrics and US10.9 authenticated tenant identity. The canonical backlog is **20 epics / 72 stories**, with **27 done / 6 partial / 39 not started**.
+**Verification:** 112 automated tests across 31 test files, plus 11 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,29 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-21 — Phase 1 operational visibility: fair clocks, ordered attention, executive evidence
+
+The team board already displayed SLA colours, but it did not prove worst-first ordering; leadership had no cross-team view; and work waiting on a customer or third party kept aging as if the team were actively working it. This increment closes those three connected gaps.
+
+**US3.4 — durable SLA hold-state suspension**
+
+- SLA policies can mark a state as `suspend_sla` through the API and policy editor.
+- Entering a hold snapshots business-calendar minutes already consumed. Time does not advance while held, and leaving resumes from that retained total without back-filling the paused interval.
+- Persisted elapsed, clock-start and suspension fields make the behaviour survive recomputation and process restart. Cards and item details explicitly say when the clock is paused.
+
+**US9.1 — verified team aging heatmap**
+
+- Cards remain ordered red → amber → green → ungoverned, then by descending score inside each bucket.
+- The browser suite now creates red and fresh-green work in the same column and inspects the rendered card order across every column. The story is done on observed UI behaviour, not colour rendering alone.
+
+**US9.2 — cross-team executive rollup**
+
+- `GET /metrics/executive` returns tenant-scoped overall, business-unit and team metrics: current SLA compliance, average cycle time and aging distribution.
+- Cycle time ends at the first completion transition in the audit trail, so background SLA recomputation cannot rewrite history. The response and UI state their evidence coverage.
+- The responsive **Executive overview** presents portfolio KPIs and business-unit/team tables with compact aging bars.
+
+This moves the canonical ledger to **27 done / 6 partial / 39 not started**. The full non-browser suite passes **112 tests across 31 files** and the browser suite passes **11 scenarios**.
 
 ### 2026-09-21 — Authentication: the tenant becomes something you prove
 
@@ -300,8 +323,8 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 107 tests across 29 files
-npm run test:ui # 7 browser smoke tests in headless Chrome
+npm test        # 112 tests across 31 files
+npm run test:ui # 11 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
 
@@ -373,8 +396,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  29 passed (29)
-      Tests  107 passed (107)
+ Test Files  31 passed (31)
+      Tests  112 passed (112)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -382,22 +405,23 @@ Plus the browser smoke suite, run separately because it builds and takes ~140 se
 ```
 npm run test:ui
  Test Files  1 passed (1)
-      Tests  9 passed (9)
+      Tests  11 passed (11)
 ```
 
 | Area | Tests |
 | --- | --- |
 | Canonical model, custom fields, tenant isolation | `us1.1`, `us1.2`, `us1.3` |
 | Versioned workflows, guards, external automation | `us2.1`, `us2.2`, `us2.3` |
-| Aging & SLA across both calendars | `us3.1`, `us3.2`, `us3.3` |
+| Aging & SLA across both calendars, including durable hold-state suspension | `us3.1`, `us3.2`, `us3.3`, **`us3.4`** |
 | Typed links, lineage, **service impact** | `us4.1`, `us4.2`, **`us4.3`** |
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
-| **DORA & ITIL flow metrics** | **`us9.4`** |
+| **Executive rollup, DORA & ITIL flow metrics** | **`us9.2`, `us9.4`** |
 | **Datastore persistence** | **`persistence`** |
 | **Idempotency, retry, dead letters** | **`us5`** |
 | **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
-| RBAC, backlog fixture | `us10.3`, `backlog-fixture` |
+| Authenticated tenant identity, RBAC, backlog fixture | **`us10.9`**, `us10.3`, `backlog-fixture` |
+| **Rendered heatmap ordering and executive overview** | **`ui-smoke`** |
 
 **QA coverage:** UI work is now verified in headless Chrome against the built server, including console-error and responsive checks. Not covered: visual regression (no screenshot baselines), cross-browser behaviour (Chrome only), and accessibility auditing beyond the keyboard and ARIA attributes already in the markup.
 
@@ -409,7 +433,7 @@ Named plainly so nobody mistakes the pilot for a product:
 
 - **Epic 5** — consumption is now reliable (idempotent, retried, dead-lettered), but the bus is still in-process. No Kafka, no transactional outbox, and webhook ingestion is still synchronous (US5.4).
 - **Epic 8 transports** — routing, fallback and the delivery log are real, but no message actually leaves the process. The channel adapters are stubs awaiting SES/SendGrid, the Slack Web API and Microsoft Graph. `IncidentAutoCreated` is also not yet routed; only the three SLA events are.
-- **US10.3 hardening** — no real authentication. Tenant and actor role arrive in headers.
+- **Identity hardening** — bearer credentials now prove tenant and principal in production mode, but SSO/OIDC/SAML, SCIM, a login UI and provider-specific integration credentials are not built. Dev mode still permits explicit header identity for the pilot UI.
 - **Epic 11** — no CMDB federation. Alert-discovered Services are lightweight stubs flagged `monitoring_discovery`.
-- **Webhook signature verification** — both gateways trust the normalized body. See README *Production Boundaries*.
-- **Epic 9** — US9.4 flow metrics are built, but there are no analytics materialized views, no cross-team executive rollup (US9.2), and no interactive graph explorer (US9.3). Metrics are computed per request. Escalated items are queryable via `escalated_at` and the Escalated filter, but the executive aging dashboard named in US8.2 is not built.
+- **Webhook signature verification** — both gateways trust the normalized body even though production requests now require an authenticated API principal. See README *Production Boundaries*.
+- **Epic 9 scale and exploration** — US9.1, US9.2 and US9.4 are built, but there are no analytics materialized views and no interactive graph explorer (US9.3). Metrics are computed per request and should move to reporting projections before production-scale load.

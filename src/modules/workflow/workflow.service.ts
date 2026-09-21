@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
 import { InProcessEventBus } from '../events/event-bus';
+import { SlaCalculatorService, SlaCalendar } from '../sla/sla-calculator.service';
 import { PublishedWorkflowRecord, WorkflowDefinition } from './workflow.types';
 
 const BUILT_IN_WORKFLOWS: Record<string, WorkflowDefinition> = {
@@ -111,6 +112,7 @@ export interface TransitionContext {
 export class WorkflowService {
   private dbService = DatabaseService.getInstance();
   private eventBus = InProcessEventBus.getInstance();
+  private slaCalculator = new SlaCalculatorService();
 
   public validateWorkflowDefinition(def: WorkflowDefinition): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
@@ -329,9 +331,62 @@ export class WorkflowService {
 
     // 5. Apply State Transition
     const now = new Date().toISOString();
+    const policyResult = await this.dbService.db.query<any>(
+      `SELECT state, calendar, suspend_sla
+       FROM sla_policies
+       WHERE org_id = $1 AND item_type = $2 AND (state = $3 OR state = $4)`,
+      [ctx.orgId, itemType, fromState, ctx.toState],
+    );
+    const policies = new Map<string, { calendar: SlaCalendar; suspend_sla: boolean }>();
+    for (const row of policyResult.rows || []) {
+      policies.set(row.state, { calendar: row.calendar, suspend_sla: Boolean(row.suspend_sla) });
+    }
+
+    const fromPolicy = policies.get(fromState);
+    const targetPolicy = policies.get(ctx.toState);
+    const wasSuspended = Boolean(item.sla_suspended);
+    let elapsedBase = Number(item.sla_elapsed_minutes || 0);
+    let clockStartedAt: string | null = item.sla_clock_started_at
+      ? new Date(item.sla_clock_started_at).toISOString()
+      : null;
+    let suspended = false;
+
+    if (targetPolicy?.suspend_sla) {
+      if (!wasSuspended && fromPolicy) {
+        elapsedBase += this.slaCalculator.calculateElapsedMinutes(
+          new Date(clockStartedAt || item.entered_state_at || item.created_at),
+          new Date(now),
+          fromPolicy.calendar,
+        );
+      }
+      suspended = true;
+      clockStartedAt = null;
+    } else if (wasSuspended) {
+      // Leaving a hold state preserves the accumulated duration and starts a fresh active
+      // interval. The paused wall-clock gap is therefore never back-filled.
+      suspended = false;
+      // entered_state_at is written to the same instant below, so a second timestamp is
+      // unnecessary. Keeping it null also preserves the established test/fixture contract
+      // where backdating entered_state_at controls a normal active clock.
+      clockStartedAt = null;
+    } else {
+      // Normal state changes retain the platform's existing time-in-state semantics.
+      elapsedBase = 0;
+      suspended = false;
+      clockStartedAt = null;
+    }
+
     await this.dbService.db.query(
-      `UPDATE work_items SET status = $1, entered_state_at = $2, custom_fields = $3, updated_at = $4 WHERE id = $5`,
-      [ctx.toState, now, JSON.stringify(mergedFields), now, ctx.workItemId],
+      `UPDATE work_items
+       SET status = $1,
+           entered_state_at = $2,
+           custom_fields = $3,
+           updated_at = $4,
+           sla_elapsed_minutes = $5,
+           sla_clock_started_at = $6,
+           sla_suspended = $7
+       WHERE id = $8`,
+      [ctx.toState, now, JSON.stringify(mergedFields), now, elapsedBase, clockStartedAt, suspended, ctx.workItemId],
     );
 
     // 6. Record Audit Event
