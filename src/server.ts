@@ -5,6 +5,7 @@ import { WorkItemService } from './modules/work-items/work-item.service';
 import { WorkflowService } from './modules/workflow/workflow.service';
 import { LineageService } from './modules/lineage/lineage.service';
 import { PILOT_ORG_ID, PILOT_TEAM_ID, seedPilotConfiguration } from './bootstrap/pilot-configuration';
+import { AuthService } from './modules/auth/auth.service';
 import { randomUUID } from 'crypto';
 
 async function bootstrap() {
@@ -15,6 +16,20 @@ async function bootstrap() {
       ? `💾 Datastore persisting to ${database.dataDir}`
       : '⚠️  Datastore is in-memory; all data is discarded on exit. Set CADENA_DATA_DIR to persist.',
   );
+  if (AuthService.devHeadersAllowed()) {
+    console.warn(
+      '⚠️  Header-based identity is ENABLED: any caller can claim any tenant via x-org-id. '
+      + 'Development only. Unset CADENA_ALLOW_HEADER_AUTH to require bearer tokens.',
+    );
+  } else {
+    console.log('🔒 Bearer token required; header-based identity is disabled.');
+    if (!AuthService.bootstrapToken()) {
+      console.warn(
+        '⚠️  No CADENA_BOOTSTRAP_TOKEN is set, so the first credential cannot be issued. '
+        + 'Set one to bootstrap tenant access.',
+      );
+    }
+  }
 
   // Seed demo data if database is empty
   const itemService = new WorkItemService();

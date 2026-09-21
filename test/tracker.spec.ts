@@ -59,25 +59,42 @@ describe('Implementation tracker', () => {
     expect(bad, 'epics assigned to an unknown rollout phase').toEqual([]);
   });
 
-  it('records the latest master-backlog delta without relabelling existing scope as new', () => {
-    const delta = (overlay as any).latest_delta;
+  it('records every scope delta without relabelling existing scope as new', () => {
+    // Deltas are an ordered list: a single entry could not represent a second increment,
+    // because its current_* counts must equal the canonical backlog and only one delta
+    // can be the newest. Each entry must still balance on its own arithmetic.
+    const deltas = (overlay as any).deltas;
     const epicIds = backlog.epics.map((epic) => epic.epic_id);
     const status = (overlay as any).stories;
     const epicStatus = (overlay as any).epics;
 
-    expect(delta.source).toBe('cadena-master-epics-and-user-stories.md');
-    expect(delta.baseline_epics + delta.added_epics.length).toBe(delta.current_epics);
-    expect(delta.baseline_stories + delta.added_stories.length).toBe(delta.current_stories);
-    expect(delta.current_epics).toBe(backlog.epics.length);
-    expect(delta.current_stories).toBe(backlogStoryIds.length);
-    expect(delta.added_stories.filter((id: string) => delta.expanded_stories.includes(id))).toEqual([]);
+    expect(Array.isArray(deltas)).toBe(true);
+    expect(deltas.length).toBeGreaterThan(0);
+    expect(deltas[0].source).toBe('cadena-master-epics-and-user-stories.md');
 
-    for (const id of delta.added_epics) {
-      expect(epicIds).toContain(id);
-      expect(epicStatus[id].addedIn).toBe(delta.id);
+    for (const delta of deltas) {
+      expect(delta.baseline_epics + delta.added_epics.length).toBe(delta.current_epics);
+      expect(delta.baseline_stories + delta.added_stories.length).toBe(delta.current_stories);
+      expect(delta.added_stories.filter((id: string) => delta.expanded_stories.includes(id))).toEqual([]);
+
+      for (const id of delta.added_epics) {
+        expect(epicIds).toContain(id);
+        expect(epicStatus[id].addedIn).toBe(delta.id);
+      }
+      for (const id of delta.added_stories) expect(status[id].addedIn).toBe(delta.id);
+      for (const id of delta.expanded_stories) expect(status[id].expandedIn).toBe(delta.id);
     }
-    for (const id of delta.added_stories) expect(status[id].addedIn).toBe(delta.id);
-    for (const id of delta.expanded_stories) expect(status[id].expandedIn).toBe(delta.id);
+
+    // Each delta must start where the previous one finished.
+    for (let i = 1; i < deltas.length; i += 1) {
+      expect(deltas[i].baseline_epics).toBe(deltas[i - 1].current_epics);
+      expect(deltas[i].baseline_stories).toBe(deltas[i - 1].current_stories);
+    }
+
+    // Only the newest describes the backlog as it stands.
+    const newest = deltas[deltas.length - 1];
+    expect(newest.current_epics).toBe(backlog.epics.length);
+    expect(newest.current_stories).toBe(backlogStoryIds.length);
   });
 
   it('has a generated page that matches the current story count', () => {

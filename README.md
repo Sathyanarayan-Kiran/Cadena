@@ -22,7 +22,7 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Event History & Metrics**: Every domain event persisted to `domain_events`, with DORA and ITIL flow metrics computed from recorded artefacts rather than hand entry.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, workflow-driven transitions, SLA health, item details, linking, lineage exploration, service impact, monitoring evidence on Incidents, and the notification delivery log.
-- **Testing**: Vitest + NestJS Testing + Supertest running 94 automated tests across 28 test files, plus a 9-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 107 automated tests across 29 test files, plus a 9-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -67,8 +67,8 @@ Expected output:
  ✓ test/us10.3.spec.ts (1 test)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  28 passed (28)
-      Tests  94 passed (94)
+ Test Files  29 passed (29)
+      Tests  107 passed (107)
 ```
 
 ### 2. Run the Server
@@ -114,9 +114,9 @@ Per Spec §18.3, the following components were deliberately stubbed for the Phas
    - **Envelope Contract**: Strictly conforms to Spec §8.2 (`event_id`, `event_type`, `schema_version`, `timestamp`, `actor`, `work_item_id`, `payload`).
    - **Extension Path**: Can be swapped for Apache Kafka or AWS EventBridge/MSK in Phase 1 without modifying domain logic or calling contracts.
 
-2. **Authentication & Identity (US10.3)**:
-   - **Stub**: Implemented via minimal RBAC role resolution in `RbacService` (`src/modules/rbac/rbac.service.ts`) checking `x-actor-id` / `x-actor-role` headers against the database `people` table.
-   - **Extension Path**: SSO/SCIM hosted providers (WorkOS / Okta / SAML / OIDC) can be plugged in during enterprise hardening phases.
+2. **Single Sign-On (US10.1) and SCIM provisioning (US10.2)**:
+   - **Not implemented.** US10.9 supplies verified credential-based identity that SSO will build on, but there is no OIDC or SAML flow and the pilot UI has no login screen.
+   - **Extension Path**: hosted SSO/SCIM providers (WorkOS / Okta / SAML / OIDC) plug in behind the same `AuthGuard` that already resolves a principal.
 
 ---
 
@@ -391,6 +391,49 @@ The response also reports coverage, because a metric computed over partial evide
 `GET /events` exposes the `domain_events` table, which records every event the platform publishes, filterable by type, work item and time range. It is what makes the metrics computable from history rather than from current state.
 
 **Boundary:** this is durable history, not yet the transactional outbox US5.1 asks for. The write lands immediately after the mutation rather than inside its transaction, so a crash in that gap still loses an event.
+
+---
+
+## Authentication (US10.9)
+
+Every tenant boundary in this codebase was previously enforced against `x-org-id`, a header the caller supplies. The isolation logic was correct, but it rested on a premise that was false: anyone could claim any tenant. Authentication turns the tenant into something the caller has to prove.
+
+```http
+POST /auth/credentials          # bootstrap token or a platform_admin credential
+Authorization: Bearer <token>
+{ "name": "ci-pipeline", "roles": ["on_call"] }
+
+→ { "id": "...", "token": "cdn_…", "roles": ["on_call"] }   # shown once, never again
+```
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /auth/me` | The principal behind the current request |
+| `POST /auth/credentials` | Issue a credential (admin or bootstrap only) |
+| `GET /auth/credentials` | List credentials, never their secrets |
+| `POST /auth/credentials/:id/revoke` | Revoke immediately |
+
+**Tokens are stored only as a SHA-256 hash**, and lookup is *by* that hash, so verification is an indexed equality test on a digest — there is no plaintext secret in the database to leak. A credential is shown exactly once, at issue.
+
+**A request whose `x-org-id` contradicts its credential is refused**, not silently corrected. That mismatch is either a bug worth surfacing or an attempt worth refusing, and neither deserves to succeed quietly.
+
+### Identity modes
+
+| Mode | When | Behaviour |
+| --- | --- | --- |
+| Bearer token | default, including `npm start` | A credential is required; the tenant and actor roles come from it |
+| Bootstrap token | `CADENA_BOOTSTRAP_TOKEN` set | Acts as `platform_admin` for the tenant named in `x-org-id`, so the first credential can be minted |
+| Dev headers | `CADENA_ALLOW_HEADER_AUTH=true` | `x-org-id` / `x-actor-role` are trusted as-is |
+
+**Header identity is off by default and must be opted into**, the same discipline the data directory follows: the unsafe mode is never inherited by accident. `npm run dev` enables it so the pilot UI works without a login; `npm start` does not. The server states its mode at boot.
+
+**Boundaries:**
+
+- **The migration is deliberately shallow.** Forty-nine call sites read the tenant from `x-org-id`. Rather than rewrite them all at once, the guard resolves the principal and overwrites that header with the authenticated value, so those controllers keep working while what they read becomes something proven rather than asserted. Reading the principal directly is the eventual tidier shape.
+- **Dev mode rewrites nothing**, deliberately. It must be behaviourally invisible, so enabling it cannot change how downstream controllers resolve their own fallbacks.
+- **The pilot UI has no login.** It sends `x-org-id` and therefore only works in dev mode. A browser flow arrives with US10.1.
+- Only the credential's first role reaches the workflow engine, which evaluates a single role; the full set stays on the principal.
+- There is no token expiry or rotation policy — revocation is manual.
 
 ---
 

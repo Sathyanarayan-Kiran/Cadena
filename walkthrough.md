@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 5 consumption reliability, Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified. The canonical backlog is **20 epics / 71 stories**.
-**Verification:** 94 automated tests across 28 test files, plus 9 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot, the backlog fixture, Epic 3 (aging/SLA), Epic 4 (traceability graph), Epic 5 consumption reliability, Epic 6 (Git/CI), Epic 7 (monitoring/APM), Epic 8 (notification & escalation) and US9.4 (DORA/ITIL metrics) are implemented and verified. The canonical backlog is **20 epics / 72 stories**.
+**Verification:** 107 automated tests across 29 test files, plus 9 browser smoke tests driving the real page.
 
 ---
 
@@ -16,6 +16,32 @@ The capability gap it closes (Spec §9): git, CI/CD and monitoring stay authorit
 ---
 
 ## Change log
+
+### 2026-09-21 — Authentication: the tenant becomes something you prove
+
+Every tenant boundary here was enforced against `x-org-id`, a header the caller supplies. Two rounds of review had already hardened the isolation logic around it — and that logic was correct — but it rested on a false premise: anyone could set that header to anything. The code looked rigorously tenant-safe and held only against a caller who wasn't trying.
+
+**Added**
+
+- `api_credentials`, storing bearer tokens **only as a SHA-256 hash**. Lookup is by that hash, so verification is an indexed equality test on a digest and no plaintext secret exists in the database.
+- A global `AuthGuard` resolving a principal from a bearer token, with `CADENA_BOOTSTRAP_TOKEN` available to mint the first credential for a tenant.
+- `GET /auth/me`, `POST|GET /auth/credentials`, `POST /auth/credentials/:id/revoke`.
+- `test/us10.9.spec.ts` — 13 tests that run with header identity **disabled**, exercising the posture production actually uses.
+- US10.9 added to the backlog, so completed work appears on the tracker rather than drifting off it.
+
+**Two decisions worth recording**
+
+*The migration is shallow on purpose.* Forty-nine call sites read the tenant from a header. Instead of rewriting them, the guard resolves the principal and then overwrites that header with the authenticated value — so those controllers keep working unchanged while what they read becomes something proven. A request whose header contradicts its credential is refused outright rather than silently corrected.
+
+*Header identity is off by default,* the same discipline the data directory follows: the unsafe mode is never inherited by accident. The suite opts in once in `vitest.config.ts` rather than in twenty-three spec files, and `npm run dev` opts in so the pilot UI still works. `npm start` does not.
+
+**A mistake worth recording.** The first attempt made dev mode inject a default `x-org-id`, which then collided with the work-item controller's own body-versus-header check and failed three tests. Dev mode must be behaviourally invisible; it now rewrites nothing.
+
+**Verified live**, not only by test: with header mode off, `/workitems` returned 401 both bare and with an `x-org-id`; the static UI stayed reachable; the bootstrap token minted a credential; that token resolved its own tenant and roles; and a contradicting header produced 403.
+
+**What this does not do.** It is not SSO. US10.1 and US10.2 remain unimplemented, and the pilot UI still has no login — it works only in dev mode. This is the verified-identity foundation those will build on.
+
+**Tracker contract generalised.** Recording US10.9 exposed a limitation: `latest_delta` was a single object whose `current_*` counts had to equal the canonical backlog, so no story could ever be added outside that one delta. It is now an ordered `deltas` list; each entry must balance its own arithmetic and start where the previous finished, and only the newest describes the backlog as it stands.
 
 ### 2026-09-21 — Review remediation and master-backlog consolidation
 
@@ -274,7 +300,7 @@ Full detail in `implementation_plan.md` under *Codex Epic 7 monitoring update*.
 
 ```bash
 npm install
-npm test        # 94 tests across 28 files
+npm test        # 107 tests across 29 files
 npm run test:ui # 7 browser smoke tests in headless Chrome
 npm run dev     # http://localhost:3000
 ```
@@ -347,8 +373,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  28 passed (28)
-      Tests  94 passed (94)
+ Test Files  29 passed (29)
+      Tests  107 passed (107)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:

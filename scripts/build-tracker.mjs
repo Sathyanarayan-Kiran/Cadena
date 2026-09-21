@@ -70,24 +70,46 @@ export function buildModel() {
     if (!seen.has(id)) problems.push(`implementation-status.json describes ${id}, which is not in backlog.json`);
   }
 
-  const latestDelta = overlay.latest_delta ?? null;
-  if (latestDelta) {
+  /**
+   * Scope changes are recorded as an ordered list of deltas.
+   *
+   * This was a single `latest_delta`, which could not represent a second increment: its
+   * `current_*` counts had to equal the canonical backlog, so adding any story outside that
+   * one delta made the file self-contradictory. A list keeps each increment's provenance
+   * intact and lets the newest one drive the page's "new" badges. The old single-object
+   * shape is still accepted so the contract degrades rather than breaks.
+   */
+  const deltas = overlay.deltas ?? (overlay.latest_delta ? [overlay.latest_delta] : []);
+  const latestDelta = deltas.length > 0 ? deltas[deltas.length - 1] : null;
+
+  if (deltas.length > 0) {
     const epicIds = new Set(epics.map((epic) => epic.id));
     const storyIds = new Set(epics.flatMap((epic) => epic.stories.map((story) => story.id)));
+
+    // Only the newest delta describes the backlog as it stands now.
     if (latestDelta.current_epics !== epics.length || latestDelta.current_stories !== storyIds.size) {
-      problems.push('latest_delta current counts do not match the canonical backlog');
+      problems.push('the newest delta current counts do not match the canonical backlog');
     }
-    for (const id of latestDelta.added_epics) {
-      if (!epicIds.has(id)) problems.push(`latest_delta added epic ${id} is not in backlog.json`);
-      if (overlay.epics[id]?.addedIn !== latestDelta.id) problems.push(`${id} is missing addedIn=${latestDelta.id}`);
-    }
-    for (const id of latestDelta.added_stories) {
-      if (!storyIds.has(id)) problems.push(`latest_delta added story ${id} is not in backlog.json`);
-      if (overlay.stories[id]?.addedIn !== latestDelta.id) problems.push(`${id} is missing addedIn=${latestDelta.id}`);
-    }
-    for (const id of latestDelta.expanded_stories) {
-      if (!storyIds.has(id)) problems.push(`latest_delta expanded story ${id} is not in backlog.json`);
-      if (overlay.stories[id]?.expandedIn !== latestDelta.id) problems.push(`${id} is missing expandedIn=${latestDelta.id}`);
+
+    for (const delta of deltas) {
+      if (delta.baseline_epics + delta.added_epics.length !== delta.current_epics) {
+        problems.push(`delta ${delta.id} epic arithmetic does not balance`);
+      }
+      if (delta.baseline_stories + delta.added_stories.length !== delta.current_stories) {
+        problems.push(`delta ${delta.id} story arithmetic does not balance`);
+      }
+      for (const id of delta.added_epics) {
+        if (!epicIds.has(id)) problems.push(`delta ${delta.id} added epic ${id} is not in backlog.json`);
+        if (overlay.epics[id]?.addedIn !== delta.id) problems.push(`${id} is missing addedIn=${delta.id}`);
+      }
+      for (const id of delta.added_stories) {
+        if (!storyIds.has(id)) problems.push(`delta ${delta.id} added story ${id} is not in backlog.json`);
+        if (overlay.stories[id]?.addedIn !== delta.id) problems.push(`${id} is missing addedIn=${delta.id}`);
+      }
+      for (const id of delta.expanded_stories) {
+        if (!storyIds.has(id)) problems.push(`delta ${delta.id} expanded story ${id} is not in backlog.json`);
+        if (overlay.stories[id]?.expandedIn !== delta.id) problems.push(`${id} is missing expandedIn=${delta.id}`);
+      }
     }
   }
 

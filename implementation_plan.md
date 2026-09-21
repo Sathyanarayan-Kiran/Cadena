@@ -175,6 +175,90 @@ Persistence, notifications and reliable consumption were individually covered, b
 
 ---
 
+## Codex authentication update — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. The earlier Codex records and the original Gemini plan remain below as prior-history sections.
+
+**Status:** Implemented as US10.9 and covered by `test/us10.9.spec.ts`. It is not SSO; US10.1 and US10.2 remain unimplemented.
+
+### Why this came before more features
+
+Every tenant boundary in the codebase was enforced against `x-org-id`, a header the caller supplies. Two rounds of review had already hardened the isolation logic around it, and that logic was correct — but it rested on a premise that was false. Anyone could claim any tenant. The code read as rigorously tenant-safe, the README said so, and it held only against a caller who was not trying.
+
+That also gated everything downstream: nothing could be shown to a real user, genuine dogfooding would have meant running the team's work on an open endpoint, an audit trail attributed to a self-declared header proves little, and cross-organisation federation needs real principals on both ends.
+
+### Scope delivered by Codex
+
+- Added `api_credentials`, storing tokens only as a SHA-256 hash. Lookup is *by* that hash, so verification is an indexed equality test on a digest rather than a comparison against a stored secret; there is no plaintext token in the database to leak, and a credential is shown exactly once at issue.
+- Added a global `AuthGuard` resolving a principal from a bearer token, from `CADENA_BOOTSTRAP_TOKEN` (which must name its target tenant, since it cannot infer one), or from headers when development mode is explicitly enabled.
+- Added `GET /auth/me`, `POST /auth/credentials`, `GET /auth/credentials` and `POST /auth/credentials/:id/revoke`, with credential management restricted to the bootstrap token or a credential holding `platform_admin`.
+- Added US10.9 to `Backlog.md` and `backlog.json` so completed work appears on the tracker.
+
+### Design decisions
+
+- **The migration is deliberately shallow.** Forty-nine call sites read the tenant from `x-org-id`. Rewriting them all in one change would have been large and risky, so the guard resolves the principal and then overwrites that header with the authenticated value. Those controllers keep working unchanged, but what they read is now proven rather than asserted. Reading the principal directly is the tidier eventual shape and is deliberately deferred.
+- **A contradicting header is refused, not corrected.** A request naming a different tenant than its credential is either a bug worth surfacing or an attempt worth refusing. Silently overwriting it would hide both.
+- **Header identity is off by default.** The same discipline the data directory follows: the unsafe mode is never inherited by accident. The suite opts in once in `vitest.config.ts` rather than in twenty-three spec files; `npm run dev` opts in so the pilot UI works; `npm start` does not.
+- **Development mode rewrites nothing.** The first attempt had it inject a default `x-org-id`, which collided with the work-item controller's own body-versus-header check and broke three previously passing tests. Dev mode must be behaviourally invisible, or enabling it changes how downstream controllers resolve their fallbacks.
+- **A development identity cannot mint credentials.** That would let the mechanism being replaced issue its own replacement.
+
+### Tracker contract generalised
+
+Recording US10.9 exposed a limitation in the delta contract introduced by `f72a052`: `latest_delta` was a single object whose `current_*` counts had to equal the canonical backlog, so adding any story outside that one delta made the file self-contradictory — the generator demanded the counts match reality while the test demanded `baseline + added` match the counts. It is now an ordered `deltas` list. Each entry must balance its own arithmetic and begin where the previous finished, only the newest describes the backlog as it stands, and the single-object shape is still accepted so the contract degrades rather than breaks.
+
+### A correction made during this work
+
+`US10.7` was briefly overwritten in `implementation-status.json`. The id already belonged to *cryptographically verifiable audit export* from the master consolidation, and `backlog.json` was protected by a duplicate guard but the status overlay was not. The original entry was restored from `HEAD` and this work was renumbered to `US10.9`.
+
+### Verification added by Codex
+
+- `test/us10.9.spec.ts` (13 tests), which disables header identity for its own duration so it exercises the production posture: unauthenticated refusal including with a header present, tenant resolved from the credential, a contradicting header rejected, cross-tenant reads refused for an authenticated caller, hash-only storage with no secret in listings, revocation honoured, credential management restricted to admins and scoped per tenant, bootstrap requiring a named tenant, credential roles reaching the workflow guard, token opacity and entropy, and validation errors.
+- All 94 pre-existing tests pass unchanged.
+- Live verification against the built server with header mode off: 401 both bare and with an `x-org-id`, static UI still reachable, bootstrap minting a credential, that credential resolving its own tenant and roles, and a contradicting header producing 403.
+
+### Files added by Codex in this increment
+
+- `src/modules/auth/auth.service.ts`
+- `src/modules/auth/auth.guard.ts`
+- `src/modules/auth/auth.controller.ts`
+- `src/modules/auth/auth.module.ts`
+- `test/us10.9.spec.ts`
+
+### Files updated by Codex in this increment
+
+- `src/app.module.ts`
+- `src/database/database.service.ts`
+- `src/server.ts`
+- `vitest.config.ts`
+- `package.json`
+- `Backlog.md`
+- `backlog.json`
+- `implementation-status.json`
+- `scripts/build-tracker.mjs`
+- `test/tracker.spec.ts`
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Deliberate boundaries
+
+- **This is not SSO.** There is no OIDC or SAML flow and no browser login; US10.1 and US10.2 remain unimplemented. The pilot UI sends `x-org-id` and therefore works only in development mode.
+- Only the credential's first role reaches the workflow engine, which evaluates a single role. The full set stays on the principal.
+- No token expiry, rotation or scoping beyond roles; revocation is manual.
+- The bootstrap token is a single shared secret read from the environment, with no audit of what it issues beyond the credentials themselves.
+- Controllers still read the tenant from a header, now authenticated. Until they read the principal directly, a future controller could be written that forgets to, and nothing would catch it.
+
+### Verification result
+
+- `npm run build`: **PASS**
+- Focused suite (`test/us10.9.spec.ts`): **PASS — 13 tests**
+- Full regression suite: **PASS — 29 test files, 107 tests**
+- Live production-posture check on the built server: **PASS**
+- `git diff --check`: **PASS**
+- Browser QA: **not re-run in this increment; the smoke suite runs with development identity enabled and therefore does not exercise the authenticated path**
+
+---
+
 ## Codex Epic 5 reliable consumption update — 2026-09-20
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-20. The earlier Codex records and the original Gemini plan remain below as prior-history sections.

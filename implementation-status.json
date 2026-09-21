@@ -1,25 +1,65 @@
 {
   "_comment": "Status overlay for the implementation tracker. backlog.json owns the stories and their acceptance criteria; this file owns delivery status, the abridged title shown in the tracker, and phase alignment. Regenerate the page with `npm run tracker`. test/tracker.spec.ts fails if the two files fall out of sync.",
   "source_of_truth": "repository",
-  "latest_delta": {
-    "id": "master-2026-09-21",
-    "source": "cadena-master-epics-and-user-stories.md",
-    "date": "2026-09-21",
-    "baseline_epics": 16,
-    "baseline_stories": 56,
-    "current_epics": 20,
-    "current_stories": 71,
-    "added_epics": ["E17", "E18", "E19", "E20"],
-    "added_stories": [
-      "US9.5", "US10.7", "US10.8", "US11.3", "US16.4", "US16.5",
-      "US17.1", "US17.2", "US17.3", "US17.4", "US18.1", "US18.2",
-      "US19.1", "US19.2", "US20.1"
-    ],
-    "expanded_stories": [
-      "US13.1", "US13.2", "US13.4", "US14.1", "US14.2",
-      "US15.1", "US15.2", "US15.3", "US16.1"
-    ]
-  },
+  "deltas": [
+    {
+      "id": "master-2026-09-21",
+      "source": "cadena-master-epics-and-user-stories.md",
+      "date": "2026-09-21",
+      "baseline_epics": 16,
+      "baseline_stories": 56,
+      "current_epics": 20,
+      "current_stories": 71,
+      "added_epics": [
+        "E17",
+        "E18",
+        "E19",
+        "E20"
+      ],
+      "added_stories": [
+        "US9.5",
+        "US10.7",
+        "US10.8",
+        "US11.3",
+        "US16.4",
+        "US16.5",
+        "US17.1",
+        "US17.2",
+        "US17.3",
+        "US17.4",
+        "US18.1",
+        "US18.2",
+        "US19.1",
+        "US19.2",
+        "US20.1"
+      ],
+      "expanded_stories": [
+        "US13.1",
+        "US13.2",
+        "US13.4",
+        "US14.1",
+        "US14.2",
+        "US15.1",
+        "US15.2",
+        "US15.3",
+        "US16.1"
+      ]
+    },
+    {
+      "id": "auth-2026-09-21",
+      "source": "authentication slice",
+      "date": "2026-09-21",
+      "baseline_epics": 20,
+      "baseline_stories": 71,
+      "current_epics": 20,
+      "current_stories": 72,
+      "added_epics": [],
+      "added_stories": [
+        "US10.9"
+      ],
+      "expanded_stories": []
+    }
+  ],
   "spec_phases": [
     {
       "id": 0,
@@ -323,7 +363,7 @@
       "name": "SSO login",
       "status": "idle",
       "phase": 3,
-      "note": "Not implemented. The research playbook records this as complete; it is not."
+      "note": "Not implemented. US10.9 supplies the verified credential identity SSO will build on, but no OIDC or SAML flow exists and the pilot UI has no login. The research playbook records this as complete; it is not."
     },
     "US10.2": {
       "name": "SCIM provisioning",
@@ -606,6 +646,14 @@
       "isNew": true,
       "addedIn": "master-2026-09-21",
       "note": "New from the master backlog. No Chrome/Edge extension shows twin status or RBAC-gated resync and unlink actions on native ticket pages."
+    },
+    "US10.9": {
+      "name": "Authenticated tenant and actor identity",
+      "status": "done",
+      "phase": 0,
+      "note": "Verified by <code>test/us10.9.spec.ts</code> — bearer credentials stored only as a SHA-256 hash, tenant resolved from the credential, a contradicting header refused, revocation honoured, and credential management restricted to admins. Header identity survives only behind <code>CADENA_ALLOW_HEADER_AUTH</code> for development.",
+      "addedIn": "auth-2026-09-21",
+      "isNew": true
     }
   }
 }

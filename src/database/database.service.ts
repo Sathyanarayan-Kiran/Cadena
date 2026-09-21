@@ -312,6 +312,18 @@ export class DatabaseService {
         PRIMARY KEY (work_item_id, state, entered_state_at, kind)
       );
 
+      CREATE TABLE IF NOT EXISTS api_credentials (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        actor_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL UNIQUE,
+        roles TEXT[] NOT NULL DEFAULT '{}',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP WITH TIME ZONE,
+        revoked_at TIMESTAMP WITH TIME ZONE
+      );
+
       CREATE TABLE IF NOT EXISTS sla_policies (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL REFERENCES orgs(id),
@@ -331,6 +343,7 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS domain_events_org_time ON domain_events (org_id, occurred_at);
       CREATE INDEX IF NOT EXISTS domain_events_type_time ON domain_events (event_type, occurred_at);
       CREATE INDEX IF NOT EXISTS dlq_consumer_status ON dead_letter_events (consumer, status);
+      CREATE INDEX IF NOT EXISTS api_credentials_hash ON api_credentials (token_hash);
     `);
     await this.db.exec(`
       UPDATE work_items

@@ -210,6 +210,11 @@ Epics below map directly to the services and phases defined in the main specific
 - Given a tenant selects US, EU or APAC residency, when its data is stored or replicated, then it remains inside the selected boundary and any unsupported transfer is rejected.
 - Given tenant data is persisted or transmitted, when encryption policy is evaluated, then AES-256-equivalent at-rest encryption, TLS 1.3 in transit and KMS/Vault-backed key rotation are enforced without cross-tenant key reuse.
 
+**US10.9** As a platform operator, I want the tenant and actor established from a verified credential rather than a request header, so that multi-tenant isolation is a boundary the caller must prove rather than a convention they can assert.
+
+- Given a request carrying no valid credential, when any tenant-scoped endpoint is called, then it is refused with 401 and no tenant data is returned.
+- Given a credential issued for one tenant, when the request also names a different tenant, then it is refused rather than silently corrected, and the credential's tenant is the only one reachable.
+
 ## Epic 11 — CMDB federation
 
 **US11.1** As a platform architect, I want to federate Service/Asset data from an existing CMDB rather than duplicate it, so that the platform never becomes a second source of truth that drifts.

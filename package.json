@@ -7,11 +7,11 @@
     "test": "vitest run --exclude test/ui-smoke.spec.ts --exclude \"**/node_modules/**\"",
     "test:watch": "vitest",
     "build": "tsc",
-    "dev": "cross-env CADENA_DATA_DIR=./data tsx watch src/server.ts",
+    "dev": "cross-env CADENA_DATA_DIR=./data CADENA_ALLOW_HEADER_AUTH=true tsx watch src/server.ts",
     "start": "cross-env CADENA_DATA_DIR=./data node dist/server.js",
     "test:ui": "tsc && vitest run test/ui-smoke.spec.ts",
     "tracker": "node scripts/build-tracker.mjs",
-    "dev:ephemeral": "tsx watch src/server.ts",
+    "dev:ephemeral": "cross-env CADENA_ALLOW_HEADER_AUTH=true tsx watch src/server.ts",
     "db:reset": "node -e \"require('fs').rmSync('./data',{recursive:true,force:true});console.log('data directory removed')\""
   },
   "dependencies": {
