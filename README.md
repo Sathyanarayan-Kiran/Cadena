@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex and Claude updates, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. The US20.2 connector-led management workspace is implemented: connector-led mode is the staging/production default, local creation is refused there, and externally owned fields are read-only except for governed, audited state write-back. The canonical backlog contains **20 epics and 73 stories**, with **36 done / 6 partial / 31 not started**. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
+> **Current status (Codex and Claude updates, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, US16.4/US16.5 durable per-twin queues and failure isolation, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked durable ingestion into canonical twins, and outbox-driven execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. The US20.2 connector-led management workspace is implemented: connector-led mode is the staging/production default, local creation is refused there, and externally owned fields are read-only except for governed, audited state write-back. The canonical backlog contains **20 epics and 73 stories**, with **38 done / 6 partial / 29 not started**. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
 
 ## Product Interaction Model
 
@@ -32,14 +32,14 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 - **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, warning/breach events, and durable pause/resume semantics for configured hold states.
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
-- **Cross-system Synchronization Safety**: Tenant-scoped immutable provider identities, typed one-to-many/many-to-one dependency links, exact-id graph resolution, versioned bidirectional state matrices with guarded target fields/transitions, durable ready/held connector work orders, metadata-only rename/move updates, a dedicated counterpart write-back contract, and actor-plus-hash echo suppression with durable content fallback after restart.
+- **Cross-system Synchronization Safety**: Tenant-scoped immutable provider identities, typed one-to-many/many-to-one dependency links, exact-id graph resolution, versioned bidirectional state matrices with guarded target fields/transitions, transactional-outbox propagation, per-twin durable FIFO intake/write queues, twin-scoped DLQ correction/re-injection, expiring database sync leases, metadata-only rename/move updates, a dedicated counterpart write-back contract, and actor-plus-hash echo suppression with durable content fallback after restart.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
 - **Transactional Event Backbone**: Canonical work-item creation, transitions and typed links commit their immutable event and outbox marker atomically; inbound webhooks persist before returning HTTP 202 and process from a queryable queue; pending envelopes recover on bootstrap with the same event id, and every consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
 - **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, source-connector onboarding and health, a connector-led landing view and synchronized-twin workspace with governed write-back, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. Local creation appears only in pilot (under Pilot actions) and standalone modes.
-- **Testing**: Vitest + NestJS Testing + Supertest running 144 automated tests across 41 test files, plus a 15-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 166 automated tests across 44 test files, plus a 21-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -96,9 +96,12 @@ Expected output:
  ✓ test/backlog-fixture.spec.ts (1 test)
  ✓ test/us13.1.spec.ts (3 tests)
  ✓ test/cloud-staging.spec.ts (6 tests)
+ ✓ test/us17.1.spec.ts (11 tests)
+ ✓ test/us20.2.spec.ts (7 tests)
+ ✓ test/us16.4-16.5.spec.ts (4 tests)
 
- Test Files  41 passed (41)
-      Tests  144 passed (144)
+ Test Files  44 passed (44)
+      Tests  166 passed (166)
 ```
 
 ### 2. Run the Server
@@ -379,26 +382,28 @@ ServiceNow uses `tableNames` (for example `["incident", "change_request"]`), `op
 | Health | `GET /integrations/connectors/:id/health` | Last success, seconds since success, lag, consecutive failures, twin count, cursors, work-order counts |
 | Twins | `GET /integrations/connectors/:id/twins`, `GET /integrations/connectors/twins` | Canonical twins with native key/URL, state, field authority and correlation node |
 | Work orders | `GET /integrations/connectors/:id/work-orders` | Outbound state writes and their status |
+| Twin DLQ | `GET /integrations/connectors/:id/twin-dlq`, `GET /integrations/connectors/:id/twin-dlq/:entryId` | Failed twin partition with payload, error and complete attempt history |
+| Re-inject | `POST /integrations/connectors/:id/twin-dlq/:entryId/reinject` | Correct an optional `payload` and resume it at its original FIFO position |
 
 These block activation: a missing project or table, a missing required field, or no incremental-query capability. Unknown state values are a warning.
 
 ### Ingestion and state propagation
 
-Each entity type has its own watermark. Cursors never advance past a record that failed to process. Unchanged records are detected by content hash and are not rewritten.
+Each entity type has its own watermark. A fetched page and its per-record durable intake entries commit in the same transaction, so the cursor advances only after every record is recoverably accepted. Processing then happens from a FIFO partition keyed by immutable provider/entity/id: a malformed record can retry or pause without pinning the source watermark or blocking unrelated twins. Unchanged records are detected by content hash and are not rewritten.
 
-When a twin's native state changes, the connector does the following:
+When a twin's native state changes, the twin mutation and its event commit together. Outbox recovery then does the following:
 
 1. Screens the change through US13.3 echo suppression.
 2. Finds counterpart twins through US13.2 `counterpart` links.
 3. Translates the change through the published US13.1 mapping.
 4. Executes a ready decision as a work order on the counterpart's connector. This is a Jira transition or a ServiceNow state-code update, carrying only the rule's required fields.
 
-Held decisions are recorded and not executed. Retryable failures (429, 5xx, timeouts) back off from 30 seconds to one hour over five attempts. Permanent refusals, such as a transition that isn't available, are marked `dead` for review.
+Work orders have a durable global queue position but execute FIFO within the target twin. Unrelated twin heads can execute concurrently. Held decisions pause only their target twin. Retryable failures (429, 5xx, timeouts) back off from 30 seconds to one hour over five attempts. Permanent refusals, or exhausted ingestion/transformation failures, enter the twin DLQ. Re-injection preserves the original position, keeps the attempt history, and unblocks later changes only after the corrected head succeeds.
 
 ### Current limits
 
 - Sync is triggered by an operator or the API. There is no scheduler or webhook trigger yet.
-- One replica only: an in-process single-flight lock prevents overlapping syncs of one connector.
+- Overlapping syncs of one connector are prevented by an expiring, heartbeated database lease. The staging manifest intentionally remains at one replica because the audit-chain append path still has a separate single-writer constraint; this increment does not authorize horizontal scaling.
 - Two same-provider connectors in one tenant cannot own the same external record.
 - Azure DevOps, Zendesk, Salesforce, GitHub and Asana are not implemented.
 
@@ -878,10 +883,10 @@ The next delivery sequence follows the connector-led product decision:
    - Select AWS/Azure/GCP and region, provision the managed services, bind secrets, then prove HTTPS, database restore and immutable-image rollback using `deploy/staging/README.md`.
 
 2. **US17.1 live validation and completion**:
-   - With credentials and explicit authorisation, enable `CADENA_CONNECTOR_LIVE_HTTP` against a Jira Cloud and ServiceNow sandbox, then add scheduled/webhook-triggered polling, a durable sync lease, and the remaining provider adapters.
+   - With credentials and explicit authorisation, enable `CADENA_CONNECTOR_LIVE_HTTP` against a Jira Cloud and ServiceNow sandbox, then add scheduled/webhook-triggered polling and the remaining provider adapters.
 
-3. **US16.4/US16.5 — per-twin durable queues and failure isolation**:
-   - Isolate one record's failing writes from the rest of its source and replace the in-process sync lock with a database lease before enabling multi-replica synchronization. Then merge connector twins into the SLA, traceability and metrics engines.
+3. **Unify connector twins with governance engines**:
+   - Completed in this increment. Next, define the twin-backed WorkItem projection so externally owned records participate in SLA, traceability, notification and metrics engines without becoming locally authoritative. Resolve the audit-chain multi-writer constraint before enabling multiple replicas.
 
 4. **US13.4 and US13.5 — safe content and closure sync**:
    - Keep private work notes out of public streams and write complete resolution metadata back to the ITSM record.
@@ -975,6 +980,10 @@ Multi-worker dispatch, a managed broker, real notification transports, CMDB fede
 | **US13.2** | Resolves one-to-many and many-to-one dependency trees without cross-tenant or orphan links | `test/us13.2.spec.ts` | **PASS** |
 | **US13.3** | Suppresses an exact returning write by service-account identity plus canonical SHA-256 payload hash | `test/us13.3.spec.ts` | **PASS** |
 | **US13.3** | Detects the unchanged no-op from durable content after volatile suppression state is lost | `test/us13.3.spec.ts` | **PASS** |
+| **US16.4** | Executes changes in durable FIFO order per twin while unrelated twins proceed and expired connector leases recover | `test/us16.4-16.5.spec.ts` | **PASS** |
+| **US16.4** | Recovers a committed twin change through the transactional outbox without loss or duplicate work-order execution | `test/us16.4-16.5.spec.ts` | **PASS** |
+| **US16.5** | Pauses only the failed twin and keeps unrelated writes and ingested records moving | `test/us16.4-16.5.spec.ts` | **PASS** |
+| **US16.5** | Exposes payload, error and attempt history and re-injects a corrected payload at its original FIFO position | `test/us16.4-16.5.spec.ts` | **PASS** |
 | **US17.1** | Discovers Jira and ServiceNow scopes, fields, custom fields and states through their native APIs | `test/us17.1.spec.ts` | **PASS (API fakes)** |
 | **US17.1** | Materializes and updates canonical twins without duplicates under a paginated watermark | `test/us17.1.spec.ts` | **PASS (API fakes)** |
 | **US17.1** | Reports missing scopes and required fields before activation | `test/us17.1.spec.ts` | **PASS** |

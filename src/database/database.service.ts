@@ -542,6 +542,8 @@ export class DatabaseService {
         UNIQUE (org_id, provider, artifact_type, external_id)
       );
 
+      CREATE SEQUENCE IF NOT EXISTS integration_twin_queue_position_seq;
+
       CREATE TABLE IF NOT EXISTS integration_connector_work_orders (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,
@@ -558,6 +560,54 @@ export class DatabaseService {
         last_error TEXT,
         next_attempt_at TIMESTAMP WITH TIME ZONE,
         executed_at TIMESTAMP WITH TIME ZONE,
+        source_event_id UUID,
+        source_payload TEXT NOT NULL DEFAULT '{}',
+        queue_position BIGINT NOT NULL DEFAULT nextval('integration_twin_queue_position_seq'),
+        attempt_history TEXT NOT NULL DEFAULT '[]',
+        claimed_by TEXT,
+        claim_expires_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_connector_ingestion_queue (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        twin_id UUID REFERENCES integration_canonical_twins(id) ON DELETE SET NULL,
+        partition_key TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        dedupe_key TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        queue_position BIGINT NOT NULL DEFAULT nextval('integration_twin_queue_position_seq'),
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        attempt_history TEXT NOT NULL DEFAULT '[]',
+        claimed_by TEXT,
+        claim_expires_at TIMESTAMP WITH TIME ZONE,
+        last_error TEXT,
+        next_attempt_at TIMESTAMP WITH TIME ZONE,
+        completed_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (connector_id, dedupe_key)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_connector_sync_leases (
+        connector_id UUID PRIMARY KEY REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        org_id UUID NOT NULL,
+        lease_owner TEXT NOT NULL,
+        acquired_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP WITH TIME ZONE NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_connector_propagations (
+        source_event_id UUID PRIMARY KEY REFERENCES domain_events(event_id) ON DELETE CASCADE,
+        org_id UUID NOT NULL,
+        source_twin_id UUID NOT NULL,
+        status TEXT NOT NULL,
+        echoes_suppressed INT NOT NULL DEFAULT 0,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
@@ -584,7 +634,19 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ALTER COLUMN transaction_id DROP NOT NULL;`);
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'state_translation';`);
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS requested_by TEXT;`);
+    await this.db.exec(`CREATE SEQUENCE IF NOT EXISTS integration_twin_queue_position_seq;`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS source_event_id UUID;`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS source_payload TEXT NOT NULL DEFAULT '{}';`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS queue_position BIGINT DEFAULT nextval('integration_twin_queue_position_seq');`);
+    await this.db.exec(`UPDATE integration_connector_work_orders SET queue_position = nextval('integration_twin_queue_position_seq') WHERE queue_position IS NULL;`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ALTER COLUMN queue_position SET NOT NULL;`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS attempt_history TEXT NOT NULL DEFAULT '[]';`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS claimed_by TEXT;`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claimed_by TEXT;`);
+    await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`CREATE INDEX IF NOT EXISTS integration_connector_work_orders_twin ON integration_connector_work_orders (org_id, target_twin_id, status);`);
+    await this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS integration_connector_work_orders_event_twin ON integration_connector_work_orders (source_event_id, target_twin_id) WHERE source_event_id IS NOT NULL;`);
     await this.db.exec(`
       UPDATE audit_events SET actor_type = 'integration'
       WHERE actor_type = 'user'
@@ -622,7 +684,16 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS integration_canonical_twins_node
         ON integration_canonical_twins (org_id, correlation_node_id);
       CREATE INDEX IF NOT EXISTS integration_connector_work_orders_queue
-        ON integration_connector_work_orders (org_id, target_connector_id, status, next_attempt_at);
+        ON integration_connector_work_orders (org_id, target_connector_id, status, next_attempt_at, queue_position);
+      CREATE INDEX IF NOT EXISTS integration_connector_work_orders_partition
+        ON integration_connector_work_orders (org_id, target_twin_id, queue_position, status);
+      CREATE INDEX IF NOT EXISTS integration_connector_ingestion_queue_due
+        ON integration_connector_ingestion_queue
+        (org_id, connector_id, status, next_attempt_at, queue_position);
+      CREATE INDEX IF NOT EXISTS integration_connector_ingestion_partition
+        ON integration_connector_ingestion_queue (org_id, partition_key, queue_position, status);
+      CREATE INDEX IF NOT EXISTS integration_connector_sync_leases_expiry
+        ON integration_connector_sync_leases (expires_at);
     `);
     await this.db.exec(`
       UPDATE work_items

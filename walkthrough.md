@@ -2,8 +2,24 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, and the partial US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed state propagation, verified against deterministic API fakes), and the US20.2 connector-led management workspace. The canonical backlog is **20 epics / 73 stories**, with **36 done / 6 partial / 31 not started**.
-**Verification:** 162 automated tests across 43 test files, plus 21 browser smoke tests driving the real page in pilot and connector-led modes.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), and the US20.2 connector-led management workspace. The canonical backlog is **20 epics / 73 stories**, with **38 done / 6 partial / 29 not started**.
+**Verification:** 166 automated tests across 44 test files, plus 21 browser smoke tests driving the real page in pilot and connector-led modes.
+
+---
+
+## 2026-09-22 — US16.4/US16.5 Durable per-twin queues and failure isolation (Codex)
+
+Connector traffic now survives the gaps between acceptance, translation and provider execution without allowing one bad record to stop its source.
+
+- **Durable intake before watermark movement.** Each fetched page and its record entries commit with the cursor. Record processing happens afterward from immutable provider/entity/id partitions, so a malformed record can retry without being fetched forever or blocking healthy records.
+- **Strict twin FIFO.** Outbound changes receive durable queue positions. Only the head of a target twin can execute; a retry, held decision or DLQ entry blocks later changes for that twin while unrelated heads continue concurrently.
+- **Failure isolation and replay.** Exhausted ingestion, transformation and provider-write entries pause only the affected twin. `GET /integrations/connectors/:id/twin-dlq` exposes the payload, error and full attempt history. `POST /integrations/connectors/:id/twin-dlq/:entryId/reinject` accepts a corrected payload and restores the entry at its original position.
+- **Crash-safe propagation.** A canonical-twin state change and its event commit together. The connector consumer turns that event into idempotent work orders keyed by source event and target twin; pending outbox events recover after restart.
+- **Replica-safe sync exclusion.** The former process-local set is replaced by an expiring, heartbeated database lease. Staging remains one replica because the audit-chain append path still has an independent single-writer constraint.
+
+**Try the operator surface:** open `GET /integrations/connectors/:id/twin-dlq`, inspect an entry, then post `{ "payload": { ...corrected fields... } }` to its `/reinject` route. The next normal synchronization resumes it before later work in that partition.
+
+**Verified by** `test/us16.4-16.5.spec.ts` (4 tests): same-twin ordering with unrelated progress, lease expiry takeover, provider-write DLQ correction and ordered replay, malformed-ingestion isolation through five attempts, tenant scoping, and recovery of a committed-but-undispatched twin event.
 
 ---
 
@@ -22,7 +38,7 @@ The workspace now matches the product decision: Jira and ServiceNow are the syst
 
 **Try it:** set `CADENA_INTERACTION_MODE=connector-led`, `CADENA_CONNECTOR_SANDBOX=enabled` and `SANDBOX_TOKEN=x`, then run `npm run dev`. Choose **Connect source**, use base URL `https://jira.sandbox.cadena.local`, any account email, `env:SANDBOX_TOKEN` and project `CAD`, and tick write-back. Then **Test → Discover → Activate → Synchronize** on the card, and open a twin.
 
-**Still open:** connector twins do not yet feed the work-item SLA, traceability and metrics engines; only state has an outbound mapping; per-twin queues (US16.4/US16.5) come before multi-replica synchronization.
+**Still open after the later queue increment:** connector twins do not yet feed the work-item SLA, traceability and metrics engines, and only state has an outbound mapping. US16.4/US16.5 and the connector sync lease are now complete; the audit-chain single-writer constraint still prevents multi-replica rollout.
 
 **Verified by** `test/us20.2.spec.ts` (7 tests), the browser suite (21 tests, including 4 connector-led), and 162 non-browser tests across 43 files.
 
@@ -42,7 +58,7 @@ Claude reviewed the earlier US17.1 increment, found it fixture-only with state p
 
 **Try it:** open **Source connectors** in the sidebar and connect Jira with an account email, `env:JIRA_API_TOKEN` and a project key. Then choose **Test**. Without `CADENA_CONNECTOR_LIVE_HTTP=enabled`, the card reports that live provider access is not authorised. The full lifecycle runs end to end in `test/us17.1.spec.ts`.
 
-**Still open:** the other five providers, webhook-triggered ingestion, a poll scheduler, a multi-replica sync lease, and validation against a live Jira/ServiceNow tenant.
+**Still open after the later queue increment:** the other five providers, webhook/explicit-import ingestion, a poll scheduler, and validation against a live Jira/ServiceNow tenant. The database sync lease and outbox propagation gap are now complete under US16.4/US16.5.
 
 **Verified by** `test/us17.1.spec.ts` (11 tests), the browser smoke suite (16 tests), and 155 non-browser tests across 42 files.
 

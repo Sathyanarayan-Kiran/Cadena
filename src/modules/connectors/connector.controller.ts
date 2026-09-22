@@ -125,4 +125,35 @@ export class ConnectorController {
   public async workOrders(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
     return this.service.listWorkOrders(requireOrg(orgHeader), id);
   }
+
+  @Get(':id/twin-dlq')
+  public async twinDeadLetters(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
+    return this.service.listTwinDeadLetters(requireOrg(orgHeader), id);
+  }
+
+  @Get(':id/twin-dlq/:entryId')
+  public async twinDeadLetter(
+    @Param('id') id: string,
+    @Param('entryId') entryId: string,
+    @Headers('x-org-id') orgHeader?: string,
+  ) {
+    return this.service.getTwinDeadLetter(requireOrg(orgHeader), id, entryId);
+  }
+
+  @Post(':id/twin-dlq/:entryId/reinject')
+  public async reinjectTwinDeadLetter(
+    @Param('id') id: string,
+    @Param('entryId') entryId: string,
+    @Body() body: { payload?: Record<string, unknown> },
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.service.reinjectTwinDeadLetter(
+      requireOrg(orgHeader),
+      id,
+      entryId,
+      body?.payload,
+      resolveActor(actorHeader),
+    );
+  }
 }

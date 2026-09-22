@@ -5,6 +5,7 @@ import {
   HttpException,
   Injectable,
   NotFoundException,
+  OnApplicationBootstrap,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
@@ -12,6 +13,8 @@ import { DatabaseService } from '../../database/database.service';
 import { DatabaseQueryable } from '../../database/database-adapter';
 import { stableStringify } from '../audit/audit-integrity';
 import { EventOutboxService, OutboxEventInput } from '../events/event-outbox.service';
+import { EventConsumerRegistry } from '../events/consumer-registry.service';
+import { DomainEventEnvelope } from '../events/event-bus';
 import { CorrelationService } from '../integrations/correlation.service';
 import { StateMappingService } from '../integrations/state-mapping.service';
 import { SyncGuardService } from '../integrations/sync-guard.service';
@@ -38,6 +41,7 @@ import {
   ConnectorStatus,
   ConnectorWorkOrder,
   ConnectorWorkOrderStatus,
+  ConnectorQueueAttempt,
   ConnectorWriteBackPolicy,
   ExternalRecordPayload,
   IngestionPollResult,
@@ -46,6 +50,8 @@ import {
   TwinEditResult,
   TwinFieldPolicy,
   TwinWorkspaceRow,
+  TwinQueueDeadLetter,
+  TwinQueueReinjectionResult,
   WatermarkCursor,
   WorkspaceOverview,
 } from './connector.types';
@@ -56,6 +62,9 @@ import { loadRuntimeConfig } from '../../config/runtime-config';
 const MAX_WORK_ORDER_ATTEMPTS = 5;
 const WORK_ORDER_BASE_BACKOFF_MS = 30_000;
 const WORK_ORDER_MAX_BACKOFF_MS = 60 * 60_000;
+const SYNC_LEASE_MS = 5 * 60_000;
+const WORK_ORDER_CLAIM_MS = 2 * 60_000;
+const CONNECTOR_PROPAGATION_CONSUMER = 'connector-state-propagation';
 const SECRET_LIKE_OPTION = /(token|password|secret|apikey|api_key|credential)/i;
 
 type RecordOutcome = 'created' | 'updated' | 'unchanged';
@@ -80,11 +89,11 @@ interface PollCounters {
  * mapping for every managed counterpart; ready translations become idempotent connector work
  * orders that the counterpart's adapter executes, with bounded retry.
  *
- * The in-process single-flight lock assumes the single-replica deployment documented in
- * deploy/staging; horizontal scaling needs a database lease first.
+ * Synchronization uses an expiring database lease, while state changes are accepted through the
+ * transactional outbox and materialized as durable, twin-partitioned work orders.
  */
 @Injectable()
-export class ConnectorService {
+export class ConnectorService implements OnApplicationBootstrap {
   private dbService = DatabaseService.getInstance();
   private outbox = new EventOutboxService();
   private correlationService = new CorrelationService();
@@ -92,13 +101,39 @@ export class ConnectorService {
   private syncGuardService = new SyncGuardService();
   private secrets = new SecretManagerResolver();
   private adapters = new Map<ConnectorProviderType, ConnectorAdapter>();
-  private inFlight = new Set<string>();
+  private readonly workerId = randomUUID();
 
   constructor() {
     // The sandbox is a local-only demonstration transport; runtime config refuses it elsewhere.
     const transport = loadRuntimeConfig().connectorSandbox ? getProviderSandbox().fetch : undefined;
     this.registerAdapter(new JiraConnectorAdapter(transport));
     this.registerAdapter(new ServiceNowConnectorAdapter(transport));
+    new EventConsumerRegistry().register({
+      name: CONNECTOR_PROPAGATION_CONSUMER,
+      eventTypes: ['CanonicalTwinMaterialized', 'CanonicalTwinUpdated', 'ConnectorOperatorStateWritten'],
+      maxAttempts: 3,
+      retryDelayMs: 5,
+      handle: (event) => this.acceptPropagationEvent(event),
+    });
+  }
+
+  public async onApplicationBootstrap(): Promise<void> {
+    await this.dbService.initialize();
+    await this.dbService.db.query(
+      `UPDATE integration_connector_work_orders
+       SET status = 'failed', claimed_by = NULL, claim_expires_at = NULL,
+           next_attempt_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'processing'
+         AND (claim_expires_at IS NULL OR claim_expires_at <= CURRENT_TIMESTAMP)`,
+    );
+    await this.dbService.db.query(
+      `UPDATE integration_connector_ingestion_queue
+       SET status = 'retry', claimed_by = NULL, claim_expires_at = NULL,
+           next_attempt_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+       WHERE status = 'processing'
+         AND (claim_expires_at IS NULL OR claim_expires_at <= CURRENT_TIMESTAMP)`,
+    );
+    await this.outbox.recoverPending();
   }
 
   public registerAdapter(adapter: ConnectorAdapter): void {
@@ -335,9 +370,14 @@ export class ConnectorService {
     const connector = await this.getConnector(orgId, connectorId);
     if (!connector.activatedAt) throw new ConflictException('Connector must be discovered and activated before it can synchronize');
     if (connector.status === 'paused') throw new ConflictException('Connector is paused');
-    const lockKey = `${orgId}:${connectorId}`;
-    if (this.inFlight.has(lockKey)) throw new ConflictException('A synchronization for this connector is already running');
-    this.inFlight.add(lockKey);
+    const leaseOwner = `${this.workerId}:${randomUUID()}`;
+    if (!await this.acquireSyncLease(orgId, connectorId, leaseOwner)) {
+      throw new ConflictException('A synchronization for this connector is already running');
+    }
+    const leaseHeartbeat = setInterval(() => {
+      void this.renewSyncLease(connectorId, leaseOwner);
+    }, Math.floor(SYNC_LEASE_MS / 3));
+    leaseHeartbeat.unref?.();
 
     try {
       const adapter = this.getAdapter(connector.provider);
@@ -362,6 +402,7 @@ export class ConnectorService {
       await this.processDueWorkOrders(orgId, connector, counters);
 
       const recordErrors: IngestionPollResult['recordErrors'] = [];
+      await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
       const nextCursors: WatermarkCursor[] = [];
       let fetchedCount = 0;
       let hasMore = false;
@@ -386,43 +427,42 @@ export class ConnectorService {
         }
         fetchedCount += page.records.length;
 
-        let firstFailure: string | null = null;
-        for (const record of page.records) {
-          try {
-            await this.processRecord(orgId, connector, record, counters);
-          } catch (error) {
-            recordErrors.push({
-              externalId: record.externalId,
-              entityType,
-              message: this.describe(error, 'Record processing failed'),
-            });
-            if (!firstFailure || Date.parse(record.updatedAt) < Date.parse(firstFailure)) firstFailure = record.updatedAt;
-          }
-        }
-
-        // Never advance past a record that failed; it is re-fetched on the next poll.
-        const cursorValue = firstFailure || page.nextCursor.cursorValue;
-        await this.dbService.db.query(
-          `INSERT INTO integration_connector_cursors (id, connector_id, entity_type, cursor_value, updated_at)
-           VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-           ON CONFLICT (connector_id, entity_type)
-           DO UPDATE SET cursor_value = EXCLUDED.cursor_value, updated_at = CURRENT_TIMESTAMP`,
-          [randomUUID(), connectorId, entityType, cursorValue],
+        // Acceptance and cursor advancement are atomic. Processing happens from durable storage,
+        // so one malformed record cannot pin the source watermark or make a crash lose the page.
+        counters.twinsUnchanged += await this.acceptIngestionPage(
+          orgId, connector, entityType, page.records, page.nextCursor.cursorValue,
         );
-        nextCursors.push({ entityType, cursorValue });
-        if (page.hasMore || firstFailure) {
-          hasMore = hasMore || page.hasMore;
-          const pending = Date.parse(cursorValue);
+        nextCursors.push({ entityType, cursorValue: page.nextCursor.cursorValue });
+        if (page.hasMore) {
+          hasMore = true;
+          const pending = Date.parse(page.nextCursor.cursorValue);
           oldestPending = oldestPending === null ? pending : Math.min(oldestPending, pending);
         }
       }
 
+      await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
+      const queued = await this.dbService.db.query<any>(
+        `SELECT MIN((payload::jsonb ->> 'updatedAt')::timestamptz) AS oldest,
+                COUNT(*) FILTER (WHERE status IN ('retry', 'dead'))::int AS failures,
+                MAX(last_error) FILTER (WHERE status IN ('retry', 'dead')) AS last_error
+         FROM integration_connector_ingestion_queue
+         WHERE org_id = $1 AND connector_id = $2 AND status IN ('pending', 'retry', 'processing', 'dead')`,
+        [orgId, connectorId],
+      );
+      if (queued.rows[0]?.oldest) {
+        const pending = Date.parse(String(queued.rows[0].oldest));
+        oldestPending = oldestPending === null ? pending : Math.min(oldestPending, pending);
+      }
+
       const now = Date.now();
       const lagSeconds = oldestPending === null ? 0 : Math.max(0, Math.round((now - oldestPending) / 1000));
-      const status: ConnectorStatus = recordErrors.length ? 'degraded' : 'active';
+      const queuedFailures = Number(queued.rows[0]?.failures || 0);
+      const status: ConnectorStatus = recordErrors.length || queuedFailures ? 'degraded' : 'active';
       const errorMessage = recordErrors.length
         ? `${recordErrors.length} record(s) failed; first: ${recordErrors[0].message}`.slice(0, 500)
-        : null;
+        : queuedFailures
+          ? `${queuedFailures} twin queue record(s) require retry or operator review; latest: ${queued.rows[0]?.last_error || 'processing failed'}`.slice(0, 500)
+          : null;
       const result: IngestionPollResult = {
         connectorId,
         provider: connector.provider,
@@ -454,7 +494,188 @@ export class ConnectorService {
       });
       return result;
     } finally {
-      this.inFlight.delete(lockKey);
+      clearInterval(leaseHeartbeat);
+      await this.releaseSyncLease(connectorId, leaseOwner);
+    }
+  }
+
+  private async acceptIngestionPage(
+    orgId: string,
+    connector: ConnectorRecord,
+    entityType: string,
+    records: ExternalRecordPayload[],
+    cursorValue: string,
+  ): Promise<number> {
+    let duplicateDeliveries = 0;
+    await this.dbService.db.transaction(async (tx) => {
+      for (const record of records) {
+        const dedupeKey = createHash('sha256').update(stableStringify({
+          provider: connector.provider,
+          entityType,
+          externalId: record.externalId,
+          updatedAt: record.updatedAt,
+          record,
+        }), 'utf8').digest('hex');
+        const inserted = await tx.query<any>(
+          `INSERT INTO integration_connector_ingestion_queue
+           (id, org_id, connector_id, partition_key, entity_type, external_id, dedupe_key,
+            payload, status, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT (connector_id, dedupe_key) DO NOTHING
+           RETURNING id`,
+          [
+            randomUUID(), orgId, connector.id,
+            this.twinPartitionKey(connector.provider, record.artifactType || entityType, record.externalId),
+            entityType, record.externalId, dedupeKey, JSON.stringify(record),
+          ],
+        );
+        if (!inserted.rows.length) {
+          const existing = await tx.query<any>(
+            `SELECT status FROM integration_connector_ingestion_queue
+             WHERE connector_id = $1 AND dedupe_key = $2`,
+            [connector.id, dedupeKey],
+          );
+          if (existing.rows[0]?.status === 'completed') duplicateDeliveries += 1;
+        }
+      }
+      await tx.query(
+        `INSERT INTO integration_connector_cursors (id, connector_id, entity_type, cursor_value, updated_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+         ON CONFLICT (connector_id, entity_type)
+         DO UPDATE SET cursor_value = EXCLUDED.cursor_value, updated_at = CURRENT_TIMESTAMP`,
+        [randomUUID(), connector.id, entityType, cursorValue],
+      );
+    });
+    return duplicateDeliveries;
+  }
+
+  private async processDueIngestionRecords(
+    orgId: string,
+    connector: ConnectorRecord,
+    counters: PollCounters,
+    recordErrors: IngestionPollResult['recordErrors'],
+  ): Promise<void> {
+    let processed = 0;
+    while (processed < 1000) {
+      const due = await this.dbService.db.query<any>(
+        `SELECT q.*
+         FROM integration_connector_ingestion_queue q
+         WHERE q.org_id = $1 AND q.connector_id = $2
+            AND (q.status IN ('pending', 'retry')
+              OR (q.status = 'processing'
+                AND (q.claim_expires_at IS NULL OR q.claim_expires_at <= CURRENT_TIMESTAMP)))
+           AND (q.next_attempt_at IS NULL OR q.next_attempt_at <= CURRENT_TIMESTAMP)
+           AND NOT EXISTS (
+             SELECT 1 FROM integration_connector_ingestion_queue older
+             WHERE older.org_id = q.org_id AND older.connector_id = q.connector_id
+               AND older.partition_key = q.partition_key
+               AND older.queue_position < q.queue_position
+               AND older.status IN ('pending', 'retry', 'processing', 'dead')
+           )
+         ORDER BY q.queue_position ASC
+         LIMIT 50`,
+        [orgId, connector.id],
+      );
+      if (!due.rows.length) return;
+      for (const row of due.rows) {
+        await this.processIngestionRecord(orgId, connector, row, counters, recordErrors);
+        processed += 1;
+      }
+    }
+  }
+
+  private async processIngestionRecord(
+    orgId: string,
+    connector: ConnectorRecord,
+    row: any,
+    counters: PollCounters,
+    recordErrors: IngestionPollResult['recordErrors'],
+  ): Promise<void> {
+    const claimed = await this.dbService.db.query<any>(
+      `UPDATE integration_connector_ingestion_queue
+       SET status = 'processing', attempts = attempts + 1, claimed_by = $3,
+           claim_expires_at = $4, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $1 AND org_id = $2
+         AND (status IN ('pending', 'retry')
+           OR (status = 'processing'
+             AND (claim_expires_at IS NULL OR claim_expires_at <= CURRENT_TIMESTAMP)))
+       RETURNING *`,
+      [
+        row.id, orgId, `${this.workerId}:${randomUUID()}`,
+        new Date(Date.now() + WORK_ORDER_CLAIM_MS).toISOString(),
+      ],
+    );
+    if (!claimed.rows.length) return;
+    const job = claimed.rows[0];
+    const attempt = Number(job.attempts);
+    const startedAt = new Date().toISOString();
+    const record = parseJson<ExternalRecordPayload>(job.payload, {} as ExternalRecordPayload);
+    try {
+      await this.processRecord(orgId, connector, record, counters);
+      const twin = await this.dbService.db.query<any>(
+        `SELECT id FROM integration_canonical_twins
+         WHERE org_id = $1 AND provider = $2 AND artifact_type = $3 AND external_id = $4`,
+        [orgId, connector.provider, record.artifactType, record.externalId],
+      );
+      const history = this.appendAttempt(job.attempt_history, {
+        attempt,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        outcome: 'completed',
+      });
+      await this.dbService.db.query(
+        `UPDATE integration_connector_ingestion_queue
+         SET status = 'completed', twin_id = $1, attempt_history = $2, last_error = NULL,
+              next_attempt_at = NULL, claimed_by = NULL, claim_expires_at = NULL,
+              completed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $3 AND org_id = $4`,
+        [twin.rows[0]?.id || null, JSON.stringify(history), job.id, orgId],
+      );
+    } catch (error) {
+      const message = this.describe(error, 'Record processing failed');
+      const status = attempt < MAX_WORK_ORDER_ATTEMPTS ? 'retry' : 'dead';
+      const retryAfterMs = Math.min(WORK_ORDER_BASE_BACKOFF_MS * 2 ** (attempt - 1), WORK_ORDER_MAX_BACKOFF_MS);
+      const history = this.appendAttempt(job.attempt_history, {
+        attempt,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        outcome: status === 'dead' ? 'dead_lettered' : 'retry_scheduled',
+        error: message,
+      });
+      await this.withEvent(async (tx) => {
+        await tx.query(
+          `UPDATE integration_connector_ingestion_queue
+           SET status = $1, attempt_history = $2, last_error = $3, next_attempt_at = $4,
+                claimed_by = NULL, claim_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5 AND org_id = $6`,
+          [
+            status, JSON.stringify(history), message.slice(0, 500),
+            status === 'retry' ? new Date(Date.now() + retryAfterMs).toISOString() : null,
+            job.id, orgId,
+          ],
+        );
+        if (status === 'dead') {
+          await tx.query(
+            `UPDATE integration_canonical_twins SET sync_state = 'paused', updated_at = CURRENT_TIMESTAMP
+             WHERE org_id = $1 AND provider = $2 AND artifact_type = $3 AND external_id = $4`,
+            [orgId, connector.provider, record.artifactType, record.externalId],
+          );
+        }
+        return this.event(orgId, job.id, `connector:${connector.id}`, 'TwinQueueAttemptFailed', {
+          queue_entry_id: job.id,
+          connector_id: connector.id,
+          partition_key: job.partition_key,
+          kind: 'ingestion',
+          attempts: attempt,
+          final: status === 'dead',
+          error: message,
+        });
+      });
+      recordErrors.push({
+        externalId: record.externalId || job.external_id,
+        entityType: record.artifactType || job.entity_type,
+        message,
+      });
     }
   }
 
@@ -502,7 +723,8 @@ export class ConnectorService {
     }, `connector:${connector.id}`);
 
     const twinId: string = prior?.id || randomUUID();
-    await this.withEvent(async (tx) => {
+    const stateChanged = !prior || !sameState(prior.native_status, record.status);
+    const twinEvent = await this.withEvent(async (tx) => {
       if (prior) {
         await tx.query(
           `UPDATE integration_canonical_twins
@@ -540,41 +762,79 @@ export class ConnectorService {
         native_status: record.status,
         correlation_node_id: node.id,
         source_updated_at: record.updatedAt,
+        state_changed: stateChanged,
+        title: record.title,
+        fields: record.fields,
+        updated_by: record.updatedBy || `${connector.provider}:unattributed`,
       });
     });
     if (prior) counters.twinsUpdated++;
     else counters.twinsCreated++;
 
-    const stateChanged = !prior || !sameState(prior.native_status, record.status);
     if (stateChanged && record.status) {
-      await this.propagateStateChange(orgId, connector, identity, node.id, record, counters);
+      await this.addPropagationCounters(twinEvent.event_id, counters);
     }
     return prior ? 'updated' : 'created';
   }
 
   /**
-   * Screens a native state change for echoes, then translates it for every managed counterpart.
-   * The sync-guard projection is deliberately `{ state }`: the same projection is recorded when a
-   * work order writes a state, so our own write returning on the next poll is suppressed.
+   * Accepts a committed twin event from the transactional outbox. Each counterpart gets one
+   * durable work order keyed by (source event, target twin), making replay idempotent. Translation
+   * and provider I/O then happen from the target twin's FIFO partition.
    */
-  private async propagateStateChange(
-    orgId: string,
-    connector: ConnectorRecord,
-    identity: SyncIdentity,
-    nodeId: string,
-    record: ExternalRecordPayload,
-    counters: PollCounters,
-    options: { skipEchoCheck?: boolean } = {},
-  ): Promise<void> {
-    // An operator edit Cadena itself just wrote is already recorded; it is propagated directly.
-    if (!options.skipEchoCheck) {
+  private async acceptPropagationEvent(event: DomainEventEnvelope): Promise<void> {
+    const payload = event.payload || {};
+    const orgId = String(payload.org_id || '');
+    const twinId = String(payload.twin_id || event.work_item_id || '');
+    if (!orgId || !twinId || payload.state_changed === false) return;
+
+    const existingReceipt = await this.dbService.db.query<any>(
+      `SELECT status FROM integration_connector_propagations WHERE source_event_id = $1 AND org_id = $2`,
+      [event.event_id, orgId],
+    );
+    if (existingReceipt.rows[0]?.status === 'completed' || existingReceipt.rows[0]?.status === 'echo_suppressed') {
+      return;
+    }
+
+    const sourceTwin = await this.dbService.db.query<any>(
+      `SELECT t.*, c.provider AS connector_provider
+       FROM integration_canonical_twins t
+       JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
+       WHERE t.id = $1 AND t.org_id = $2`,
+      [twinId, orgId],
+    );
+    const source = sourceTwin.rows[0];
+    if (!source) throw new Error(`Source twin ${twinId} no longer exists`);
+    const identity: SyncIdentity = payload.identity || {
+      system: source.provider,
+      entity_type: source.artifact_type,
+      immutable_id: source.external_id,
+    };
+    const state = String(payload.native_status || payload.state || source.native_status || '');
+    if (!state) return;
+
+    await this.dbService.db.query(
+      `INSERT INTO integration_connector_propagations
+       (source_event_id, org_id, source_twin_id, status, echoes_suppressed, created_at, updated_at)
+       VALUES ($1, $2, $3, 'processing', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT (source_event_id) DO NOTHING`,
+      [event.event_id, orgId, twinId],
+    );
+
+    const skipEchoCheck = event.event_type === 'ConnectorOperatorStateWritten';
+    if (!skipEchoCheck) {
       const decision = await this.syncGuardService.evaluateWebhook(orgId, {
         identity,
-        actor_id: record.updatedBy || `${connector.provider}:unattributed`,
-        payload: { state: record.status },
+        actor_id: String(payload.updated_by || `${source.provider}:unattributed`),
+        payload: { state },
       });
       if (decision.suppressed) {
-        counters.echoesSuppressed++;
+        await this.dbService.db.query(
+          `UPDATE integration_connector_propagations
+           SET status = 'echo_suppressed', echoes_suppressed = 1, updated_at = CURRENT_TIMESTAMP
+           WHERE source_event_id = $1`,
+          [event.event_id],
+        );
         return;
       }
     }
@@ -588,49 +848,63 @@ export class ConnectorService {
        WHERE l.org_id = $1 AND l.relationship = 'counterpart'
          AND (l.source_node_id = $2 OR l.target_node_id = $2)
        ORDER BY t.id`,
-      [orgId, nodeId],
+      [orgId, source.correlation_node_id],
     );
 
     for (const target of counterparts.rows) {
-      const translation = await this.stateMappingService.translate(orgId, {
-        source_identity: identity,
-        target_identity: { system: target.provider, entity_type: target.artifact_type, immutable_id: target.external_id },
-        source_state: record.status,
-        current_target_state: target.native_status || null,
-        target_fields: record.fields,
-        dry_run: false,
-      }, `connector:${connector.id}`);
-
-      if (translation.status !== 'ready' || !translation.transaction_id || !translation.mapped_target_state) {
-        counters.workOrdersHeld++;
-        continue;
-      }
-
-      const required = await this.dbService.db.query<any>(
-        `SELECT required_target_fields FROM integration_state_sync_transactions WHERE id = $1 AND org_id = $2`,
-        [translation.transaction_id, orgId],
-      );
-      const requiredPaths: string[] = parseJson(required.rows[0]?.required_target_fields, []);
-      const fields = pickPaths(record.fields, requiredPaths);
-      const noop = sameState(target.native_status, translation.mapped_target_state);
       const workOrderId = randomUUID();
       await this.dbService.db.query(
         `INSERT INTO integration_connector_work_orders
-         (id, org_id, transaction_id, source_connector_id, target_connector_id, target_twin_id,
-          target_entity_type, target_external_id, target_state, fields, status, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-         ON CONFLICT (transaction_id) DO NOTHING`,
+         (id, org_id, transaction_id, origin, source_event_id, source_payload, source_connector_id,
+          target_connector_id, target_twin_id, target_entity_type, target_external_id, target_state,
+          fields, status, created_at, updated_at)
+         VALUES ($1, $2, NULL, 'state_propagation', $3, $4, $5, $6, $7, $8, $9, $10,
+                 '{}', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT (source_event_id, target_twin_id) WHERE source_event_id IS NOT NULL DO NOTHING`,
         [
-          workOrderId, orgId, translation.transaction_id, connector.id, target.connector_id, target.id,
-          target.artifact_type, target.external_id, translation.mapped_target_state, JSON.stringify(fields),
-          noop ? 'noop' : 'pending',
+          workOrderId, orgId, event.event_id,
+          JSON.stringify({ identity, state, fields: payload.fields || parseJson(source.payload, {}), title: payload.title || source.title }),
+          source.connector_id, target.connector_id, target.id, target.artifact_type, target.external_id, state,
         ],
       );
-      counters.workOrdersPrepared++;
-      if (!noop) {
-        const outcome = await this.executeWorkOrder(orgId, workOrderId);
-        if (outcome === 'executed') counters.workOrdersExecuted++;
-        else if (outcome === 'failed' || outcome === 'dead') counters.workOrdersFailed++;
+    }
+
+    const targetConnectorIds = Array.from(new Set(counterparts.rows.map((row) => String(row.connector_id))));
+    for (const targetConnectorId of targetConnectorIds) {
+      const targetConnector = await this.getConnector(orgId, targetConnectorId);
+      const counters: PollCounters = {
+        twinsCreated: 0, twinsUpdated: 0, twinsUnchanged: 0, echoesSuppressed: 0,
+        workOrdersPrepared: 0, workOrdersHeld: 0, workOrdersExecuted: 0, workOrdersFailed: 0,
+      };
+      await this.processDueWorkOrders(orgId, targetConnector, counters);
+    }
+    await this.dbService.db.query(
+      `UPDATE integration_connector_propagations
+       SET status = 'completed', updated_at = CURRENT_TIMESTAMP WHERE source_event_id = $1`,
+      [event.event_id],
+    );
+  }
+
+  private async addPropagationCounters(sourceEventId: string, counters: PollCounters): Promise<void> {
+    const [receipt, orders] = await Promise.all([
+      this.dbService.db.query<any>(
+        `SELECT echoes_suppressed FROM integration_connector_propagations WHERE source_event_id = $1`,
+        [sourceEventId],
+      ),
+      this.dbService.db.query<any>(
+        `SELECT status, COUNT(*)::int AS count FROM integration_connector_work_orders
+         WHERE source_event_id = $1 GROUP BY status`,
+        [sourceEventId],
+      ),
+    ]);
+    counters.echoesSuppressed += Number(receipt.rows[0]?.echoes_suppressed || 0);
+    for (const row of orders.rows) {
+      const count = Number(row.count || 0);
+      if (row.status === 'held') counters.workOrdersHeld += count;
+      else {
+        counters.workOrdersPrepared += count;
+        if (row.status === 'executed') counters.workOrdersExecuted += count;
+        if (row.status === 'failed' || row.status === 'dead') counters.workOrdersFailed += count;
       }
     }
   }
@@ -638,21 +912,36 @@ export class ConnectorService {
   // ─── Work orders ───────────────────────────────────────────────────────────
 
   private async processDueWorkOrders(orgId: string, connector: ConnectorRecord, counters: PollCounters): Promise<void> {
-    const due = await this.dbService.db.query<any>(
-      `SELECT id FROM integration_connector_work_orders
-       WHERE org_id = $1 AND target_connector_id = $2 AND status IN ('pending', 'failed')
-         AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP)
-       ORDER BY created_at ASC LIMIT 50`,
-      [orgId, connector.id],
-    );
-    for (const row of due.rows) {
-      const outcome = await this.executeWorkOrder(orgId, row.id);
-      if (outcome === 'executed') counters.workOrdersExecuted++;
-      else if (outcome === 'failed' || outcome === 'dead') counters.workOrdersFailed++;
+    let processed = 0;
+    while (processed < 500) {
+      const due = await this.dbService.db.query<any>(
+        `SELECT w.id FROM integration_connector_work_orders w
+         WHERE w.org_id = $1 AND w.target_connector_id = $2
+            AND (w.status IN ('pending', 'failed')
+              OR (w.status = 'processing'
+                AND (w.claim_expires_at IS NULL OR w.claim_expires_at <= CURRENT_TIMESTAMP)))
+           AND (w.next_attempt_at IS NULL OR w.next_attempt_at <= CURRENT_TIMESTAMP)
+           AND NOT EXISTS (
+             SELECT 1 FROM integration_connector_work_orders older
+             WHERE older.org_id = w.org_id AND older.target_twin_id = w.target_twin_id
+               AND older.queue_position < w.queue_position
+               AND older.status IN ('pending', 'processing', 'failed', 'dead', 'held')
+           )
+         ORDER BY w.queue_position ASC LIMIT 50`,
+        [orgId, connector.id],
+      );
+      if (!due.rows.length) return;
+      const outcomes = await Promise.all(due.rows.map((row) => this.executeWorkOrder(orgId, row.id)));
+      for (const outcome of outcomes) {
+        if (outcome === 'executed') counters.workOrdersExecuted++;
+        else if (outcome === 'held') counters.workOrdersHeld++;
+        else if (outcome === 'failed' || outcome === 'dead') counters.workOrdersFailed++;
+        processed += 1;
+      }
     }
   }
 
-  /** Executes one work order at most once. Returns its resulting status. */
+  /** Atomically claims and executes the head of one twin's durable FIFO queue. */
   public async executeWorkOrder(orgId: string, workOrderId: string): Promise<ConnectorWorkOrderStatus> {
     const loaded = await this.dbService.db.query<any>(
       `SELECT w.*, c.status AS connector_status, c.activated_at AS connector_activated_at
@@ -663,49 +952,194 @@ export class ConnectorService {
     );
     const row = loaded.rows[0];
     if (!row) throw new NotFoundException(`Work order ${workOrderId} not found`);
-    if (row.status !== 'pending' && row.status !== 'failed') return row.status;
+    if (!['pending', 'failed', 'processing'].includes(row.status)) return row.status;
+    if (row.status === 'processing' && row.claim_expires_at
+      && Date.parse(String(row.claim_expires_at)) > Date.now()) {
+      return 'processing';
+    }
     // A target that is not activated or is paused keeps the order queued rather than failing it.
     if (!row.connector_activated_at || row.connector_status === 'paused') return row.status;
 
+    const blocked = await this.dbService.db.query<any>(
+      `SELECT id FROM integration_connector_work_orders
+       WHERE org_id = $1 AND target_twin_id = $2 AND queue_position < $3
+         AND status IN ('pending', 'processing', 'failed', 'dead', 'held')
+       ORDER BY queue_position ASC LIMIT 1`,
+      [orgId, row.target_twin_id, row.queue_position],
+    );
+    if (blocked.rows.length) return row.status;
+
+    const claimId = `${this.workerId}:${randomUUID()}`;
     const claimed = await this.dbService.db.query<any>(
       `UPDATE integration_connector_work_orders
-       SET attempts = attempts + 1, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $1 AND org_id = $2 AND status = $3 AND attempts = $4
-       RETURNING attempts`,
-      [workOrderId, orgId, row.status, row.attempts],
+       SET status = 'processing', attempts = attempts + 1, claimed_by = $1,
+           claim_expires_at = $2, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND org_id = $4 AND attempts = $5
+         AND (status IN ('pending', 'failed')
+            OR (status = 'processing'
+              AND (claim_expires_at IS NULL OR claim_expires_at <= CURRENT_TIMESTAMP)))
+       RETURNING *`,
+      [claimId, new Date(Date.now() + WORK_ORDER_CLAIM_MS).toISOString(), workOrderId, orgId, row.attempts],
     );
-    if (!claimed.rows.length) return row.status;
-    const attempts = Number(claimed.rows[0].attempts);
+    if (!claimed.rows.length) return row.status === 'processing' ? 'processing' : row.status;
+    const work = claimed.rows[0];
+    const attempts = Number(work.attempts);
+    const startedAt = new Date().toISOString();
+    const claimHeartbeat = setInterval(() => {
+      void this.renewWorkOrderClaim(workOrderId, claimId);
+    }, Math.floor(WORK_ORDER_CLAIM_MS / 3));
+    claimHeartbeat.unref?.();
 
-    const target = await this.getConnector(orgId, row.target_connector_id);
+    const target = await this.getConnector(orgId, work.target_connector_id);
     const adapter = this.getAdapter(target.provider);
-    const fields = parseJson<Record<string, unknown>>(row.fields, {});
+    let transactionId: string | null = work.transaction_id || null;
+    let targetState = String(work.target_state);
+    let fields = parseJson<Record<string, unknown>>(work.fields, {});
+    let translationInProgress = work.origin === 'state_propagation' && !transactionId;
     try {
+      if (translationInProgress) {
+        const sourcePayload = parseJson<any>(work.source_payload, {});
+        const targetTwin = await this.dbService.db.query<any>(
+          `SELECT twin.provider, twin.artifact_type, twin.external_id, twin.native_status,
+                  COALESCE((
+                    SELECT prior.target_state FROM integration_connector_work_orders prior
+                    WHERE prior.org_id = twin.org_id AND prior.target_twin_id = twin.id
+                      AND prior.queue_position < $3 AND prior.status IN ('executed', 'noop')
+                    ORDER BY prior.queue_position DESC LIMIT 1
+                  ), twin.native_status) AS effective_status
+           FROM integration_canonical_twins twin WHERE twin.id = $1 AND twin.org_id = $2`,
+          [work.target_twin_id, orgId, work.queue_position],
+        );
+        const twin = targetTwin.rows[0];
+        if (!twin) throw new Error(`Target twin ${work.target_twin_id} no longer exists`);
+        const translation = await this.stateMappingService.translate(orgId, {
+          source_identity: sourcePayload.identity,
+          target_identity: { system: twin.provider, entity_type: twin.artifact_type, immutable_id: twin.external_id },
+          source_state: sourcePayload.state,
+          current_target_state: twin.effective_status || null,
+          target_fields: sourcePayload.fields || {},
+          dry_run: false,
+        }, `connector:${work.source_connector_id || target.id}`);
+        transactionId = translation.transaction_id;
+        if (translation.status !== 'ready' || !transactionId || !translation.mapped_target_state) {
+          const message = translation.message || 'State translation requires operator review';
+          const history = this.appendAttempt(work.attempt_history, {
+            attempt: attempts,
+            startedAt,
+            completedAt: new Date().toISOString(),
+            outcome: 'held',
+            error: message,
+          });
+          await this.withEvent(async (tx) => {
+            await tx.query(
+              `UPDATE integration_connector_work_orders
+               SET transaction_id = $1, status = 'held', last_error = $2, attempt_history = $3,
+                   claimed_by = NULL, claim_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+               WHERE id = $4 AND org_id = $5 AND claimed_by = $6`,
+              [transactionId, message.slice(0, 500), JSON.stringify(history), workOrderId, orgId, claimId],
+            );
+            await tx.query(
+              `UPDATE integration_canonical_twins SET sync_state = 'paused', updated_at = CURRENT_TIMESTAMP
+               WHERE id = $1 AND org_id = $2`,
+              [work.target_twin_id, orgId],
+            );
+            return this.event(orgId, workOrderId, `connector:${target.id}`, 'ConnectorWorkOrderHeld', {
+              work_order_id: workOrderId,
+              transaction_id: transactionId,
+              target_twin_id: work.target_twin_id,
+              reason: translation.reason,
+              error: message,
+            });
+          });
+          return 'held';
+        }
+
+        const required = await this.dbService.db.query<any>(
+          `SELECT required_target_fields FROM integration_state_sync_transactions WHERE id = $1 AND org_id = $2`,
+          [translation.transaction_id, orgId],
+        );
+        const requiredPaths: string[] = parseJson(required.rows[0]?.required_target_fields, []);
+        targetState = translation.mapped_target_state;
+        fields = pickPaths(sourcePayload.fields || {}, requiredPaths);
+        if (sameState(twin.effective_status, targetState)) {
+          const history = this.appendAttempt(work.attempt_history, {
+            attempt: attempts,
+            startedAt,
+            completedAt: new Date().toISOString(),
+            outcome: 'completed',
+          });
+          await this.dbService.db.query(
+            `UPDATE integration_connector_work_orders
+             SET transaction_id = $1, target_state = $2, fields = $3, status = 'noop',
+                 attempt_history = $4, claimed_by = NULL, claim_expires_at = NULL,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = $5 AND org_id = $6 AND claimed_by = $7`,
+            [transactionId, targetState, JSON.stringify(fields), JSON.stringify(history), workOrderId, orgId, claimId],
+          );
+          return 'noop';
+        }
+        await this.dbService.db.query(
+          `UPDATE integration_connector_work_orders
+           SET transaction_id = $1, target_state = $2, fields = $3, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $4 AND org_id = $5 AND claimed_by = $6`,
+          [transactionId, targetState, JSON.stringify(fields), workOrderId, orgId, claimId],
+        );
+        translationInProgress = false;
+      }
+
       const result = await adapter.pushStateChange(this.context(target), {
-        entityType: row.target_entity_type,
-        externalId: row.target_external_id,
-        targetState: row.target_state,
+        entityType: work.target_entity_type,
+        externalId: work.target_external_id,
+        targetState,
         fields,
       });
       await this.syncGuardService.recordIntegrationWrite(orgId, {
-        identity: { system: target.provider, entity_type: row.target_entity_type, immutable_id: row.target_external_id },
+        identity: { system: target.provider, entity_type: work.target_entity_type, immutable_id: work.target_external_id },
         service_account_id: `connector:${target.id}`,
-        payload: { state: row.target_state },
+        payload: { state: targetState },
+      });
+      const history = this.appendAttempt(work.attempt_history, {
+        attempt: attempts,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        outcome: 'executed',
       });
       await this.withEvent(async (tx) => {
         await tx.query(
           `UPDATE integration_connector_work_orders
            SET status = 'executed', executed_at = CURRENT_TIMESTAMP, last_error = NULL,
-               next_attempt_at = NULL, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $1 AND org_id = $2`,
-          [workOrderId, orgId],
+               next_attempt_at = NULL, attempt_history = $1, claimed_by = NULL,
+               claim_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $2 AND org_id = $3 AND claimed_by = $4`,
+          [JSON.stringify(history), workOrderId, orgId, claimId],
         );
-        return this.event(orgId, workOrderId, `connector:${target.id}`, 'ConnectorWorkOrderExecuted', {
+        await tx.query(
+          `UPDATE integration_canonical_twins twin SET sync_state = 'synced', updated_at = CURRENT_TIMESTAMP
+           WHERE twin.id = $1 AND twin.org_id = $2
+             AND NOT EXISTS (
+               SELECT 1 FROM integration_connector_work_orders blocked
+               WHERE blocked.org_id = twin.org_id AND blocked.target_twin_id = twin.id
+                 AND blocked.id <> $3 AND blocked.status IN ('dead', 'held')
+             )`,
+          [work.target_twin_id, orgId, workOrderId],
+        );
+        const operatorEdit = work.origin === 'operator_edit';
+        return this.event(orgId, operatorEdit ? work.target_twin_id : workOrderId, `connector:${target.id}`,
+          operatorEdit ? 'ConnectorOperatorStateWritten' : 'ConnectorWorkOrderExecuted', {
           work_order_id: workOrderId,
-          transaction_id: row.transaction_id,
+          transaction_id: transactionId,
           target_connector_id: target.id,
-          target_external_id: row.target_external_id,
-          target_state: row.target_state,
+          target_twin_id: work.target_twin_id,
+          target_external_id: work.target_external_id,
+          target_state: targetState,
+          ...(operatorEdit ? {
+            twin_id: work.target_twin_id,
+            identity: { system: target.provider, entity_type: work.target_entity_type, immutable_id: work.target_external_id },
+            native_status: targetState,
+            state_changed: true,
+            updated_by: `connector:${target.id}`,
+            fields: parseJson<any>(work.source_payload, {}).fields || {},
+          } : {}),
           attempts,
           message: result.message,
         });
@@ -713,28 +1147,46 @@ export class ConnectorService {
       return 'executed';
     } catch (error) {
       const message = this.describe(error, 'Connector write failed');
-      const retryable = (error instanceof ConnectorRemoteError && error.retryable) || error instanceof ConnectorCredentialError;
+      const retryable = translationInProgress
+        || (error instanceof ConnectorRemoteError && error.retryable)
+        || error instanceof ConnectorCredentialError;
       const status: ConnectorWorkOrderStatus = retryable && attempts < MAX_WORK_ORDER_ATTEMPTS ? 'failed' : 'dead';
       const retryAfterMs = error instanceof ConnectorRemoteError && error.retryAfterSeconds
         ? error.retryAfterSeconds * 1000
         : Math.min(WORK_ORDER_BASE_BACKOFF_MS * 2 ** (attempts - 1), WORK_ORDER_MAX_BACKOFF_MS);
+      const history = this.appendAttempt(work.attempt_history, {
+        attempt: attempts,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        outcome: status === 'dead' ? 'dead_lettered' : 'retry_scheduled',
+        error: message,
+      });
       await this.withEvent(async (tx) => {
         await tx.query(
           `UPDATE integration_connector_work_orders
-           SET status = $1, last_error = $2, next_attempt_at = $3, updated_at = CURRENT_TIMESTAMP
-           WHERE id = $4 AND org_id = $5`,
+           SET status = $1, last_error = $2, next_attempt_at = $3, attempt_history = $4,
+               claimed_by = NULL, claim_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5 AND org_id = $6 AND claimed_by = $7`,
           [
             status, message.slice(0, 500),
             status === 'failed' ? new Date(Date.now() + retryAfterMs).toISOString() : null,
-            workOrderId, orgId,
+            JSON.stringify(history), workOrderId, orgId, claimId,
           ],
         );
+        if (status === 'dead') {
+          await tx.query(
+            `UPDATE integration_canonical_twins SET sync_state = 'paused', updated_at = CURRENT_TIMESTAMP
+             WHERE id = $1 AND org_id = $2`,
+            [work.target_twin_id, orgId],
+          );
+        }
         return this.event(orgId, workOrderId, `connector:${target.id}`, 'ConnectorWorkOrderFailed', {
           work_order_id: workOrderId,
-          transaction_id: row.transaction_id,
+          transaction_id: transactionId,
           target_connector_id: target.id,
-          target_external_id: row.target_external_id,
-          target_state: row.target_state,
+          target_twin_id: work.target_twin_id,
+          target_external_id: work.target_external_id,
+          target_state: targetState,
           attempts,
           retryable,
           final: status === 'dead',
@@ -742,6 +1194,8 @@ export class ConnectorService {
         });
       });
       return status;
+    } finally {
+      clearInterval(claimHeartbeat);
     }
   }
 
@@ -754,6 +1208,186 @@ export class ConnectorService {
       [orgId, connectorId],
     );
     return result.rows.map((row) => this.mapWorkOrder(row));
+  }
+
+  /** Twin-scoped DLQ surface for exhausted ingestion, translation, and provider-write work. */
+  public async listTwinDeadLetters(orgId: string, connectorId: string): Promise<TwinQueueDeadLetter[]> {
+    const connector = await this.getConnector(orgId, connectorId);
+    const [ingestion, writes] = await Promise.all([
+      this.dbService.db.query<any>(
+        `SELECT * FROM integration_connector_ingestion_queue
+         WHERE org_id = $1 AND connector_id = $2 AND status = 'dead'
+         ORDER BY queue_position ASC`,
+        [orgId, connectorId],
+      ),
+      this.dbService.db.query<any>(
+        `SELECT w.*, t.provider, t.artifact_type
+         FROM integration_connector_work_orders w
+         JOIN integration_canonical_twins t ON t.id = w.target_twin_id AND t.org_id = w.org_id
+         WHERE w.org_id = $1 AND w.target_connector_id = $2 AND w.status IN ('dead', 'held')
+         ORDER BY w.queue_position ASC`,
+        [orgId, connectorId],
+      ),
+    ]);
+    const entries: TwinQueueDeadLetter[] = ingestion.rows.map((row) => ({
+      id: row.id,
+      orgId: row.org_id,
+      connectorId: row.connector_id,
+      twinId: row.twin_id || undefined,
+      partitionKey: row.partition_key,
+      kind: 'ingestion' as const,
+      status: 'dead' as const,
+      payload: parseJson(row.payload, {}),
+      attempts: Number(row.attempts || 0),
+      attemptHistory: parseJson(row.attempt_history, []),
+      lastError: row.last_error || 'Ingestion failed',
+      queuePosition: Number(row.queue_position || 0),
+      createdAt: iso(row.created_at)!,
+      updatedAt: iso(row.updated_at)!,
+    }));
+    for (const row of writes.rows) {
+      const translation = row.origin === 'state_propagation';
+      entries.push({
+        id: row.id,
+        orgId: row.org_id,
+        connectorId: row.target_connector_id,
+        twinId: row.target_twin_id,
+        partitionKey: this.twinPartitionKey(row.provider, row.artifact_type, row.target_external_id),
+        kind: translation ? 'state_translation' : 'state_write',
+        status: row.status,
+        payload: translation
+          ? { sourcePayload: parseJson(row.source_payload, {}), targetState: row.target_state, fields: parseJson(row.fields, {}) }
+          : { targetState: row.target_state, fields: parseJson(row.fields, {}) },
+        attempts: Number(row.attempts || 0),
+        attemptHistory: parseJson(row.attempt_history, []),
+        lastError: row.last_error || 'Queue entry requires operator review',
+        queuePosition: Number(row.queue_position || 0),
+        createdAt: iso(row.created_at)!,
+        updatedAt: iso(row.updated_at)!,
+      });
+    }
+    // The connector lookup above is also the tenant boundary; retain the value to make that
+    // invariant explicit even when one side of the union is empty.
+    void connector;
+    return entries.sort((left, right) => left.queuePosition - right.queuePosition);
+  }
+
+  public async getTwinDeadLetter(orgId: string, connectorId: string, entryId: string): Promise<TwinQueueDeadLetter> {
+    if (!isUuid(entryId)) throw new NotFoundException(`Twin queue entry ${entryId} not found`);
+    const entry = (await this.listTwinDeadLetters(orgId, connectorId)).find((candidate) => candidate.id === entryId);
+    if (!entry) throw new NotFoundException(`Twin queue entry ${entryId} not found`);
+    return entry;
+  }
+
+  public async reinjectTwinDeadLetter(
+    orgId: string,
+    connectorId: string,
+    entryId: string,
+    correctedPayload: unknown,
+    actorId = 'system',
+  ): Promise<TwinQueueReinjectionResult> {
+    const entry = await this.getTwinDeadLetter(orgId, connectorId, entryId);
+    const connector = await this.getConnector(orgId, connectorId);
+    if (correctedPayload !== undefined
+      && (!correctedPayload || typeof correctedPayload !== 'object' || Array.isArray(correctedPayload))) {
+      throw new BadRequestException('payload must be a JSON object when supplied');
+    }
+    const payload = correctedPayload as Record<string, unknown> | undefined;
+    const now = new Date().toISOString();
+    const replayAttempt: ConnectorQueueAttempt = {
+      attempt: entry.attempts,
+      startedAt: now,
+      completedAt: now,
+      outcome: 'requeued',
+    };
+
+    await this.withEvent(async (tx) => {
+      if (entry.kind === 'ingestion') {
+        const nextPayload = payload || entry.payload;
+        const externalId = typeof nextPayload.externalId === 'string' ? nextPayload.externalId.trim() : '';
+        const artifactType = typeof nextPayload.artifactType === 'string' ? nextPayload.artifactType.trim() : '';
+        if (!externalId || !artifactType) {
+          throw new BadRequestException('ingestion payload requires externalId and artifactType');
+        }
+        if (entry.payload.externalId && entry.payload.externalId !== externalId) {
+          throw new BadRequestException('a corrected payload cannot change an existing immutable externalId');
+        }
+        if (entry.payload.artifactType && entry.payload.artifactType !== artifactType) {
+          throw new BadRequestException('a corrected payload cannot change artifactType');
+        }
+        await tx.query(
+          `UPDATE integration_connector_ingestion_queue
+           SET payload = $1, external_id = $2, entity_type = $3, partition_key = $4,
+               status = 'pending', attempts = 0, attempt_history = $5,
+               last_error = NULL, next_attempt_at = NULL,
+               completed_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $6 AND org_id = $7 AND connector_id = $8 AND status = 'dead'`,
+          [
+            JSON.stringify(nextPayload), externalId, artifactType,
+            this.twinPartitionKey(connector.provider, artifactType, externalId),
+            JSON.stringify([...entry.attemptHistory, replayAttempt]), entryId, orgId, connectorId,
+          ],
+        );
+      } else {
+        const targetState = payload?.targetState === undefined
+          ? String(entry.payload.targetState || '')
+          : String(payload.targetState).trim();
+        if (!targetState) throw new BadRequestException('payload.targetState must be a non-empty string');
+        const fields = payload?.fields === undefined ? entry.payload.fields || {} : payload.fields;
+        if (!fields || typeof fields !== 'object' || Array.isArray(fields)) {
+          throw new BadRequestException('payload.fields must be a JSON object');
+        }
+        const sourcePayload = entry.kind === 'state_translation'
+          ? (payload?.sourcePayload === undefined ? entry.payload.sourcePayload : payload.sourcePayload)
+          : {};
+        if (entry.kind === 'state_translation'
+          && (!sourcePayload || typeof sourcePayload !== 'object' || Array.isArray(sourcePayload))) {
+          throw new BadRequestException('payload.sourcePayload must be a JSON object');
+        }
+        if (entry.kind === 'state_translation') {
+          const beforeIdentity = (entry.payload.sourcePayload as any)?.identity;
+          const afterIdentity = (sourcePayload as any)?.identity;
+          if (beforeIdentity && stableStringify(beforeIdentity) !== stableStringify(afterIdentity)) {
+            throw new BadRequestException('a corrected payload cannot change its immutable source identity');
+          }
+        }
+        await tx.query(
+          `UPDATE integration_connector_work_orders
+           SET source_payload = $1, target_state = $2, fields = $3,
+               transaction_id = CASE WHEN origin = 'state_propagation' THEN NULL ELSE transaction_id END,
+               status = 'pending', attempts = 0, attempt_history = $4, last_error = NULL,
+               next_attempt_at = NULL, claimed_by = NULL, claim_expires_at = NULL,
+               executed_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $5 AND org_id = $6 AND target_connector_id = $7 AND status IN ('dead', 'held')`,
+          [
+            JSON.stringify(sourcePayload || {}), targetState, JSON.stringify(fields),
+            JSON.stringify([...entry.attemptHistory, replayAttempt]), entryId, orgId, connectorId,
+          ],
+        );
+      }
+      if (entry.twinId) {
+        await tx.query(
+          `UPDATE integration_canonical_twins SET sync_state = 'synced', updated_at = CURRENT_TIMESTAMP
+           WHERE id = $1 AND org_id = $2`,
+          [entry.twinId, orgId],
+        );
+      }
+      return this.event(orgId, entryId, actorId, 'TwinQueueEntryReinjected', {
+        queue_entry_id: entryId,
+        connector_id: connectorId,
+        twin_id: entry.twinId || null,
+        partition_key: entry.partitionKey,
+        kind: entry.kind,
+        corrected: payload !== undefined,
+      });
+    });
+    return {
+      entryId,
+      kind: entry.kind,
+      status: 'pending',
+      requeued: true,
+      message: `Queue entry ${entryId} was re-injected at its original FIFO position`,
+    };
   }
 
   private mapWorkOrder(row: any): ConnectorWorkOrder {
@@ -772,6 +1406,9 @@ export class ConnectorService {
       fields: parseJson(row.fields, {}),
       status: row.status,
       attempts: Number(row.attempts || 0),
+      sourceEventId: row.source_event_id || undefined,
+      queuePosition: Number(row.queue_position || 0),
+      attemptHistory: parseJson(row.attempt_history, []),
       lastError: row.last_error || undefined,
       nextAttemptAt: iso(row.next_attempt_at),
       executedAt: iso(row.executed_at),
@@ -800,8 +1437,22 @@ export class ConnectorService {
         [orgId, connectorId],
       ),
     ]);
-    const workOrders: Record<ConnectorWorkOrderStatus, number> = { pending: 0, executed: 0, failed: 0, dead: 0, noop: 0 };
+    const workOrders: Record<ConnectorWorkOrderStatus, number> = {
+      pending: 0, processing: 0, executed: 0, failed: 0, dead: 0, held: 0, noop: 0,
+    };
     for (const row of orders.rows) workOrders[row.status as ConnectorWorkOrderStatus] = Number(row.count);
+    const paused = await this.dbService.db.query<any>(
+      `SELECT COUNT(*)::int AS count FROM (
+         SELECT 'write:' || target_twin_id::text AS partition
+         FROM integration_connector_work_orders
+         WHERE org_id = $1 AND target_connector_id = $2 AND status IN ('dead', 'held')
+         UNION
+         SELECT 'ingest:' || partition_key AS partition
+         FROM integration_connector_ingestion_queue
+         WHERE org_id = $1 AND connector_id = $2 AND status = 'dead'
+       ) paused`,
+      [orgId, connectorId],
+    );
     return {
       connectorId,
       provider: connector.provider,
@@ -818,6 +1469,7 @@ export class ConnectorService {
       twinCount: Number(twins.rows[0]?.count || 0),
       cursors: cursors.rows.map((row) => ({ entityType: row.entity_type, cursorValue: row.cursor_value, updatedAt: iso(row.updated_at) })),
       workOrders,
+      pausedTwinQueues: Number(paused.rows[0]?.count || 0),
     };
   }
 
@@ -866,7 +1518,8 @@ export class ConnectorService {
       name: connector.name,
     })));
     const attention = sources.filter((source) =>
-      ['error', 'degraded'].includes(source.status) || source.workOrders.dead > 0 || source.workOrders.failed > 0);
+      ['error', 'degraded'].includes(source.status)
+        || source.workOrders.dead > 0 || source.workOrders.held > 0 || source.workOrders.failed > 0);
     return {
       sources,
       totals: {
@@ -875,8 +1528,9 @@ export class ConnectorService {
         attention: attention.length,
         twins: sources.reduce((sum, source) => sum + source.twinCount, 0),
         maxLagSeconds: sources.reduce((max, source) => Math.max(max, source.syncLagSeconds), 0),
-        queuedWrites: sources.reduce((sum, source) => sum + source.workOrders.pending + source.workOrders.failed, 0),
-        failedWrites: sources.reduce((sum, source) => sum + source.workOrders.dead, 0),
+        queuedWrites: sources.reduce((sum, source) =>
+          sum + source.workOrders.pending + source.workOrders.processing + source.workOrders.failed, 0),
+        failedWrites: sources.reduce((sum, source) => sum + source.workOrders.dead + source.workOrders.held, 0),
       },
     };
   }
@@ -886,9 +1540,9 @@ export class ConnectorService {
     const result = await this.dbService.db.query<any>(
       `SELECT t.*, c.name AS connector_name, c.status AS connector_status, c.last_success_at AS connector_last_success_at,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
-                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'failed')) AS queued_writes,
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'processing', 'failed')) AS queued_writes,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
-                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status = 'dead') AS failed_writes
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('dead', 'held')) AS failed_writes
        FROM integration_canonical_twins t
        JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
        WHERE t.org_id = $1
@@ -985,10 +1639,15 @@ export class ConnectorService {
     await this.withEvent(async (tx) => {
       await tx.query(
         `INSERT INTO integration_connector_work_orders
-         (id, org_id, transaction_id, origin, requested_by, source_connector_id, target_connector_id, target_twin_id,
-          target_entity_type, target_external_id, target_state, fields, status, created_at, updated_at)
-         VALUES ($1, $2, NULL, 'operator_edit', $3, NULL, $4, $5, $6, $7, $8, '{}', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-        [workOrderId, orgId, actorId, twin.connectorId, twinId, twin.artifactType, twin.externalId, value],
+         (id, org_id, transaction_id, origin, requested_by, source_payload, source_connector_id,
+          target_connector_id, target_twin_id, target_entity_type, target_external_id, target_state,
+          fields, status, created_at, updated_at)
+         VALUES ($1, $2, NULL, 'operator_edit', $3, $4, NULL, $5, $6, $7, $8, $9,
+                 '{}', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [
+          workOrderId, orgId, actorId, JSON.stringify({ title: twin.title || '', fields: twin.payload }),
+          twin.connectorId, twinId, twin.artifactType, twin.externalId, value,
+        ],
       );
       return this.event(orgId, twinId, actorId, 'TwinEditRouted', {
         twin_id: twinId,
@@ -1003,29 +1662,18 @@ export class ConnectorService {
     const outcome = await this.executeWorkOrder(orgId, workOrderId);
     const propagation = { ...empty };
     if (outcome === 'executed') {
-      const connector = await this.getConnector(orgId, twin.connectorId);
       const counters: PollCounters = {
         twinsCreated: 0, twinsUpdated: 0, twinsUnchanged: 0, echoesSuppressed: 0,
         workOrdersPrepared: 0, workOrdersHeld: 0, workOrdersExecuted: 0, workOrdersFailed: 0,
       };
-      if (twin.correlationNodeId) {
-        await this.propagateStateChange(
-          orgId,
-          connector,
-          { system: twin.provider, entity_type: twin.artifactType, immutable_id: twin.externalId },
-          twin.correlationNodeId,
-          {
-            externalId: twin.externalId,
-            artifactType: twin.artifactType,
-            title: twin.title || '',
-            status: value,
-            fields: twin.payload,
-            updatedAt: new Date().toISOString(),
-          },
-          counters,
-          { skipEchoCheck: true },
-        );
-      }
+      const emitted = await this.dbService.db.query<any>(
+        `SELECT event_id FROM domain_events
+         WHERE org_id = $1 AND event_type = 'ConnectorOperatorStateWritten'
+           AND payload ->> 'work_order_id' = $2
+         ORDER BY occurred_at DESC LIMIT 1`,
+        [orgId, workOrderId],
+      );
+      if (emitted.rows[0]?.event_id) await this.addPropagationCounters(emitted.rows[0].event_id, counters);
       propagation.prepared = counters.workOrdersPrepared;
       propagation.executed = counters.workOrdersExecuted;
       propagation.held = counters.workOrdersHeld;
@@ -1039,9 +1687,11 @@ export class ConnectorService {
       ? `${where} accepted ${twin.nativeKey || twin.externalId} → ${value}; the twin refreshes on the next synchronization`
       : outcome === 'failed'
         ? `${where} did not accept the change yet; it will be retried (${order?.lastError || 'provider error'})`
-        : outcome === 'dead'
-          ? `${where} refused the change: ${order?.lastError || 'provider error'}`
-          : `The change is queued until ${twin.connectorName} is active`;
+      : outcome === 'dead'
+        ? `${where} refused the change: ${order?.lastError || 'provider error'}`
+        : outcome === 'held'
+          ? `The change is paused for operator review: ${order?.lastError || 'translation requires correction'}`
+          : `The change is queued behind earlier work for ${twin.nativeKey || twin.externalId}`;
     return { decision: 'routed', twinId, field: policy.field, value, workOrder: order, propagation, message };
   }
 
@@ -1049,9 +1699,9 @@ export class ConnectorService {
     const result = await this.dbService.db.query<any>(
       `SELECT t.*, c.name AS connector_name, c.status AS connector_status, c.last_success_at AS connector_last_success_at,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
-                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'failed')) AS queued_writes,
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'processing', 'failed')) AS queued_writes,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
-                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status = 'dead') AS failed_writes
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('dead', 'held')) AS failed_writes
        FROM integration_canonical_twins t
        JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
        WHERE t.org_id = $1 AND t.id = $2`,
@@ -1163,6 +1813,56 @@ export class ConnectorService {
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
+
+  private async acquireSyncLease(orgId: string, connectorId: string, leaseOwner: string): Promise<boolean> {
+    const result = await this.dbService.db.query<any>(
+      `INSERT INTO integration_connector_sync_leases
+       (connector_id, org_id, lease_owner, acquired_at, expires_at)
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4)
+       ON CONFLICT (connector_id) DO UPDATE SET
+         org_id = EXCLUDED.org_id,
+         lease_owner = EXCLUDED.lease_owner,
+         acquired_at = CURRENT_TIMESTAMP,
+         expires_at = EXCLUDED.expires_at
+       WHERE integration_connector_sync_leases.org_id = EXCLUDED.org_id
+         AND integration_connector_sync_leases.expires_at <= CURRENT_TIMESTAMP
+       RETURNING connector_id`,
+      [connectorId, orgId, leaseOwner, new Date(Date.now() + SYNC_LEASE_MS).toISOString()],
+    );
+    return result.rows.length > 0;
+  }
+
+  private async releaseSyncLease(connectorId: string, leaseOwner: string): Promise<void> {
+    await this.dbService.db.query(
+      `DELETE FROM integration_connector_sync_leases WHERE connector_id = $1 AND lease_owner = $2`,
+      [connectorId, leaseOwner],
+    );
+  }
+
+  private async renewSyncLease(connectorId: string, leaseOwner: string): Promise<void> {
+    await this.dbService.db.query(
+      `UPDATE integration_connector_sync_leases SET expires_at = $1
+       WHERE connector_id = $2 AND lease_owner = $3`,
+      [new Date(Date.now() + SYNC_LEASE_MS).toISOString(), connectorId, leaseOwner],
+    );
+  }
+
+  private async renewWorkOrderClaim(workOrderId: string, claimId: string): Promise<void> {
+    await this.dbService.db.query(
+      `UPDATE integration_connector_work_orders SET claim_expires_at = $1
+       WHERE id = $2 AND claimed_by = $3 AND status = 'processing'`,
+      [new Date(Date.now() + WORK_ORDER_CLAIM_MS).toISOString(), workOrderId, claimId],
+    );
+  }
+
+  private twinPartitionKey(provider: string, entityType: string, externalId: string): string {
+    return `${provider.toLowerCase()}:${entityType.toLowerCase()}:${externalId}`;
+  }
+
+  private appendAttempt(value: unknown, attempt: ConnectorQueueAttempt): ConnectorQueueAttempt[] {
+    const history = parseJson<ConnectorQueueAttempt[]>(value, []);
+    return [...history, attempt];
+  }
 
   private capabilityReport(
     adapter: ConnectorAdapter,
@@ -1331,13 +2031,15 @@ export class ConnectorService {
   }
 
   /** Runs a write and its audit event in one transaction, then dispatches after commit. */
-  private async withEvent(work: (tx: DatabaseQueryable) => Promise<OutboxEventInput>): Promise<void> {
+  private async withEvent(work: (tx: DatabaseQueryable) => Promise<OutboxEventInput>): Promise<DomainEventEnvelope> {
     let event: Awaited<ReturnType<EventOutboxService['enqueue']>> | null = null;
     await this.dbService.db.transaction(async (tx) => {
       const input = await work(tx);
       event = await this.outbox.enqueue(tx, input);
     });
-    if (event) await this.outbox.dispatch(event);
+    if (!event) throw new Error('Transactional event was not created');
+    await this.outbox.dispatch(event);
+    return event;
   }
 
   private guard<T>(fn: () => T): T {

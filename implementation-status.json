@@ -594,19 +594,19 @@
     },
     "US16.4": {
       "name": "Per-twin persistent FIFO queue",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
-      "note": "New from the master backlog. Domain events are durable, but there is no ordered queue partitioned by synchronized record pair."
+      "note": "Verified by <code>test/us16.4-16.5.spec.ts</code> — inbound records and outbound state writes are persisted before execution, partitioned by immutable twin identity, assigned durable queue positions and claimed atomically. A twin head executes in order while unrelated twins proceed independently; expired claims resume from the original position without replaying settled work."
     },
     "US16.5": {
       "name": "Twin-level failure isolation",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
-      "note": "New from the master backlog. Consumer DLQ replay exists, but no twin queue can pause independently while unrelated synchronization continues."
+      "note": "Verified by <code>test/us16.4-16.5.spec.ts</code> — exhausted ingestion, transformation and provider-write failures pause only their twin partition. Tenant-scoped twin-DLQ endpoints expose the payload, error and attempt history and re-inject corrected payloads at the original FIFO position."
     },
     "US17.1": {
       "name": "Native connectors, discovery and ingestion",

@@ -277,9 +277,22 @@ describe('US20.2 — connector-led management workspace', () => {
 
     jira.unavailableTransitions.add('To Do');
     const refused = await http().post(`/workspace/twins/${jiraTwin.id}/edits`).set(headers(orgId)).send({ field: 'state', value: 'To Do' }).expect(201);
-    expect(refused.body.workOrder.status).toBe('dead');
-    expect(refused.body.message).toMatch(/refused the change/);
-    expect((await http().get('/workspace/overview').set(headers(orgId))).body.totals.failedWrites).toBe(1);
+    // The later edit cannot overtake the retrying head of this twin's FIFO queue.
+    expect(refused.body.workOrder.status).toBe('pending');
+    expect(refused.body.message).toMatch(/queued behind earlier work/);
+    expect((await http().get('/workspace/overview').set(headers(orgId))).body.totals.failedWrites).toBe(0);
+
+    await database.db.query(
+      `UPDATE integration_connector_work_orders SET next_attempt_at = CURRENT_TIMESTAMP - INTERVAL '1 second'
+       WHERE id = $1`,
+      [retrying.body.workOrder.id],
+    );
+    await http().post(`/integrations/connectors/${jiraId}/sync`).set(headers(orgId)).expect(201);
+    const settled = await http().get(`/integrations/connectors/${jiraId}/work-orders`).set(headers(orgId)).expect(200);
+    expect(settled.body.find((order: any) => order.id === retrying.body.workOrder.id).status).toBe('executed');
+    expect(settled.body.find((order: any) => order.id === refused.body.workOrder.id).status).toBe('dead');
+    // The refused Jira write and the intentionally unmapped counterpart propagation are both visible.
+    expect((await http().get('/workspace/overview').set(headers(orgId))).body.totals.failedWrites).toBe(2);
 
     await http().post(`/integrations/connectors/${jiraId}/pause`).set(headers(orgId)).expect(201);
     const paused = await http().post(`/workspace/twins/${jiraTwin.id}/edits`).set(headers(orgId)).send({ field: 'state', value: 'Done' }).expect(422);

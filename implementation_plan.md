@@ -2,6 +2,51 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Codex US16.4/US16.5 durable per-twin queue update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. The Claude and earlier Codex/Gemini records below are retained as historical delivery context; their then-current queue and single-writer boundaries are superseded only where this section says so.
+
+**Status:** US16.4 and US16.5 move from not started to **done**. The ledger is now **38 done / 6 partial / 29 not started** across **20 epics / 73 stories**.
+
+### Scope delivered by Codex
+
+- **Persistent inbound partitions.** Provider pages are written to `integration_connector_ingestion_queue` in the same transaction as their watermark. Each record is deduplicated by connector plus canonical payload hash and ordered by a database sequence within its immutable provider/entity/id partition. A process crash after acceptance cannot lose the page, and a malformed entry no longer pins the source cursor.
+- **Persistent outbound FIFO.** Connector work orders now carry a durable queue position, source event/payload, attempt history and an expiring atomic claim. The eligible-head query refuses to execute a later change while an earlier `pending`, `processing`, `failed`, `dead` or `held` entry exists for that twin. Eligible heads for unrelated twins execute concurrently.
+- **Failure isolation.** Ingestion and transformation failures receive the same bounded five-attempt exponential retry policy as retryable provider writes. Exhaustion or a permanent provider refusal pauses only the target twin/partition. Healthy records and other twin queues continue.
+- **Operator DLQ.** Tenant-scoped list/detail endpoints expose the original payload, last error, queue position and every attempt. Re-injection accepts an optional corrected payload, preserves history and the original queue position, clears the twin pause, and lets the next normal sync resume FIFO execution.
+- **Transactional propagation.** Canonical twin updates no longer call state translation after their transaction. Their committed outbox envelope is consumed idempotently, with one work order per `(source_event_id, target_twin_id)`. Operator edits use the same outbox path after the owning source accepts the write. Pending envelopes recover on bootstrap, closing the former twin-commit/translation crash gap.
+- **Database synchronization lease.** The process-local connector lock is replaced by `integration_connector_sync_leases`: acquisition is atomic, active work heartbeats the expiry, release is owner-checked, and an expired owner can be taken over after a stopped process.
+- **Operational visibility.** Work-order history exposes queue position and attempts; health counts processing/held states and paused twin queues; the workspace treats held work as attention; ingestion retries keep the source degraded; and DLQ/re-injection actions are audited through the existing event outbox.
+
+### API additions
+
+- `GET /integrations/connectors/:id/twin-dlq`
+- `GET /integrations/connectors/:id/twin-dlq/:entryId`
+- `POST /integrations/connectors/:id/twin-dlq/:entryId/reinject`
+
+### Verification added by Codex
+
+- `test/us16.4-16.5.spec.ts` (4 tests): same-twin FIFO under an in-flight write; unrelated-twin progress; durable queue positions; active-lease refusal and expired-lease takeover; permanent-failure isolation; payload/error/attempt-history visibility; tenant-scoped DLQ access; correction and replay at the original position; malformed-ingestion isolation through retry exhaustion; and committed outbox recovery.
+- Updated `test/us20.2.spec.ts` so its retry/refusal regression now asserts the US16.4 rule: the later write stays pending until the retrying head settles.
+- TypeScript build: **PASS**
+- Focused connector/queue regression: **PASS — 22 tests across 3 files**
+- Full non-browser regression: **PASS — 166 tests across 44 files**
+- Browser smoke suite: **PASS — 21 tests**
+- Tracker generation: **PASS — 38 done / 6 partial / 29 not started**
+
+### Remaining boundary
+
+- Sync remains operator/API-triggered; US17.1 still needs scheduled, webhook and explicit-import triggers, five provider adapters and live-tenant validation.
+- The queue/lease path is database-safe across replicas, but the audit-integrity append path still assumes one writer. `deploy/staging` therefore remains one replica with `Recreate`; horizontal scaling is not enabled by this increment.
+- Connector twins still do not feed the SLA, traceability, notification or metrics engines. The next architecture increment should define a twin-backed WorkItem projection without making Cadena authoritative for externally owned fields.
+
+### Primary files added / updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/connectors/connector.service.ts`, `connector.controller.ts`, `connector.types.ts`
+- `test/us16.4-16.5.spec.ts` (new), `test/us20.2.spec.ts`
+- `implementation-status.json`, `public/status.html` (generated), `README.md`, `walkthrough.md`, `implementation_plan.md`
+
 ## Claude US20.2 connector-led management workspace — 2026-09-22
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Code, Opus 5)** on 2026-09-22.

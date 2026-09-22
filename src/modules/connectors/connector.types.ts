@@ -184,9 +184,17 @@ export interface IngestionPollResult {
   durationMs: number;
 }
 
-export type ConnectorWorkOrderStatus = 'pending' | 'executed' | 'failed' | 'dead' | 'noop';
+export type ConnectorWorkOrderStatus = 'pending' | 'processing' | 'executed' | 'failed' | 'dead' | 'held' | 'noop';
 
-export type ConnectorWorkOrderOrigin = 'state_translation' | 'operator_edit';
+export type ConnectorWorkOrderOrigin = 'state_translation' | 'state_propagation' | 'operator_edit';
+
+export interface ConnectorQueueAttempt {
+  attempt: number;
+  startedAt: string;
+  completedAt: string;
+  outcome: 'executed' | 'retry_scheduled' | 'dead_lettered' | 'held' | 'completed' | 'requeued';
+  error?: string;
+}
 
 export interface ConnectorWorkOrder {
   id: string;
@@ -204,6 +212,9 @@ export interface ConnectorWorkOrder {
   fields: Record<string, unknown>;
   status: ConnectorWorkOrderStatus;
   attempts: number;
+  sourceEventId?: string;
+  queuePosition: number;
+  attemptHistory: ConnectorQueueAttempt[];
   lastError?: string;
   nextAttemptAt?: string;
   executedAt?: string;
@@ -225,6 +236,35 @@ export interface ConnectorHealth {
   twinCount: number;
   cursors: WatermarkCursor[];
   workOrders: Record<ConnectorWorkOrderStatus, number>;
+  pausedTwinQueues: number;
+}
+
+export type TwinQueueEntryKind = 'ingestion' | 'state_write' | 'state_translation';
+
+/** Operator view of one twin-scoped queue head that exhausted retries or needs correction. */
+export interface TwinQueueDeadLetter {
+  id: string;
+  orgId: string;
+  connectorId: string;
+  twinId?: string;
+  partitionKey: string;
+  kind: TwinQueueEntryKind;
+  status: 'dead' | 'held';
+  payload: Record<string, unknown>;
+  attempts: number;
+  attemptHistory: ConnectorQueueAttempt[];
+  lastError: string;
+  queuePosition: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TwinQueueReinjectionResult {
+  entryId: string;
+  kind: TwinQueueEntryKind;
+  status: 'pending';
+  requeued: true;
+  message: string;
 }
 
 export interface ConnectorProviderDescriptor {
