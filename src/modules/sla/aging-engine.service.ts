@@ -1,4 +1,4 @@
-import { Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
+import { Inject, Injectable, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { SlaCalculatorService, SlaCalendar } from './sla-calculator.service';
 import { InProcessEventBus } from '../events/event-bus';
@@ -52,7 +52,7 @@ export class AgingEngineService implements OnModuleInit, OnModuleDestroy {
     return result.rows.length > 0;
   }
 
-  constructor(private readonly slaCalculator: SlaCalculatorService) {
+  constructor(@Inject(SlaCalculatorService) private readonly slaCalculator: SlaCalculatorService) {
     this.dbService = DatabaseService.getInstance();
     this.eventBus = InProcessEventBus.getInstance();
   }

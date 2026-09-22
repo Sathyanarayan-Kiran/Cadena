@@ -107,6 +107,8 @@ export interface FakeJiraIssue {
   status: string;
   priority?: string;
   updated: number;
+  created?: number;
+  issueType?: string;
   custom?: Record<string, unknown>;
 }
 
@@ -127,6 +129,7 @@ export class FakeJiraApi extends FakeProviderApi {
 
   public addIssue(input: Partial<FakeJiraIssue> & { key: string; summary: string; status: string }): FakeJiraIssue {
     const issue: FakeJiraIssue = { id: input.id || String(this.nextId++), updated: input.updated ?? this.tick(1000), ...input } as FakeJiraIssue;
+    issue.created = issue.created ?? issue.updated;
     this.issues.set(issue.id, issue);
     return issue;
   }
@@ -211,9 +214,10 @@ export class FakeJiraApi extends FakeProviderApi {
           status: { name: issue.status },
           priority: issue.priority ? { name: issue.priority } : null,
           assignee: null,
-          issuetype: { name: 'Story' },
+          issuetype: { name: issue.issueType || 'Story' },
           project: { key: issue.key.split('-')[0] },
           description: null,
+          created: new Date(issue.created ?? issue.updated).toISOString().replace('Z', '+0000'),
           updated: new Date(issue.updated).toISOString().replace('Z', '+0000'),
           ...Object.fromEntries(customIds.map((id) => [id, issue.custom?.[id] ?? null])),
         },
@@ -232,6 +236,8 @@ export interface FakeServiceNowRecord {
   state: string; // choice code
   priority?: string;
   sys_updated_on: number;
+  sys_created_on?: number;
+  assigned_to?: string;
   sys_updated_by: string;
 }
 
@@ -258,6 +264,7 @@ export class FakeServiceNowApi extends FakeProviderApi {
       sys_updated_by: input.sys_updated_by || 'agent.smith',
       ...input,
     } as FakeServiceNowRecord;
+    record.sys_created_on = record.sys_created_on ?? record.sys_updated_on;
     this.tables.get(table)!.set(record.sys_id, record);
     return record;
   }
@@ -338,7 +345,8 @@ export class FakeServiceNowApi extends FakeProviderApi {
           short_description: pair(record.short_description),
           state: pair(record.state, this.stateLabel(record.state)),
           priority: pair(record.priority || '3', record.priority ? `${record.priority} - Custom` : '3 - Moderate'),
-          assigned_to: pair('', ''),
+          assigned_to: pair(record.assigned_to || '', record.assigned_to || ''),
+          sys_created_on: pair(new Date(record.sys_created_on ?? record.sys_updated_on).toISOString().slice(0, 19).replace('T', ' ')),
           sys_updated_on: pair(new Date(record.sys_updated_on).toISOString().slice(0, 19).replace('T', ' ')),
           sys_updated_by: pair(record.sys_updated_by),
         })),

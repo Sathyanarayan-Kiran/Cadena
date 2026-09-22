@@ -3,7 +3,24 @@
 A running record of what is built, how to try it, and what changed when.
 
 **Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), and the US20.2 connector-led management workspace. The canonical backlog is **20 epics / 73 stories**, with **38 done / 6 partial / 29 not started**.
-**Verification:** 166 automated tests across 44 test files, plus 21 browser smoke tests driving the real page in pilot and connector-led modes.
+**Verification:** 173 automated tests across 45 test files, plus 21 browser smoke tests driving the real page in pilot and connector-led modes.
+
+---
+
+## 2026-09-22 — Twin-backed WorkItem projection (Claude)
+
+Connected Jira and ServiceNow records are now governed by the same engines as local work, and they still belong to their source.
+
+- Every synchronized twin appears as a work item keyed by its native key (CAD-42, INC0010042), with its source, owning connector and native link.
+- **SLA and escalation:** native states are recorded as state history at the time they changed in the source, so SLA policies, breach and escalation notifications, and the executive views apply to connector records.
+- **Metrics:** restore-time metrics use the source's creation and resolution times.
+- **Traceability:** linked Jira/ServiceNow counterparts appear as related items. Commits and PRs that mention a native key link to it.
+- **Read-only source fields:** the API refuses edits to source-owned fields (409 `externally_owned`); only Cadena tags can change. A state change requested in Cadena goes to the source through governed write-back, and the item updates after the next sync. Git/CI and monitoring automation can no longer move or re-prioritize source-owned records.
+- **Configuration:** `POST /integrations/connectors/:id/projection` sets the owning team, type map and owner map, then re-projects. Without an unambiguous team, projection is held with a visible reason.
+
+**Try it:** in the connector-led sandbox (see the US20.2 entry), connect Jira and ServiceNow, set a projection team, then add an SLA policy for `incident` / `In Progress` and choose **Recompute SLA aging**. The twin table shows SLA health, and the twin drawer links to traceability.
+
+**Verified by** `test/twin-projection.spec.ts` (7 tests), the browser suite (21 tests), and 173 non-browser tests across 45 files.
 
 ---
 
@@ -38,7 +55,7 @@ The workspace now matches the product decision: Jira and ServiceNow are the syst
 
 **Try it:** set `CADENA_INTERACTION_MODE=connector-led`, `CADENA_CONNECTOR_SANDBOX=enabled` and `SANDBOX_TOKEN=x`, then run `npm run dev`. Choose **Connect source**, use base URL `https://jira.sandbox.cadena.local`, any account email, `env:SANDBOX_TOKEN` and project `CAD`, and tick write-back. Then **Test → Discover → Activate → Synchronize** on the card, and open a twin.
 
-**Still open after the later queue increment:** connector twins do not yet feed the work-item SLA, traceability and metrics engines, and only state has an outbound mapping. US16.4/US16.5 and the connector sync lease are now complete; the audit-chain single-writer constraint still prevents multi-replica rollout.
+**Still open after the later queue and projection increments:** only state has an outbound mapping. US16.4/US16.5 and the connector sync lease are now complete; the audit-chain single-writer constraint still prevents multi-replica rollout.
 
 **Verified by** `test/us20.2.spec.ts` (7 tests), the browser suite (21 tests, including 4 connector-led), and 162 non-browser tests across 43 files.
 

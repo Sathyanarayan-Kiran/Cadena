@@ -3,6 +3,7 @@ import { DatabaseService } from '../../database/database.service';
 import { EventOutboxService } from '../events/event-outbox.service';
 import { CustomFieldSchemaService } from './custom-field-schema.service';
 import { WorkflowService } from '../workflow/workflow.service';
+import { CADENA_OWNED_PROJECTED_FIELDS, ExternallyOwnedWorkItemError } from './work-item-ownership';
 import {
   CreateWorkItemDto,
   DEFAULT_STATUS,
@@ -187,6 +188,18 @@ export class WorkItemService {
     if (unknown.length) {
       throw new InvalidWorkItemUpdateError(`Fields cannot be edited through this endpoint: ${unknown.join(', ')}`);
     }
+    if (current.origin === 'connector') {
+      const owned = Object.keys(dto as Record<string, unknown>)
+        .filter((field) => (dto as Record<string, unknown>)[field] !== undefined && !CADENA_OWNED_PROJECTED_FIELDS.has(field));
+      if (owned.length) {
+        throw new ExternallyOwnedWorkItemError({
+          id: current.id,
+          item_key: current.key,
+          source_twin_id: current.source?.twin_id,
+          source_system: current.source?.system,
+        }, owned);
+      }
+    }
     if (dto.title !== undefined && (!dto.title.trim() || dto.title.length > 500)) {
       throw new InvalidWorkItemUpdateError('title must contain 1 to 500 characters');
     }
@@ -337,6 +350,17 @@ export class WorkItemService {
       sla_suspended: Boolean(row.sla_suspended),
       escalated_at: row.escalated_at
         ? (typeof row.escalated_at === 'string' ? row.escalated_at : new Date(row.escalated_at).toISOString())
+        : null,
+      origin: row.origin === 'connector' ? 'connector' : 'local',
+      source: row.origin === 'connector' && row.source_twin_id
+        ? {
+          system: row.source_system,
+          twin_id: row.source_twin_id,
+          connector_id: row.source_connector_id || null,
+          native_key: row.item_key,
+          native_url: row.native_url || null,
+          source_updated_at: row.source_updated_at ? new Date(row.source_updated_at).toISOString() : null,
+        }
         : null,
     };
   }

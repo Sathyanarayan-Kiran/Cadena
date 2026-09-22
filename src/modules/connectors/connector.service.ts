@@ -57,6 +57,7 @@ import {
 } from './connector.types';
 import { SecretManagerResolver } from './secret-manager-ref';
 import { getProviderSandbox } from './sandbox/provider-sandbox';
+import { TwinProjectionConfig, TwinProjectionService } from './twin-projection.service';
 import { loadRuntimeConfig } from '../../config/runtime-config';
 
 const MAX_WORK_ORDER_ATTEMPTS = 5;
@@ -100,6 +101,7 @@ export class ConnectorService implements OnApplicationBootstrap {
   private stateMappingService = new StateMappingService();
   private syncGuardService = new SyncGuardService();
   private secrets = new SecretManagerResolver();
+  private projection = new TwinProjectionService();
   private adapters = new Map<ConnectorProviderType, ConnectorAdapter>();
   private readonly workerId = randomUUID();
 
@@ -176,6 +178,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       tableNames: dto.tableNames === undefined ? undefined : stringList(dto.tableNames).map((table) => table.toLowerCase()),
       requiredFields: this.validateRequiredFields(dto.requiredFields),
       writeBack: this.validateWriteBack(dto.writeBack),
+      projection: TwinProjectionService.validateConfig(dto.projection),
     }));
     this.guard(() => adapter.validateConfig(config));
 
@@ -361,6 +364,41 @@ export class ConnectorService implements OnApplicationBootstrap {
       });
     });
     return this.getConnector(orgId, connectorId);
+  }
+
+  /**
+   * Sets how this connector's twins are projected as WorkItems (owning team, type and owner
+   * mapping) and re-projects its existing twins. Source fields stay owned by the provider.
+   */
+  public async configureProjection(
+    orgId: string,
+    connectorId: string,
+    input: unknown,
+    actorId = 'system',
+  ): Promise<{ connector: ConnectorRecord; projection: TwinProjectionConfig; twins: Record<string, number> }> {
+    const connector = await this.getConnector(orgId, connectorId);
+    const projection = TwinProjectionService.validateConfig(input);
+    if (projection.teamId) {
+      const team = await this.dbService.db.query<any>(`SELECT id FROM teams WHERE id = $1 AND org_id = $2`, [projection.teamId, orgId]);
+      if (!team.rows.length) throw new BadRequestException('projection.teamId is not a team in this tenant');
+    }
+    for (const personId of Object.values(projection.ownerMap || {})) {
+      const person = await this.dbService.db.query<any>(`SELECT id FROM people WHERE id = $1 AND org_id = $2`, [personId, orgId]);
+      if (!person.rows.length) throw new BadRequestException(`projection.ownerMap references unknown person ${personId}`);
+    }
+    await this.withEvent(async (tx) => {
+      await tx.query(
+        `UPDATE integration_connectors SET config = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND org_id = $3`,
+        [JSON.stringify({ ...connector.config, projection }), connectorId, orgId],
+      );
+      return this.event(orgId, connectorId, actorId, 'ConnectorProjectionConfigured', {
+        connector_id: connectorId,
+        before: connector.config.projection || { enabled: true },
+        after: projection,
+      });
+    });
+    const twins = await this.projection.projectConnector(orgId, connectorId);
+    return { connector: await this.getConnector(orgId, connectorId), projection, twins };
   }
 
   // ─── Ingestion ─────────────────────────────────────────────────────────────
@@ -1539,12 +1577,16 @@ export class ConnectorService implements OnApplicationBootstrap {
     await this.dbService.initialize();
     const result = await this.dbService.db.query<any>(
       `SELECT t.*, c.name AS connector_name, c.status AS connector_status, c.last_success_at AS connector_last_success_at,
+              wi.id AS wi_id, wi.item_key AS wi_key, wi.type AS wi_type, wi.status AS wi_status, wi.aging_bucket AS wi_aging_bucket,
+              wi.aging_score AS wi_aging_score, wi.escalated_at AS wi_escalated_at, wi.entered_state_at AS wi_entered_state_at,
+              wi.team_id AS wi_team_id, wi.owner_id AS wi_owner_id,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
                 WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'processing', 'failed')) AS queued_writes,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
                 WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('dead', 'held')) AS failed_writes
        FROM integration_canonical_twins t
        JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
+       LEFT JOIN work_items wi ON wi.org_id = t.org_id AND wi.source_twin_id = t.id
        WHERE t.org_id = $1
        ORDER BY t.updated_at DESC, t.id ASC
        LIMIT 500`,
@@ -1698,12 +1740,16 @@ export class ConnectorService implements OnApplicationBootstrap {
   private async listTwinWorkspaceRows(orgId: string, twinId: string): Promise<TwinWorkspaceRow[]> {
     const result = await this.dbService.db.query<any>(
       `SELECT t.*, c.name AS connector_name, c.status AS connector_status, c.last_success_at AS connector_last_success_at,
+              wi.id AS wi_id, wi.item_key AS wi_key, wi.type AS wi_type, wi.status AS wi_status, wi.aging_bucket AS wi_aging_bucket,
+              wi.aging_score AS wi_aging_score, wi.escalated_at AS wi_escalated_at, wi.entered_state_at AS wi_entered_state_at,
+              wi.team_id AS wi_team_id, wi.owner_id AS wi_owner_id,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
                 WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'processing', 'failed')) AS queued_writes,
               (SELECT COUNT(*)::int FROM integration_connector_work_orders w
                 WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('dead', 'held')) AS failed_writes
        FROM integration_canonical_twins t
        JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
+       LEFT JOIN work_items wi ON wi.org_id = t.org_id AND wi.source_twin_id = t.id
        WHERE t.org_id = $1 AND t.id = $2`,
       [orgId, twinId],
     );
@@ -1720,6 +1766,19 @@ export class ConnectorService implements OnApplicationBootstrap {
       counterparts: counterparts.get(row.correlation_node_id) || [],
       queuedWrites: Number(row.queued_writes || 0),
       failedWrites: Number(row.failed_writes || 0),
+      projection: {
+        status: row.projection_status || 'pending',
+        reason: row.projection_reason || undefined,
+        workItemId: row.wi_id || undefined,
+        workItemKey: row.wi_key || undefined,
+        workItemType: row.wi_type || undefined,
+        agingBucket: row.wi_id ? (row.wi_aging_bucket || 'green') : undefined,
+        agingScore: row.wi_id ? Number(row.wi_aging_score || 0) : undefined,
+        escalatedAt: iso(row.wi_escalated_at),
+        enteredStateAt: iso(row.wi_entered_state_at),
+        teamId: row.wi_team_id || undefined,
+        ownerId: row.wi_owner_id || undefined,
+      },
     };
   }
 

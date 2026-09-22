@@ -5,6 +5,7 @@ import {
   Get,
   HttpException,
   HttpStatus,
+  Inject,
   Param,
   Patch,
   Post,
@@ -17,6 +18,8 @@ import { CustomFieldSchemaService, RegisterCustomFieldSchemaDto } from './custom
 import { WorkflowService, GuardFailedError, MissingRequiredFieldsError, InvalidTransitionError } from '../workflow/workflow.service';
 import { RbacService } from '../rbac/rbac.service';
 import { importBacklogFixture } from '../../scripts/import-backlog';
+import { ConnectorService } from '../connectors/connector.service';
+import { ExternallyOwnedWorkItemError } from './work-item-ownership';
 
 /**
  * In connector-led mode, work enters Cadena through connector ingestion (US17.1/US20.2);
@@ -41,6 +44,8 @@ export class WorkItemController {
   private schemaService = new CustomFieldSchemaService();
   private workflowService = new WorkflowService();
   private rbacService = new RbacService();
+
+  constructor(@Inject(ConnectorService) private readonly connectors: ConnectorService) {}
 
   @Post('import-backlog')
   async importBacklog(
@@ -115,6 +120,9 @@ export class WorkItemController {
       if (!item) throw new HttpException('WorkItem not found', HttpStatus.NOT_FOUND);
       return item;
     } catch (err) {
+      if (err instanceof ExternallyOwnedWorkItemError) {
+        throw new HttpException(err.toResponse(), HttpStatus.CONFLICT);
+      }
       if (err instanceof InvalidWorkItemUpdateError || err instanceof InvalidCustomFieldsError) {
         throw new HttpException(
           {
@@ -142,15 +150,29 @@ export class WorkItemController {
       const resolvedActorId = actorId || '00000000-0000-0000-0000-000000000001';
       const actorRole = await this.rbacService.resolveActorRole(resolvedActorId, headerRole);
 
-      return await this.workflowService.transitionWorkItem({
-        workItemId: id,
-        orgId: headerOrgId || '00000000-0000-0000-0000-000000000099',
-        toState: body.to_state,
-        actorId: resolvedActorId,
-        actorRole,
-        fields: body.fields,
-      });
+      const orgId = headerOrgId || '00000000-0000-0000-0000-000000000099';
+      try {
+        return await this.workflowService.transitionWorkItem({
+          workItemId: id,
+          orgId,
+          toState: body.to_state,
+          actorId: resolvedActorId,
+          actorRole,
+          fields: body.fields,
+        });
+      } catch (err) {
+        // A twin-backed item's state belongs to its source: route the request through the
+        // governed connector write-back, which either executes it there or refuses and explains.
+        if (err instanceof ExternallyOwnedWorkItemError && err.twinId) {
+          const routed = await this.connectors.routeTwinEdit(orgId, err.twinId, { field: 'state', value: body?.to_state }, resolvedActorId);
+          return { ...routed, governed_by: 'connector', work_item_id: id, twin_id: err.twinId };
+        }
+        throw err;
+      }
     } catch (err) {
+      if (err instanceof ExternallyOwnedWorkItemError) {
+        throw new HttpException(err.toResponse(), HttpStatus.CONFLICT);
+      }
       if (err instanceof GuardFailedError) {
         throw new HttpException(
           {
@@ -221,10 +243,27 @@ export class WorkItemController {
     @Headers('x-org-id') headerOrgId?: string,
   ) {
     try {
-      return await this.workflowService.getAvailableTransitions(
-        id,
-        headerOrgId || '00000000-0000-0000-0000-000000000099',
-      );
+      const orgId = headerOrgId || '00000000-0000-0000-0000-000000000099';
+      const item = await this.service.getWorkItemById(id, orgId);
+      if (item?.origin === 'connector' && item.source) {
+        // Offer only what the source permits Cadena to write back; otherwise explain ownership.
+        const twin = await this.connectors.getTwinDetail(orgId, item.source.twin_id);
+        const state = twin.fields.find((field) => field.field === 'state');
+        return {
+          current_state: item.status,
+          governed_by: 'connector',
+          authority: item.source.system,
+          twin_id: item.source.twin_id,
+          editable: Boolean(state?.editable),
+          message: state?.message,
+          transitions: state?.editable
+            ? (state.allowedValues || [])
+              .filter((value) => value.toLowerCase() !== item.status.toLowerCase())
+              .map((value) => ({ to_state: value, requires_fields: [] }))
+            : [],
+        };
+      }
+      return await this.workflowService.getAvailableTransitions(id, orgId);
     } catch (err) {
       if (err instanceof InvalidTransitionError) {
         throw new HttpException(err.message, HttpStatus.NOT_FOUND);

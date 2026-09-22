@@ -4,6 +4,7 @@ import { EventOutboxService } from '../events/event-outbox.service';
 import { SlaCalculatorService, SlaCalendar } from '../sla/sla-calculator.service';
 import { PublishedWorkflowRecord, WorkflowDefinition } from './workflow.types';
 import { appendAuditIntegrityEntry } from '../audit/audit-integrity';
+import { ExternallyOwnedWorkItemError } from '../work-items/work-item-ownership';
 
 const BUILT_IN_WORKFLOWS: Record<string, WorkflowDefinition> = {
   epic: {
@@ -293,6 +294,7 @@ export class WorkflowService {
     }
 
     const item = itemRes.rows[0];
+    if (item.origin === 'connector') throw new ExternallyOwnedWorkItemError(item, ['status']);
     const fromState = item.status;
     const itemType = item.type;
     const workflowVersion = item.workflow_version;
@@ -331,8 +333,97 @@ export class WorkflowService {
       throw new MissingRequiredFieldsError(missingFields);
     }
 
-    // 5. Apply State Transition
+    // 5–6. Apply the state, SLA clock, audit record and outbox event atomically.
     const now = new Date().toISOString();
+    const event = await this.commitStateChange({
+      item,
+      orgId: ctx.orgId,
+      workItemId: ctx.workItemId,
+      itemType,
+      fromState,
+      toState: ctx.toState,
+      at: now,
+      actorId: ctx.actorId,
+      actorType: ctx.actorType || 'user',
+      suppliedFields,
+      currentCustomFields,
+      mergedFields,
+    });
+
+    // Publication is deliberately after commit. A stop in this gap is recovered from the
+    // pending outbox row with the same event id.
+    await this.outbox.dispatch(event);
+
+    return {
+      id: ctx.workItemId,
+      from_state: fromState,
+      to_state: ctx.toState,
+      status: ctx.toState,
+      custom_fields: mergedFields,
+      updated_at: now,
+    };
+  }
+
+  /**
+   * Applies a native state change reported by a connector to a twin-backed WorkItem. The source
+   * system already enforced its own workflow, so Cadena's local transition rules and guards do not
+   * apply; the SLA clock, audit history and domain event are recorded exactly as for a local
+   * transition, at the time the source changed. Returns null when the item is already in that state.
+   */
+  public async applySourceStateChange(p: {
+    workItemId: string;
+    orgId: string;
+    toState: string;
+    at: string;
+    actorId: string;
+    source: Record<string, unknown>;
+  }): Promise<{ from_state: string; to_state: string } | null> {
+    await this.dbService.initialize();
+    const itemRes = await this.dbService.db.query<any>(
+      `SELECT * FROM work_items WHERE id = $1 AND org_id = $2 AND origin = 'connector'`,
+      [p.workItemId, p.orgId],
+    );
+    const item = itemRes.rows[0];
+    if (!item) throw new InvalidTransitionError(`Twin-backed work item '${p.workItemId}' not found`);
+    if (item.status === p.toState) return null;
+    const currentCustomFields = typeof item.custom_fields === 'string' ? JSON.parse(item.custom_fields) : item.custom_fields || {};
+    const event = await this.commitStateChange({
+      item,
+      orgId: p.orgId,
+      workItemId: p.workItemId,
+      itemType: item.type,
+      fromState: item.status,
+      toState: p.toState,
+      at: p.at,
+      actorId: p.actorId,
+      actorType: 'integration',
+      suppliedFields: {},
+      currentCustomFields,
+      mergedFields: currentCustomFields,
+      extraAudit: { source: p.source },
+    });
+    await this.outbox.dispatch(event);
+    return { from_state: item.status, to_state: p.toState };
+  }
+
+  private async commitStateChange(p: {
+    item: any;
+    orgId: string;
+    workItemId: string;
+    itemType: string;
+    fromState: string;
+    toState: string;
+    at: string;
+    actorId: string;
+    actorType: 'user' | 'system' | 'integration';
+    suppliedFields: Record<string, any>;
+    currentCustomFields: Record<string, any>;
+    mergedFields: Record<string, any>;
+    extraAudit?: Record<string, unknown>;
+  }) {
+    const { item, itemType, fromState, suppliedFields, currentCustomFields, mergedFields } = p;
+    const ctx = { orgId: p.orgId, toState: p.toState, workItemId: p.workItemId, actorType: p.actorType, actorId: p.actorId };
+    const now = p.at;
     const policyResult = await this.dbService.db.query<any>(
       `SELECT state, calendar, suspend_sla
        FROM sla_policies
@@ -401,8 +492,10 @@ export class WorkflowService {
     // Additive per US5.1: consumers need the tenant to route or aggregate a transition,
     // and the spec §8.2 envelope has no org field, so it travels in the payload.
     const eventPayload = { ...auditPayload, org_id: ctx.orgId, item_type: itemType };
+    Object.assign(auditPayload, p.extraAudit || {});
+    Object.assign(eventPayload, p.extraAudit || {});
 
-    const event = await this.dbService.db.transaction(async (tx) => {
+    return this.dbService.db.transaction(async (tx) => {
       const updated = await tx.query<any>(
         `UPDATE work_items
          SET status = $1,
@@ -449,19 +542,6 @@ export class WorkflowService {
         timestamp: now,
       });
     });
-
-    // Publication is deliberately after commit. A stop in this gap is recovered from the
-    // pending outbox row with the same event id.
-    await this.outbox.dispatch(event);
-
-    return {
-      id: ctx.workItemId,
-      from_state: fromState,
-      to_state: ctx.toState,
-      status: ctx.toState,
-      custom_fields: mergedFields,
-      updated_at: now,
-    };
   }
 
   public async getAvailableTransitions(workItemId: string, orgId: string): Promise<{

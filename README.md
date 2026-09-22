@@ -444,7 +444,29 @@ Enable state write-back at registration with `"writeBack": { "state": true }`, o
 
 `CADENA_CONNECTOR_SANDBOX=enabled` routes the real Jira and ServiceNow adapters to in-process provider stand-ins at `https://jira.sandbox.cadena.local` (project `CAD`) and `https://servicenow.sandbox.cadena.local` (table `incident`). Any secret reference that resolves is accepted there. Runtime configuration refuses the sandbox outside the local runtime.
 
-**Boundary:** connector twins are not yet merged into the work-item SLA, traceability, notification and metrics engines, which still operate on local work items.
+### Twin-backed WorkItems
+
+Every synchronized twin is projected to one work item with `origin: "connector"`, its native key as `key`, and a `source` block (system, twin, connector, native URL, source timestamp). The SLA, escalation, traceability, notification and metrics engines therefore govern connector records directly:
+
+- Native state changes become `WorkItemStateChanged` history at the source's timestamp, and SLA clocks follow them.
+- Records keep their source creation time, which restore-time metrics use.
+- US13.2 counterparts become `relates_to` traceability links.
+- Git/CI references resolve native keys such as `CAD-42`.
+
+Source authority is enforced in the services, not only the UI:
+
+- `PATCH /workitems/:id` on a projected item returns **HTTP 409 `externally_owned`** for any source-owned field. Only Cadena `tags` may change.
+- `POST /workitems/:id/transitions` is routed through the governed twin edit: it is either executed at the source or refused with the ownership reason.
+- The workflow engine refuses to transition projected items. Monitoring and Git/CI automation skip them.
+
+Configure projection per connector:
+
+```http
+POST /integrations/connectors/:id/projection
+{ "teamId": "<team id>", "typeMap": { "issue:Bug": "incident" }, "ownerMap": { "<native assignee>": "<person id>" } }
+```
+
+Defaults: Jira Epic → epic and other issues → story; ServiceNow incident/problem → incident and change_request → release. Native priority maps to P0–P4. Without a configured or unambiguous team, projection is held, and the twin shows the reason.
 
 ---
 
@@ -885,8 +907,8 @@ The next delivery sequence follows the connector-led product decision:
 2. **US17.1 live validation and completion**:
    - With credentials and explicit authorisation, enable `CADENA_CONNECTOR_LIVE_HTTP` against a Jira Cloud and ServiceNow sandbox, then add scheduled/webhook-triggered polling and the remaining provider adapters.
 
-3. **Unify connector twins with governance engines**:
-   - Completed in this increment. Next, define the twin-backed WorkItem projection so externally owned records participate in SLA, traceability, notification and metrics engines without becoming locally authoritative. Resolve the audit-chain multi-writer constraint before enabling multiple replicas.
+3. **Audit-chain multi-writer safety**:
+   - Connector twins now participate in SLA, traceability, notification and metrics through the twin-backed WorkItem projection. Resolve the audit-integrity single-writer constraint (for example a per-tenant chain lock or sequence-then-hash append) before enabling multiple replicas.
 
 4. **US13.4 and US13.5 — safe content and closure sync**:
    - Keep private work notes out of public streams and write complete resolution metadata back to the ITSM record.
@@ -991,4 +1013,6 @@ Multi-worker dispatch, a managed broker, real notification transports, CMDB fede
 | **US20.2** | Connector-led mode opens on source health with connect/discover/synchronize and refuses local creation and import | `test/us20.2.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
 | **US20.2** | Shows source, native link, sync state, last successful sync, field authority and counterpart for each twin | `test/us20.2.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
 | **US20.2** | Blocks edits without an outbound mapping and routes permitted state changes through an audited connector work order | `test/us20.2.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **Projection** | Projects twins as governed work items with native state history, SLA breach notifications, restore metrics and correlation links | `test/twin-projection.spec.ts` | **PASS** |
+| **Projection** | Refuses local edits to source-owned fields and routes projected transitions through governed write-back | `test/twin-projection.spec.ts` | **PASS** |
 | **Backlog fixture** | Imports every epic and story from the backlog with its parent-child hierarchy | `test/backlog-fixture.spec.ts` | **PASS** |

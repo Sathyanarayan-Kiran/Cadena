@@ -2,6 +2,77 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude twin-backed WorkItem projection — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Code, Opus 5)** on 2026-09-22. It builds on the Codex US16.4/US16.5 record above; nothing there is superseded.
+
+**Status:** Architecture increment. No story changes status; the ledger remains **38 done / 6 partial / 29 not started**. It closes the boundary recorded under US20.2 and US16.4/US16.5: connector twins now feed the SLA, traceability, notification and metrics engines.
+
+### Design
+
+- **One projection per twin.** Each canonical twin is projected to exactly one `work_items` row. The row has `origin = 'connector'` and a unique `(org_id, source_twin_id)`, and it carries `source_system`, `source_connector_id`, `native_url` and `source_updated_at`. Its `item_key` is the native key, for example `CAD-42` or `INC0010042`. The existing engines read these rows unchanged, so there is no parallel model.
+- **One-way and event-driven.** A durable outbox consumer (`twin-work-item-projection`) reads the committed `CanonicalTwinMaterialized` and `CanonicalTwinUpdated` events. It runs beside, and independently of, the Codex propagation consumer, and inherits the registry's idempotency, retry and dead-letter handling.
+  - A change applies only if its source timestamp is at least the last applied one, so replays and late deliveries cannot move a projection backwards.
+  - Field changes emit `WorkItemFieldsChanged` with an integration actor and source provenance.
+- **Native state history.** `WorkflowService.applySourceStateChange` shares the extracted SLA-clock, audit and outbox commit with local transitions.
+  - It skips Cadena's local workflow rules, because the source already enforced its own.
+  - It records `WorkItemStateChanged` in `audit_events` and the integrity chain at the time the source changed.
+  - The adapters now carry the source creation time (Jira `created`, ServiceNow `sys_created_on`), so restore-time metrics measure from when the record was opened, not when Cadena first saw it.
+- **Mapping.**
+  - Type: Jira Epic → epic, other Jira issues → story; ServiceNow incident/problem → incident, change_request → release. `projection.typeMap` overrides this per entity or native type.
+  - Priority: native priority → P0–P4, and incident severity follows from priority.
+  - Team: the configured `projection.teamId`, or the tenant's only team.
+  - Owner: `projection.ownerMap` (native assignee → person).
+  - Jira ADF descriptions are reduced to plain text.
+  - An unresolved team or type holds the projection with a visible reason instead of guessing.
+- **Traceability.** US13.2 counterpart correlations are mirrored as `relates_to` links marked `origin = 'correlation'`, created on projection or when a pair is created, and deduplicated. Operators may still add their own links, since traceability is Cadena's domain. Git/CI references now also recognize native keys such as `CAD-42`; they link only when such an item exists, and unmatched native-looking tokens are not reported as unresolved.
+- **Authority is preserved.**
+  - `WorkItemService.updateWorkItem` rejects every source-owned field (title, description, priority, severity, owner, custom fields) on a projected item with HTTP 409 `externally_owned`, naming the authority and the twin edit path. Only Cadena-owned `tags` may change.
+  - `WorkflowService.transitionWorkItem` refuses projected items outright. The work-item transition API routes the request through the governed US20.2 write-back, which either executes it at the source or refuses and audits it.
+  - Available transitions for a projected item list only source states that write-back permits.
+  - Monitoring severity escalation skips projected incidents.
+  - Git/CI auto-transitions on projected items are recorded as skipped with the ownership reason.
+  - The projection never mutates on a local request. It changes only when the source changes.
+- **Configuration.** `projection` can be supplied at connector registration, or through `POST /integrations/connectors/:id/projection`, which validates the team and owners, audits the change (`ConnectorProjectionConfigured`) and re-projects the connector's twins.
+- **Workspace.** The twin table shows SLA health, and the twin drawer shows a **Cadena governance** section (work item, SLA health, time in state, escalation, Open traceability). Board cards for projected items carry a source badge, and the item drawer explains ownership and links to the twin.
+
+### Fixes found along the way
+
+- `SlaController` and `AgingEngineService` relied on emitted decorator metadata for constructor injection. That works in the `tsc` build but not under vitest, so `/aging/recompute` failed in in-process tests. Both now use explicit `@Inject`.
+
+### Verification added by Claude
+
+- `test/twin-projection.spec.ts` (7 tests):
+  - projection with provenance, type, priority and severity mapping, and source timestamps;
+  - idempotent re-sync, field-change events, native state history at source time, and stale-replay refusal;
+  - SLA breach, owner and team-lead notifications, and restore-time and resolved-count metrics for a projected ServiceNow incident;
+  - correlation-mirrored traceability links with no duplicates;
+  - 409 on source-owned edits, permitted tag edits, refusal inside the workflow engine, and transitions routed through write-back that update only after the next sync;
+  - Git native-key linking with the auto-transition skipped;
+  - a held projection until a team is configured, config validation, and tenant isolation.
+- Browser suite: the connector-led twin row shows SLA health, and the drawer shows Cadena governance and traceability.
+- TypeScript build: **PASS**
+- Non-browser regression: **PASS — 173 tests across 45 files**
+- Browser smoke suite: **PASS — 21 tests**
+- Tracker generation: **PASS — 38 done / 6 partial / 29 not started**
+
+### Remaining boundary
+
+- Only state has an outbound mapping. Field write-back remains US17.2.
+- Owner resolution depends on an explicit `ownerMap`. There is no directory-based identity matching yet.
+- Disabling projection leaves previously projected items in place, read-only and no longer updated.
+- Horizontal scaling stays disabled: the audit-integrity append path still assumes a single writer. The projection adds audit writes on that same path.
+
+### Primary files added / updated by Claude
+
+- `src/modules/connectors/twin-projection.service.ts` (new), `src/modules/work-items/work-item-ownership.ts` (new)
+- `src/modules/workflow/workflow.service.ts`, `src/modules/work-items/work-item.service.ts`, `work-item.controller.ts`, `work-item.types.ts`
+- `src/modules/connectors/connector.service.ts`, `connector.controller.ts`, `connector.types.ts`, `jira-connector.adapter.ts`, `servicenow-connector.adapter.ts`, `sandbox/provider-sandbox.ts`
+- `src/modules/integrations/integration.service.ts`, `integration-support.ts`, `monitoring.service.ts`
+- `src/modules/sla/sla.controller.ts`, `aging-engine.service.ts`, `src/database/database.service.ts`
+- `public/index.html`, `test/twin-projection.spec.ts` (new), `test/ui-smoke.spec.ts`
+- `implementation-status.json`, `public/status.html` (generated), `walkthrough.md`, `README.md`
+
 ## Codex US16.4/US16.5 durable per-twin queue update — 2026-09-22
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. The Claude and earlier Codex/Gemini records below are retained as historical delivery context; their then-current queue and single-writer boundaries are superseded only where this section says so.

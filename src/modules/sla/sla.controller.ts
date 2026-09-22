@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Headers, Query, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Post, Body, Headers, Query, HttpException, HttpStatus, Inject } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { AgingEngineService } from './aging-engine.service';
 import { SlaCalendar } from './sla-calculator.service';
@@ -9,7 +9,7 @@ import { VALID_WORK_ITEM_TYPES } from '../work-items/work-item.types';
 export class SlaController {
   private dbService: DatabaseService;
 
-  constructor(private readonly agingEngine: AgingEngineService) {
+  constructor(@Inject(AgingEngineService) private readonly agingEngine: AgingEngineService) {
     this.dbService = DatabaseService.getInstance();
   }
 

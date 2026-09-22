@@ -40,6 +40,19 @@ export interface WorkItem {
   sla_suspended: boolean;
   /** Set by the Epic 8 escalation path once an item passes the tenant escalation threshold. */
   escalated_at?: string | null;
+  /** `local` items are Cadena-owned; `connector` items are twin-backed projections of a source record. */
+  origin?: 'local' | 'connector';
+  /** Provenance for twin-backed items. Source fields are read-only locally. */
+  source?: WorkItemSource | null;
+}
+
+export interface WorkItemSource {
+  system: string;
+  twin_id: string;
+  connector_id: string | null;
+  native_key: string;
+  native_url: string | null;
+  source_updated_at: string | null;
 }
 
 export interface CreateWorkItemDto {

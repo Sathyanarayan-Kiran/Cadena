@@ -646,6 +646,18 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claimed_by TEXT;`);
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`CREATE INDEX IF NOT EXISTS integration_connector_work_orders_twin ON integration_connector_work_orders (org_id, target_twin_id, status);`);
+    // Twin-backed WorkItem projection: connector twins appear as work items owned by their source.
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'local';`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_twin_id UUID;`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_connector_id UUID;`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_system TEXT;`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS native_url TEXT;`);
+    await this.db.exec(`ALTER TABLE work_items ADD COLUMN IF NOT EXISTS source_updated_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS work_items_source_twin ON work_items (org_id, source_twin_id) WHERE source_twin_id IS NOT NULL;`);
+    await this.db.exec(`ALTER TABLE work_item_links ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'local';`);
+    await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS work_item_id UUID;`);
+    await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS projection_status TEXT NOT NULL DEFAULT 'pending';`);
+    await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS projection_reason TEXT;`);
     await this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS integration_connector_work_orders_event_twin ON integration_connector_work_orders (source_event_id, target_twin_id) WHERE source_event_id IS NOT NULL;`);
     await this.db.exec(`
       UPDATE audit_events SET actor_type = 'integration'

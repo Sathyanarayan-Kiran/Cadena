@@ -800,10 +800,12 @@ export class MonitoringIntegrationService {
     provider: string,
   ): Promise<WorkItemSeverity | null> {
     const current = await this.dbService.db.query<any>(
-      `SELECT severity, priority, item_key FROM work_items WHERE id = $1 AND org_id = $2`,
+      `SELECT severity, priority, item_key, origin FROM work_items WHERE id = $1 AND org_id = $2`,
       [incidentId, orgId],
     );
     if (current.rows.length === 0) return null;
+    // Priority and severity of a twin-backed incident belong to its source (e.g. ServiceNow).
+    if (current.rows[0].origin === 'connector') return null;
 
     const existing = current.rows[0].severity as WorkItemSeverity | null;
     if (existing && severityRank(severity.mapped) >= severityRank(existing)) return null;

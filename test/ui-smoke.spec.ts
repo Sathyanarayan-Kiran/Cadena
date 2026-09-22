@@ -828,8 +828,8 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
   });
 
   it('shows healthy sources, twins, native links and counterparts', async () => {
-    await onboard(jiraConfig('Sandbox Jira'));
-    await onboard({
+    const jiraId = await onboard(jiraConfig('Sandbox Jira'));
+    const snowId = await onboard({
       name: 'Sandbox ServiceNow',
       provider: 'servicenow',
       baseUrl: SNOW_URL,
@@ -848,6 +848,11 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
       rules: [{ direction: 'target_to_source', from_state: 'Done', to_state: 'Resolved' }],
     });
     expect((await call(`/integrations/state-mappings/${draft.body.id}/publish`, {})).status).toBe(201);
+    // The seeded tenant has several teams, so projection needs an explicit owning team.
+    for (const id of [jiraId, snowId]) {
+      const configured = await call(`/integrations/connectors/${id}/projection`, { teamId: '00000000-0000-0000-0000-000000000001' });
+      expect(configured.status).toBe(201);
+    }
 
     await reload();
     expect(await isHidden('#sourceOnboarding')).toBe(true);
@@ -867,6 +872,7 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     expect(row.target).toBe('_blank');
     expect(row.text).toContain('ServiceNow INC0010000');
     expect(row.text).toContain('Sandbox Jira');
+    expect(row.text).toContain('On track');
   });
 
   it('inspects a twin, explains ownership, and routes a permitted state change', async () => {
@@ -882,6 +888,9 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     expect(drawer).toContain('Sandbox Jira · Jira');
     expect(drawer).toContain('Open in Jira');
     expect(drawer).toContain('ServiceNow INC0010000');
+    expect(drawer).toContain('CADENA GOVERNANCE');
+    expect(drawer).toContain('CAD-101 · story');
+    expect(drawer).toContain('Open traceability');
     const summary = await page.$eval('#twinBody .twin-field[data-field="summary"]', (node) => (node as HTMLElement).innerText);
     expect(summary).toContain('Owned by Jira');
     expect(summary).toContain('no outbound mapping');

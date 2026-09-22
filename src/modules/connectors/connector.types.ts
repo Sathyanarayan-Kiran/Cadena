@@ -42,6 +42,8 @@ export interface ConnectorConfigDto {
   requiredFields?: Record<string, string[]>;
   /** Operator edits Cadena may write back to this source. Everything is read-only by default. */
   writeBack?: ConnectorWriteBackPolicy;
+  /** How twins become governed WorkItems: owning team, type map and owner map. */
+  projection?: Record<string, unknown>;
 }
 
 export interface ConnectorWriteBackPolicy {
@@ -316,6 +318,22 @@ export interface TwinWorkspaceRow extends CanonicalTwin {
   counterparts: TwinCounterpart[];
   queuedWrites: number;
   failedWrites: number;
+  projection: TwinProjectionSummary;
+}
+
+/** The twin-backed WorkItem that puts this record under SLA, traceability and metrics governance. */
+export interface TwinProjectionSummary {
+  status: 'pending' | 'projected' | 'held' | 'disabled';
+  reason?: string;
+  workItemId?: string;
+  workItemKey?: string;
+  workItemType?: string;
+  agingBucket?: string;
+  agingScore?: number;
+  escalatedAt?: string;
+  enteredStateAt?: string;
+  teamId?: string;
+  ownerId?: string;
 }
 
 export interface TwinDetail extends TwinWorkspaceRow {

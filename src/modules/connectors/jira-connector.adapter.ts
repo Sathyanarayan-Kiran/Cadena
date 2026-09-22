@@ -22,7 +22,7 @@ import {
 import { optionNumber, optionString, stringList } from './connector-config';
 
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,31}$/;
-const STANDARD_FIELDS = ['summary', 'status', 'updated', 'priority', 'assignee', 'issuetype', 'project', 'description'];
+const STANDARD_FIELDS = ['summary', 'status', 'created', 'updated', 'priority', 'assignee', 'issuetype', 'project', 'description'];
 const PAGE_SIZE = 100;
 /** JQL datetimes have minute precision, so the query overlaps the watermark by one minute. */
 const JQL_OVERLAP_MS = 60_000;
@@ -208,6 +208,7 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
         assignee: f.assignee?.displayName ?? null,
         assigneeAccountId: f.assignee?.accountId ?? null,
         issueType: f.issuetype?.name ?? null,
+        createdAt: f.created ? normalizeJiraTimestamp(f.created) : null,
         projectKey: f.project?.key ?? key.split('-')[0],
         description: f.description ?? null,
         ...custom,

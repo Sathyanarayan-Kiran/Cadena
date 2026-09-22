@@ -102,6 +102,16 @@ export class ConnectorController {
     return this.service.configureWriteBack(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
   }
 
+  @Post(':id/projection')
+  public async configureProjection(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.service.configureProjection(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
+  }
+
   @Post(':id/sync')
   public async syncConnector(
     @Param('id') id: string,

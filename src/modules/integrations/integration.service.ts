@@ -265,9 +265,14 @@ export class IntegrationService {
           .replace(/^INCIDENT-/, 'INC-')
           .replace(/^RELEASE-/, 'REL-'));
       }
+      // Native source keys such as Jira's CAD-123 identify twin-backed items. They are only
+      // linked when such an item exists; an unmatched native-looking token is not reported.
+      for (const match of value.matchAll(NATIVE_KEY_PATTERN)) found.add(match[0]);
     }
     return Array.from(found);
   }
 }
 
 export type { IntegrationWorkItemRef };
+
+const NATIVE_KEY_PATTERN = /\b[A-Z][A-Z0-9_]{1,9}-\d+\b/g;

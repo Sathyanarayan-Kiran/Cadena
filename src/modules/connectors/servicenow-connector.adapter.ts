@@ -25,7 +25,7 @@ import { optionNumber, optionString, stringList } from './connector-config';
 const TABLE_NAME = /^[a-z][a-z0-9_]{0,79}$/;
 /** Core ITSM tables extend `task`, whose dictionary rows hold the shared columns such as `state`. */
 const TASK_TABLES = new Set(['incident', 'change_request', 'problem', 'sc_req_item', 'sc_task']);
-const SYNC_FIELDS = ['sys_id', 'number', 'short_description', 'state', 'priority', 'assigned_to', 'sys_updated_on', 'sys_updated_by'];
+const SYNC_FIELDS = ['sys_id', 'number', 'short_description', 'state', 'priority', 'assigned_to', 'sys_created_on', 'sys_updated_on', 'sys_updated_by'];
 const PAGE_SIZE = 100;
 
 /**
@@ -232,6 +232,7 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
         short_description: display('short_description'),
         state: status,
         stateCode: value('state'),
+        createdAt: value('sys_created_on') ? parseServiceNowUtc(value('sys_created_on')) : null,
         priority: display('priority') || null,
         assigned_to: display('assigned_to') || null,
       },

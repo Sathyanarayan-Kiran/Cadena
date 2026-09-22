@@ -167,7 +167,7 @@ export class IntegrationSupport {
         [orgId, key.toUpperCase()],
       );
       if (result.rows.length === 0) {
-        unresolved.push(key);
+        if (CADENA_KEY_PATTERN.test(key)) unresolved.push(key);
       } else {
         items.push({
           id: result.rows[0].id,
@@ -258,3 +258,6 @@ export class IntegrationSupport {
     return typeof value === 'string' ? value : new Date(value).toISOString();
   }
 }
+
+/** Keys Cadena itself issues; only these are reported when they do not resolve. */
+const CADENA_KEY_PATTERN = /^(?:EPIC|STORY|INC|REL)-[A-Z0-9]+$/;
