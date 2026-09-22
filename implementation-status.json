@@ -683,11 +683,11 @@
     },
     "US20.2": {
       "name": "Connector-led management workspace",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "connector-led-2026-09-22",
-      "note": "Added by the connector-led product decision. The pilot still presents local work-item creation as a primary action and does not yet make source connection, discovery, synchronization health or field ownership the production journey. The US17.1 Source connectors dialog provides connection, discovery, activation and health as a building block, but it is not yet the primary workspace."
+      "note": "Verified by <code>test/us20.2.spec.ts</code> and the connector-led browser suite (sandbox providers). <code>CADENA_INTERACTION_MODE</code> selects connector-led (staging/production default), pilot (local only) or standalone. Connector-led mode opens on source health, lag, twin counts and write-back queues with Connect / Discover / Synchronize as primary actions, and refuses local creation and backlog import server-side. Twins show source, native link, sync state, last success, field authority and counterparts. Externally owned fields are read-only unless a permitted outbound mapping exists; permitted state changes become audited connector work orders, and blocked edits are audited and explained. Boundary: connector twins are not yet merged into the work-item SLA, traceability and metrics engines."
     },
     "US10.9": {
       "name": "Authenticated tenant and actor identity",

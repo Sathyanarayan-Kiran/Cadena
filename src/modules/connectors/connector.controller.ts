@@ -92,6 +92,16 @@ export class ConnectorController {
     return this.service.pause(requireOrg(orgHeader), id, resolveActor(actorHeader));
   }
 
+  @Post(':id/write-back')
+  public async configureWriteBack(
+    @Param('id') id: string,
+    @Body() body: { state?: boolean },
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.service.configureWriteBack(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
+  }
+
   @Post(':id/sync')
   public async syncConnector(
     @Param('id') id: string,

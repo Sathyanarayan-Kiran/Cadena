@@ -13,6 +13,7 @@ import { AuthModule } from './modules/auth/auth.module';
 import { AuditController } from './modules/audit/audit.controller';
 import { HealthModule } from './modules/health/health.module';
 import { ConnectorModule } from './modules/connectors/connector.module';
+import { WorkspaceModule } from './modules/workspace/workspace.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { ConnectorModule } from './modules/connectors/connector.module';
     AuthModule,
     HealthModule,
     ConnectorModule,
+    WorkspaceModule,
   ],
   controllers: [WorkItemController, WorkflowController, LineageController, AuditController],
   providers: [],

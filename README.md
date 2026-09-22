@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex and Claude updates, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. The canonical backlog contains **20 epics and 73 stories**, with **35 done / 6 partial / 32 not started**. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
+> **Current status (Codex and Claude updates, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. The US20.2 connector-led management workspace is implemented: connector-led mode is the staging/production default, local creation is refused there, and externally owned fields are read-only except for governed, audited state write-back. The canonical backlog contains **20 epics and 73 stories**, with **36 done / 6 partial / 31 not started**. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
 
 ## Product Interaction Model
 
@@ -18,7 +18,7 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 - Cadena owns the immutable correlation, mapping versions, synchronization decisions, derived policy state, audit evidence and cross-system traceability.
 - Connector ingestion creates or updates the internal canonical twin; users are not expected to maintain a duplicate backlog.
 - A permitted edit to an externally owned field is written back through the audited connector. An edit with no permitted outbound mapping is rejected rather than stored as silent divergence.
-- Local creation remains useful for the current pilot, automated incident generation, administration and optional standalone deployments. US20.2 will remove it as the primary production action and put connect, discover and synchronize first.
+- Local creation remains available only where it is intentionally enabled: the local `pilot` demonstration and `standalone` deployments. In `connector-led` mode (the staging/production default) it is refused, and connect, discover and synchronize are the primary actions. Automated incident generation from monitoring is unaffected. See [Connector-led Workspace (US20.2)](#connector-led-workspace-us202).
 
 ---
 
@@ -38,7 +38,7 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 - **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
-- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, source-connector onboarding and health, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. It still exposes local creation as a pilot action; the connector-led workspace in US20.2 is documented but not implemented.
+- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, source-connector onboarding and health, a connector-led landing view and synchronized-twin workspace with governed write-back, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. Local creation appears only in pilot (under Pilot actions) and standalone modes.
 - **Testing**: Vitest + NestJS Testing + Supertest running 144 automated tests across 41 test files, plus a 15-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
@@ -401,6 +401,45 @@ Held decisions are recorded and not executed. Retryable failures (429, 5xx, time
 - One replica only: an in-process single-flight lock prevents overlapping syncs of one connector.
 - Two same-provider connectors in one tenant cannot own the same external record.
 - Azure DevOps, Zendesk, Salesforce, GitHub and Asana are not implemented.
+
+---
+
+## Connector-led Workspace (US20.2)
+
+The workspace follows `CADENA_INTERACTION_MODE`:
+
+| Mode | Default for | Landing view | Local work-item creation |
+| --- | --- | --- | --- |
+| `connector-led` | staging, production | Source health and synchronized twins | Refused by the API (HTTP 403) and hidden |
+| `pilot` | local | Source health above the demo board | Under **Pilot actions** only; refused outside local runtime |
+| `standalone` | opt-in | Source health and the local board | Primary action |
+
+`GET /workspace/config` reports the active mode. The landing view reads from these endpoints:
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /workspace/overview` | Per-source health plus totals: sources, healthy, needing attention, twins, worst lag, queued and failed write-backs |
+| `GET /workspace/twins` | Twins with source, native key/URL, native state, sync state, last successful sync, field authority, counterparts and write-back counts |
+| `GET /workspace/twins/:id` | The same, plus a policy for each field and the write-back history |
+| `POST /workspace/twins/:id/edits` | A governed edit, for example `{ "field": "state", "value": "Done" }` |
+
+### Editing externally owned fields
+
+Every externally owned field is read-only unless a permitted outbound mapping exists:
+
+- **No outbound mapping** (every field except state; field write-back needs US17.2): HTTP 422, `reason: "no_outbound_mapping"`, with an ownership explanation.
+- **State**, when any of these holds: write-back is disabled for the connector (the default), the connector is not active, or no state values were discovered. The response is HTTP 422 with `write_back_disabled`, `connector_unavailable` or `state_values_unknown`.
+- **Permitted state change:** the value must be a discovered state. It becomes an audited `operator_edit` connector work order, which the owning connector executes. The change is then translated to linked counterparts through the published US13.1 mapping, and its echo is suppressed on the next poll.
+
+Blocked and routed edits both write audit events (`TwinEditBlocked`, `TwinEditRouted`). The twin itself is never changed locally; it reflects the source after the next synchronization, so no local edit can create silent divergence.
+
+Enable state write-back at registration with `"writeBack": { "state": true }`, or later with `POST /integrations/connectors/:id/write-back`.
+
+### Local demonstration sandbox
+
+`CADENA_CONNECTOR_SANDBOX=enabled` routes the real Jira and ServiceNow adapters to in-process provider stand-ins at `https://jira.sandbox.cadena.local` (project `CAD`) and `https://servicenow.sandbox.cadena.local` (table `incident`). Any secret reference that resolves is accepted there. Runtime configuration refuses the sandbox outside the local runtime.
+
+**Boundary:** connector twins are not yet merged into the work-item SLA, traceability, notification and metrics engines, which still operate on local work items.
 
 ---
 
@@ -841,8 +880,8 @@ The next delivery sequence follows the connector-led product decision:
 2. **US17.1 live validation and completion**:
    - With credentials and explicit authorisation, enable `CADENA_CONNECTOR_LIVE_HTTP` against a Jira Cloud and ServiceNow sandbox, then add scheduled/webhook-triggered polling, a durable sync lease, and the remaining provider adapters.
 
-3. **US20.2 — connector-led management workspace**:
-   - Replace local creation as the primary production action with connect, discover and synchronize; expose source, authority, counterpart and synchronization health on every twin.
+3. **US16.4/US16.5 — per-twin durable queues and failure isolation**:
+   - Isolate one record's failing writes from the rest of its source and replace the in-process sync lock with a database lease before enabling multi-replica synchronization. Then merge connector twins into the SLA, traceability and metrics engines.
 
 4. **US13.4 and US13.5 — safe content and closure sync**:
    - Keep private work notes out of public streams and write complete resolution metadata back to the ITSM record.
@@ -940,4 +979,7 @@ Multi-worker dispatch, a managed broker, real notification transports, CMDB fede
 | **US17.1** | Materializes and updates canonical twins without duplicates under a paginated watermark | `test/us17.1.spec.ts` | **PASS (API fakes)** |
 | **US17.1** | Reports missing scopes and required fields before activation | `test/us17.1.spec.ts` | **PASS** |
 | **US17.1** | Accepts only secret references and makes no network call without explicit live-HTTP authorisation | `test/us17.1.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **US20.2** | Connector-led mode opens on source health with connect/discover/synchronize and refuses local creation and import | `test/us20.2.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **US20.2** | Shows source, native link, sync state, last successful sync, field authority and counterpart for each twin | `test/us20.2.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **US20.2** | Blocks edits without an outbound mapping and routes permitted state changes through an audited connector work order | `test/us20.2.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
 | **Backlog fixture** | Imports every epic and story from the backlog with its parent-child hierarchy | `test/backlog-fixture.spec.ts` | **PASS** |

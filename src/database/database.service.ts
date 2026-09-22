@@ -581,6 +581,10 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS native_status TEXT;`);
     await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS content_hash TEXT;`);
     await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS source_updated_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ALTER COLUMN transaction_id DROP NOT NULL;`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'state_translation';`);
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS requested_by TEXT;`);
+    await this.db.exec(`CREATE INDEX IF NOT EXISTS integration_connector_work_orders_twin ON integration_connector_work_orders (org_id, target_twin_id, status);`);
     await this.db.exec(`
       UPDATE audit_events SET actor_type = 'integration'
       WHERE actor_type = 'user'

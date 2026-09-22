@@ -38,11 +38,20 @@ import {
   ConnectorStatus,
   ConnectorWorkOrder,
   ConnectorWorkOrderStatus,
+  ConnectorWriteBackPolicy,
   ExternalRecordPayload,
   IngestionPollResult,
+  TwinCounterpart,
+  TwinDetail,
+  TwinEditResult,
+  TwinFieldPolicy,
+  TwinWorkspaceRow,
   WatermarkCursor,
+  WorkspaceOverview,
 } from './connector.types';
 import { SecretManagerResolver } from './secret-manager-ref';
+import { getProviderSandbox } from './sandbox/provider-sandbox';
+import { loadRuntimeConfig } from '../../config/runtime-config';
 
 const MAX_WORK_ORDER_ATTEMPTS = 5;
 const WORK_ORDER_BASE_BACKOFF_MS = 30_000;
@@ -86,8 +95,10 @@ export class ConnectorService {
   private inFlight = new Set<string>();
 
   constructor() {
-    this.registerAdapter(new JiraConnectorAdapter());
-    this.registerAdapter(new ServiceNowConnectorAdapter());
+    // The sandbox is a local-only demonstration transport; runtime config refuses it elsewhere.
+    const transport = loadRuntimeConfig().connectorSandbox ? getProviderSandbox().fetch : undefined;
+    this.registerAdapter(new JiraConnectorAdapter(transport));
+    this.registerAdapter(new ServiceNowConnectorAdapter(transport));
   }
 
   public registerAdapter(adapter: ConnectorAdapter): void {
@@ -129,6 +140,7 @@ export class ConnectorService {
       projectKeys: dto.projectKeys === undefined ? undefined : stringList(dto.projectKeys).map((key) => key.toUpperCase()),
       tableNames: dto.tableNames === undefined ? undefined : stringList(dto.tableNames).map((table) => table.toLowerCase()),
       requiredFields: this.validateRequiredFields(dto.requiredFields),
+      writeBack: this.validateWriteBack(dto.writeBack),
     }));
     this.guard(() => adapter.validateConfig(config));
 
@@ -292,6 +304,30 @@ export class ConnectorService {
     return this.getConnector(orgId, connectorId);
   }
 
+  /** Changes which operator edits may be written back to this source. */
+  public async configureWriteBack(
+    orgId: string,
+    connectorId: string,
+    policy: ConnectorWriteBackPolicy,
+    actorId = 'system',
+  ): Promise<ConnectorRecord> {
+    const connector = await this.getConnector(orgId, connectorId);
+    const writeBack = this.guard(() => this.validateWriteBack(policy));
+    await this.withEvent(async (tx) => {
+      await tx.query(
+        `UPDATE integration_connectors SET config = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND org_id = $3`,
+        [JSON.stringify({ ...connector.config, writeBack }), connectorId, orgId],
+      );
+      return this.event(orgId, connectorId, actorId, 'ConnectorWriteBackConfigured', {
+        connector_id: connectorId,
+        provider: connector.provider,
+        before: connector.config.writeBack || {},
+        after: writeBack,
+      });
+    });
+    return this.getConnector(orgId, connectorId);
+  }
+
   // ─── Ingestion ─────────────────────────────────────────────────────────────
 
   public async syncConnector(orgId: string, connectorId: string, actorId = 'system'): Promise<IngestionPollResult> {
@@ -430,13 +466,15 @@ export class ConnectorService {
   ): Promise<RecordOutcome> {
     if (!record.externalId) throw new Error('Provider record has no immutable id');
     const existing = await this.dbService.db.query<any>(
-      `SELECT id, connector_id, content_hash, native_status FROM integration_canonical_twins
-       WHERE org_id = $1 AND provider = $2 AND artifact_type = $3 AND external_id = $4`,
+      `SELECT t.id, t.connector_id, t.content_hash, t.native_status, c.name AS connector_name
+       FROM integration_canonical_twins t
+       JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
+       WHERE t.org_id = $1 AND t.provider = $2 AND t.artifact_type = $3 AND t.external_id = $4`,
       [orgId, connector.provider, record.artifactType, record.externalId],
     );
     const prior = existing.rows[0];
     if (prior && prior.connector_id !== connector.id) {
-      throw new Error(`${connector.provider}/${record.artifactType}/${record.externalId} is already managed by connector ${prior.connector_id}`);
+      throw new Error(`${connector.provider}/${record.artifactType}/${record.externalId} is already managed by connector "${prior.connector_name}"`);
     }
 
     const contentHash = createHash('sha256').update(stableStringify({
@@ -526,15 +564,19 @@ export class ConnectorService {
     nodeId: string,
     record: ExternalRecordPayload,
     counters: PollCounters,
+    options: { skipEchoCheck?: boolean } = {},
   ): Promise<void> {
-    const decision = await this.syncGuardService.evaluateWebhook(orgId, {
-      identity,
-      actor_id: record.updatedBy || `${connector.provider}:unattributed`,
-      payload: { state: record.status },
-    });
-    if (decision.suppressed) {
-      counters.echoesSuppressed++;
-      return;
+    // An operator edit Cadena itself just wrote is already recorded; it is propagated directly.
+    if (!options.skipEchoCheck) {
+      const decision = await this.syncGuardService.evaluateWebhook(orgId, {
+        identity,
+        actor_id: record.updatedBy || `${connector.provider}:unattributed`,
+        payload: { state: record.status },
+      });
+      if (decision.suppressed) {
+        counters.echoesSuppressed++;
+        return;
+      }
     }
 
     const counterparts = await this.dbService.db.query<any>(
@@ -711,10 +753,16 @@ export class ConnectorService {
        ORDER BY created_at DESC, id DESC LIMIT 200`,
       [orgId, connectorId],
     );
-    return result.rows.map((row) => ({
+    return result.rows.map((row) => this.mapWorkOrder(row));
+  }
+
+  private mapWorkOrder(row: any): ConnectorWorkOrder {
+    return {
       id: row.id,
       orgId: row.org_id,
-      transactionId: row.transaction_id,
+      transactionId: row.transaction_id || null,
+      origin: row.origin || 'state_translation',
+      requestedBy: row.requested_by || undefined,
       sourceConnectorId: row.source_connector_id,
       targetConnectorId: row.target_connector_id,
       targetTwinId: row.target_twin_id,
@@ -729,7 +777,7 @@ export class ConnectorService {
       executedAt: iso(row.executed_at),
       createdAt: iso(row.created_at)!,
       updatedAt: iso(row.updated_at)!,
-    }));
+    };
   }
 
   // ─── Operational visibility ────────────────────────────────────────────────
@@ -784,7 +832,11 @@ export class ConnectorService {
     }
     query += ` ORDER BY updated_at DESC, id ASC LIMIT 500`;
     const result = await this.dbService.db.query<any>(query, params);
-    return result.rows.map((row) => ({
+    return result.rows.map((row) => this.mapTwin(row));
+  }
+
+  private mapTwin(row: any): CanonicalTwin {
+    return {
       id: row.id,
       orgId: row.org_id,
       connectorId: row.connector_id,
@@ -802,7 +854,312 @@ export class ConnectorService {
       sourceUpdatedAt: iso(row.source_updated_at),
       createdAt: iso(row.created_at)!,
       updatedAt: iso(row.updated_at)!,
-    }));
+    };
+  }
+
+  // ─── Connector-led workspace (US20.2) ─────────────────────────────────────
+
+  public async getWorkspaceOverview(orgId: string): Promise<WorkspaceOverview> {
+    const connectors = await this.listConnectors(orgId);
+    const sources = await Promise.all(connectors.map(async (connector) => ({
+      ...(await this.getHealth(orgId, connector.id)),
+      name: connector.name,
+    })));
+    const attention = sources.filter((source) =>
+      ['error', 'degraded'].includes(source.status) || source.workOrders.dead > 0 || source.workOrders.failed > 0);
+    return {
+      sources,
+      totals: {
+        sources: sources.length,
+        healthy: sources.filter((source) => source.status === 'active' && !attention.includes(source)).length,
+        attention: attention.length,
+        twins: sources.reduce((sum, source) => sum + source.twinCount, 0),
+        maxLagSeconds: sources.reduce((max, source) => Math.max(max, source.syncLagSeconds), 0),
+        queuedWrites: sources.reduce((sum, source) => sum + source.workOrders.pending + source.workOrders.failed, 0),
+        failedWrites: sources.reduce((sum, source) => sum + source.workOrders.dead, 0),
+      },
+    };
+  }
+
+  public async listTwinWorkspace(orgId: string): Promise<TwinWorkspaceRow[]> {
+    await this.dbService.initialize();
+    const result = await this.dbService.db.query<any>(
+      `SELECT t.*, c.name AS connector_name, c.status AS connector_status, c.last_success_at AS connector_last_success_at,
+              (SELECT COUNT(*)::int FROM integration_connector_work_orders w
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'failed')) AS queued_writes,
+              (SELECT COUNT(*)::int FROM integration_connector_work_orders w
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status = 'dead') AS failed_writes
+       FROM integration_canonical_twins t
+       JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
+       WHERE t.org_id = $1
+       ORDER BY t.updated_at DESC, t.id ASC
+       LIMIT 500`,
+      [orgId],
+    );
+    const counterparts = await this.counterpartsFor(orgId, result.rows.map((row) => row.correlation_node_id).filter(Boolean));
+    return result.rows.map((row) => this.mapWorkspaceRow(row, counterparts));
+  }
+
+  public async getTwinDetail(orgId: string, twinId: string): Promise<TwinDetail> {
+    await this.dbService.initialize();
+    if (!isUuid(twinId)) throw new NotFoundException(`Twin ${twinId} not found`);
+    const rows = await this.listTwinWorkspaceRows(orgId, twinId);
+    if (!rows.length) throw new NotFoundException(`Twin ${twinId} not found`);
+    const row = rows[0];
+    const connector = await this.getConnector(orgId, row.connectorId);
+    const orders = await this.dbService.db.query<any>(
+      `SELECT * FROM integration_connector_work_orders
+       WHERE org_id = $1 AND target_twin_id = $2
+       ORDER BY created_at DESC, id DESC LIMIT 25`,
+      [orgId, twinId],
+    );
+    return {
+      ...row,
+      fields: this.fieldPolicies(row, connector),
+      workOrders: orders.rows.map((order) => this.mapWorkOrder(order)),
+    };
+  }
+
+  /**
+   * Governed edit of an externally owned field. Nothing is stored locally: a permitted change
+   * becomes an audited connector work order against the owning system, and a refused change is
+   * audited and explained. There is no path that leaves the twin silently diverged.
+   */
+  public async routeTwinEdit(
+    orgId: string,
+    twinId: string,
+    input: { field?: unknown; value?: unknown },
+    actorId = 'system',
+  ): Promise<TwinEditResult> {
+    const twin = await this.getTwinDetail(orgId, twinId);
+    const requested = typeof input?.field === 'string' ? input.field.trim() : '';
+    if (!requested) throw new BadRequestException('field is required');
+    if (typeof input?.value !== 'string' || !input.value.trim()) throw new BadRequestException('value must be a non-empty string');
+    const field = twin.fields.find((candidate) =>
+      candidate.field === requested || candidate.nativeField === requested || (requested === 'status' && candidate.field === 'state'));
+    const policy: TwinFieldPolicy = field || {
+      field: requested,
+      nativeField: requested,
+      label: requested,
+      value: undefined,
+      authority: twin.provider,
+      editable: false,
+      reason: 'no_outbound_mapping',
+      message: `${providerName(twin.provider)} owns '${requested}'. Cadena has no outbound mapping for it; change it in ${providerName(twin.provider)}.`,
+    };
+
+    if (!policy.editable) {
+      await this.withEvent(async () => this.event(orgId, twinId, actorId, 'TwinEditBlocked', {
+        twin_id: twinId,
+        connector_id: twin.connectorId,
+        field: policy.field,
+        authority: policy.authority,
+        reason: policy.reason,
+      }));
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        decision: 'blocked',
+        field: policy.field,
+        authority: policy.authority,
+        reason: policy.reason,
+        message: policy.message,
+      });
+    }
+
+    const value = policy.allowedValues?.find((candidate) => sameState(candidate, input.value)) || null;
+    if (!value) {
+      throw new UnprocessableEntityException({
+        statusCode: 422,
+        decision: 'blocked',
+        field: policy.field,
+        reason: 'invalid_value',
+        message: `'${String(input.value).trim()}' is not a ${providerName(twin.provider)} ${policy.label.toLowerCase()}. Allowed: ${(policy.allowedValues || []).join(', ')}`,
+      });
+    }
+    const empty = { prepared: 0, executed: 0, held: 0 };
+    if (sameState(twin.status, value)) {
+      return { decision: 'noop', twinId, field: policy.field, value, propagation: empty, message: `${twin.nativeKey || twin.externalId} is already ${value}` };
+    }
+
+    const workOrderId = randomUUID();
+    await this.withEvent(async (tx) => {
+      await tx.query(
+        `INSERT INTO integration_connector_work_orders
+         (id, org_id, transaction_id, origin, requested_by, source_connector_id, target_connector_id, target_twin_id,
+          target_entity_type, target_external_id, target_state, fields, status, created_at, updated_at)
+         VALUES ($1, $2, NULL, 'operator_edit', $3, NULL, $4, $5, $6, $7, $8, '{}', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [workOrderId, orgId, actorId, twin.connectorId, twinId, twin.artifactType, twin.externalId, value],
+      );
+      return this.event(orgId, twinId, actorId, 'TwinEditRouted', {
+        twin_id: twinId,
+        work_order_id: workOrderId,
+        connector_id: twin.connectorId,
+        field: policy.field,
+        before: twin.status || null,
+        after: value,
+      });
+    });
+
+    const outcome = await this.executeWorkOrder(orgId, workOrderId);
+    const propagation = { ...empty };
+    if (outcome === 'executed') {
+      const connector = await this.getConnector(orgId, twin.connectorId);
+      const counters: PollCounters = {
+        twinsCreated: 0, twinsUpdated: 0, twinsUnchanged: 0, echoesSuppressed: 0,
+        workOrdersPrepared: 0, workOrdersHeld: 0, workOrdersExecuted: 0, workOrdersFailed: 0,
+      };
+      if (twin.correlationNodeId) {
+        await this.propagateStateChange(
+          orgId,
+          connector,
+          { system: twin.provider, entity_type: twin.artifactType, immutable_id: twin.externalId },
+          twin.correlationNodeId,
+          {
+            externalId: twin.externalId,
+            artifactType: twin.artifactType,
+            title: twin.title || '',
+            status: value,
+            fields: twin.payload,
+            updatedAt: new Date().toISOString(),
+          },
+          counters,
+          { skipEchoCheck: true },
+        );
+      }
+      propagation.prepared = counters.workOrdersPrepared;
+      propagation.executed = counters.workOrdersExecuted;
+      propagation.held = counters.workOrdersHeld;
+    }
+    const [order] = (await this.dbService.db.query<any>(
+      `SELECT * FROM integration_connector_work_orders WHERE id = $1 AND org_id = $2`,
+      [workOrderId, orgId],
+    )).rows.map((row) => this.mapWorkOrder(row));
+    const where = providerName(twin.provider);
+    const message = outcome === 'executed'
+      ? `${where} accepted ${twin.nativeKey || twin.externalId} → ${value}; the twin refreshes on the next synchronization`
+      : outcome === 'failed'
+        ? `${where} did not accept the change yet; it will be retried (${order?.lastError || 'provider error'})`
+        : outcome === 'dead'
+          ? `${where} refused the change: ${order?.lastError || 'provider error'}`
+          : `The change is queued until ${twin.connectorName} is active`;
+    return { decision: 'routed', twinId, field: policy.field, value, workOrder: order, propagation, message };
+  }
+
+  private async listTwinWorkspaceRows(orgId: string, twinId: string): Promise<TwinWorkspaceRow[]> {
+    const result = await this.dbService.db.query<any>(
+      `SELECT t.*, c.name AS connector_name, c.status AS connector_status, c.last_success_at AS connector_last_success_at,
+              (SELECT COUNT(*)::int FROM integration_connector_work_orders w
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status IN ('pending', 'failed')) AS queued_writes,
+              (SELECT COUNT(*)::int FROM integration_connector_work_orders w
+                WHERE w.org_id = t.org_id AND w.target_twin_id = t.id AND w.status = 'dead') AS failed_writes
+       FROM integration_canonical_twins t
+       JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
+       WHERE t.org_id = $1 AND t.id = $2`,
+      [orgId, twinId],
+    );
+    const counterparts = await this.counterpartsFor(orgId, result.rows.map((row) => row.correlation_node_id).filter(Boolean));
+    return result.rows.map((row) => this.mapWorkspaceRow(row, counterparts));
+  }
+
+  private mapWorkspaceRow(row: any, counterparts: Map<string, TwinCounterpart[]>): TwinWorkspaceRow {
+    return {
+      ...this.mapTwin(row),
+      connectorName: row.connector_name,
+      connectorStatus: row.connector_status,
+      lastSuccessAt: iso(row.connector_last_success_at),
+      counterparts: counterparts.get(row.correlation_node_id) || [],
+      queuedWrites: Number(row.queued_writes || 0),
+      failedWrites: Number(row.failed_writes || 0),
+    };
+  }
+
+  private async counterpartsFor(orgId: string, nodeIds: string[]): Promise<Map<string, TwinCounterpart[]>> {
+    const byNode = new Map<string, TwinCounterpart[]>();
+    if (!nodeIds.length) return byNode;
+    const result = await this.dbService.db.query<any>(
+      `SELECT pair.own_id, n.id AS node_id, n.system, n.entity_type, n.immutable_id, n.display_key, n.url,
+              t.id AS twin_id, t.native_status
+       FROM (
+         SELECT source_node_id AS own_id, target_node_id AS other_id FROM integration_correlation_links
+          WHERE org_id = $1 AND relationship = 'counterpart' AND source_node_id = ANY($2::uuid[])
+         UNION
+         SELECT target_node_id AS own_id, source_node_id AS other_id FROM integration_correlation_links
+          WHERE org_id = $1 AND relationship = 'counterpart' AND target_node_id = ANY($2::uuid[])
+       ) pair
+       JOIN integration_correlation_nodes n ON n.org_id = $1 AND n.id = pair.other_id
+       LEFT JOIN integration_canonical_twins t ON t.org_id = n.org_id AND t.correlation_node_id = n.id
+       ORDER BY n.system, n.display_key`,
+      [orgId, nodeIds],
+    );
+    for (const row of result.rows) {
+      const list = byNode.get(row.own_id) || [];
+      if (!list.some((item) => item.nodeId === row.node_id)) {
+        list.push({
+          nodeId: row.node_id,
+          system: row.system,
+          entityType: row.entity_type,
+          immutableId: row.immutable_id,
+          displayKey: row.display_key || null,
+          url: row.url || null,
+          twinId: row.twin_id || undefined,
+          status: row.native_status || undefined,
+        });
+      }
+      byNode.set(row.own_id, list);
+    }
+    return byNode;
+  }
+
+  private fieldPolicies(twin: TwinWorkspaceRow, connector: ConnectorRecord): TwinFieldPolicy[] {
+    const provider = providerName(twin.provider);
+    const entity = connector.discoveryMetadata?.entities?.find((candidate) => candidate.entityType === twin.artifactType);
+    const nativeState = twin.provider === 'servicenow' ? 'state' : 'status';
+    const stateSchema = entity?.fields.find((field) => field.id === nativeState);
+    const writeBack = (connector.config.writeBack || {}) as ConnectorWriteBackPolicy;
+    const available = Boolean(connector.activatedAt) && ['active', 'degraded'].includes(connector.status);
+    const canWrite = connector.discoveryMetadata?.supportedCapabilities?.includes('state_write') ?? false;
+
+    let reason: TwinFieldPolicy['reason'] = 'write_back_enabled';
+    let message = `Changes are written to ${provider} through an audited connector work order.`;
+    if (!writeBack.state) {
+      reason = 'write_back_disabled';
+      message = `${provider} owns this state. State write-back is disabled for ${connector.name}; change it in ${provider} or ask an administrator to enable write-back.`;
+    } else if (!canWrite) {
+      reason = 'capability_missing';
+      message = `${connector.name} cannot write states back to ${provider}.`;
+    } else if (!stateSchema?.allowedValues?.length) {
+      reason = 'state_values_unknown';
+      message = `No ${provider} state values were discovered for ${twin.artifactType}; run discovery before editing.`;
+    } else if (!available) {
+      reason = 'connector_unavailable';
+      message = `${connector.name} is ${connector.status}; state changes are refused until it is active.`;
+    }
+    const policies: TwinFieldPolicy[] = [{
+      field: 'state',
+      nativeField: nativeState,
+      label: 'State',
+      value: twin.status,
+      authority: twin.fieldAuthority[nativeState] || twin.provider,
+      editable: reason === 'write_back_enabled',
+      reason,
+      message,
+      ...(stateSchema?.allowedValues?.length ? { allowedValues: stateSchema.allowedValues } : {}),
+    }];
+    for (const [fieldId, authority] of Object.entries(twin.fieldAuthority)) {
+      if (fieldId === nativeState) continue;
+      const schema = entity?.fields.find((field) => field.id === fieldId);
+      policies.push({
+        field: fieldId,
+        nativeField: fieldId,
+        label: schema?.name || fieldId,
+        value: twin.payload[fieldId] ?? null,
+        authority,
+        editable: false,
+        reason: 'no_outbound_mapping',
+        message: `${providerName(authority)} owns ${schema?.name || fieldId}. Cadena has no outbound mapping for it; change it in ${providerName(authority)}.`,
+      });
+    }
+    return policies;
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
@@ -903,6 +1260,18 @@ export class ConnectorService {
       }
     }
     return JSON.parse(JSON.stringify(options));
+  }
+
+  private validateWriteBack(input: unknown): ConnectorWriteBackPolicy {
+    if (input === undefined || input === null) return { state: false };
+    if (typeof input !== 'object' || Array.isArray(input)) throw new ConnectorConfigurationError('writeBack must be an object');
+    const unknown = Object.keys(input).filter((key) => key !== 'state');
+    if (unknown.length) {
+      throw new ConnectorConfigurationError(`writeBack supports only 'state'; no outbound mapping exists for ${unknown.join(', ')}`);
+    }
+    const state = (input as Record<string, unknown>).state;
+    if (state !== undefined && typeof state !== 'boolean') throw new ConnectorConfigurationError('writeBack.state must be true or false');
+    return { state: state === true };
   }
 
   private validateRequiredFields(input: unknown): Record<string, string[]> | undefined {
@@ -1055,6 +1424,12 @@ function pickPaths(source: Record<string, unknown>, paths: string[]): Record<str
     cursor[segments[segments.length - 1]] = value;
   }
   return picked;
+}
+
+function providerName(provider: string): string {
+  if (provider === 'jira') return 'Jira';
+  if (provider === 'servicenow') return 'ServiceNow';
+  return provider;
 }
 
 function isUuid(value: string): boolean {

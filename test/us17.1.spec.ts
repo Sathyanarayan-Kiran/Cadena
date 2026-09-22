@@ -10,7 +10,7 @@ import { JiraConnectorAdapter } from '../src/modules/connectors/jira-connector.a
 import { ServiceNowConnectorAdapter } from '../src/modules/connectors/servicenow-connector.adapter';
 import { SecretManagerResolver } from '../src/modules/connectors/secret-manager-ref';
 import { ConnectorCredentialError } from '../src/modules/connectors/connector-http';
-import { FakeJiraApi, FakeServiceNowApi } from './fixtures/fake-connector-apis';
+import { FakeJiraApi, FakeServiceNowApi } from '../src/modules/connectors/sandbox/provider-sandbox';
 
 process.env.US171_JIRA_TOKEN = 'jira-token-value';
 process.env.SECRET_SNOW_PROD_PASSWORD = 'snow-password-value';

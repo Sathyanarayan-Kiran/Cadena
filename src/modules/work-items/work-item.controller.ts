@@ -1,3 +1,4 @@
+import { workspaceConfig } from '../workspace/workspace-config';
 import {
   Body,
   Controller,
@@ -17,6 +18,23 @@ import { WorkflowService, GuardFailedError, MissingRequiredFieldsError, InvalidT
 import { RbacService } from '../rbac/rbac.service';
 import { importBacklogFixture } from '../../scripts/import-backlog';
 
+/**
+ * In connector-led mode, work enters Cadena through connector ingestion (US17.1/US20.2);
+ * creating or importing local work items would build the duplicate backlog the product avoids.
+ */
+function requireLocalCreation(): void {
+  if (!workspaceConfig().localCreation) {
+    throw new HttpException(
+      {
+        statusCode: 403,
+        error: 'Forbidden',
+        message: 'Local work-item creation is disabled in connector-led mode. Records enter Cadena from connected sources.',
+      },
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
 @Controller('workitems')
 export class WorkItemController {
   private service = new WorkItemService();
@@ -30,6 +48,7 @@ export class WorkItemController {
     @Body('org_id') bodyOrgId?: string,
     @Body('team_id') bodyTeamId?: string,
   ) {
+    requireLocalCreation();
     const orgId = headerOrgId || bodyOrgId || '00000000-0000-0000-0000-000000000099';
     const teamId = bodyTeamId || '00000000-0000-0000-0000-000000000001';
 
@@ -42,6 +61,7 @@ export class WorkItemController {
     @Headers('x-actor-id') actorId?: string,
     @Headers('x-org-id') headerOrgId?: string,
   ) {
+    requireLocalCreation();
     try {
       if (headerOrgId && dto.org_id && headerOrgId !== dto.org_id) {
         throw new HttpException('Body org_id does not match the active tenant', HttpStatus.FORBIDDEN);

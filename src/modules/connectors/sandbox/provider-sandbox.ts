@@ -1,11 +1,12 @@
-import { ConnectorFetch, ConnectorHttpRequest, ConnectorHttpResponse } from '../../src/modules/connectors/connector-http';
+import { ConnectorFetch, ConnectorHttpRequest, ConnectorHttpResponse } from '../connector-http';
 
 /**
- * Deterministic in-process fakes of the Jira Cloud REST v3 and ServiceNow Table APIs.
+ * Deterministic in-process stand-ins for the Jira Cloud REST v3 and ServiceNow Table APIs.
  *
  * They implement only the endpoints the native adapters call, enforce authentication, apply the
- * watermark filters the adapters send, paginate, and record every request so tests can assert
- * the exact native calls. Nothing here touches the network.
+ * watermark filters the adapters send, paginate, and record every request. Nothing here touches
+ * the network. Acceptance tests use them directly; local demonstrations reach them through
+ * `CADENA_CONNECTOR_SANDBOX=enabled`, which runtime configuration refuses outside local mode.
  */
 
 export interface RecordedRequest {
@@ -41,7 +42,8 @@ abstract class FakeProviderApi {
   private gate: Promise<void> | null = null;
   protected clock = Date.parse('2026-09-22T09:00:00.000Z');
 
-  constructor(public readonly baseUrl: string, private readonly expectedAuthorization: string) {}
+  /** With no expected authorization, any Basic or Bearer header carrying a secret is accepted. */
+  constructor(public readonly baseUrl: string, private readonly expectedAuthorization?: string) {}
 
   public readonly fetch: ConnectorFetch = async (url: string, init: ConnectorHttpRequest) => {
     const parsed = new URL(url);
@@ -55,7 +57,12 @@ abstract class FakeProviderApi {
     this.requests.push(request);
     if (this.gate) await this.gate;
     if (!url.startsWith(this.baseUrl)) return respond(404, { error: { message: 'unknown host' } });
-    if (init.headers.Authorization !== this.expectedAuthorization) {
+    const authorization = init.headers.Authorization || '';
+    const authorized = this.expectedAuthorization
+      ? authorization === this.expectedAuthorization
+      : /^Bearer \S+$/.test(authorization)
+        || (/^Basic /.test(authorization) && /:.+$/.test(Buffer.from(authorization.slice(6), 'base64').toString('utf8')));
+    if (!authorized) {
       return respond(401, { errorMessages: ['Authentication failed'] });
     }
     const failure = this.failures.find((rule) =>
@@ -114,8 +121,8 @@ export class FakeJiraApi extends FakeProviderApi {
   public issues = new Map<string, FakeJiraIssue>();
   private nextId = 20000;
 
-  constructor(baseUrl = 'https://acme.atlassian.net', email = 'sync@acme.test', token = 'jira-token-value') {
-    super(baseUrl, `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`);
+  constructor(baseUrl = 'https://acme.atlassian.net', email = 'sync@acme.test', token: string | null = 'jira-token-value') {
+    super(baseUrl, token === null ? undefined : `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`);
   }
 
   public addIssue(input: Partial<FakeJiraIssue> & { key: string; summary: string; status: string }): FakeJiraIssue {
@@ -239,8 +246,8 @@ export class FakeServiceNowApi extends FakeProviderApi {
   ]);
   private sequence = 10000;
 
-  constructor(baseUrl = 'https://acme.service-now.com', private readonly username = 'svc.cadena', password = 'snow-password-value') {
-    super(baseUrl, `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`);
+  constructor(baseUrl = 'https://acme.service-now.com', private readonly username = 'svc.cadena', password: string | null = 'snow-password-value') {
+    super(baseUrl, password === null ? undefined : `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`);
   }
 
   public addRecord(table: string, input: Partial<FakeServiceNowRecord> & { short_description: string; state: string }): FakeServiceNowRecord {
@@ -339,4 +346,36 @@ export class FakeServiceNowApi extends FakeProviderApi {
     }
     return respond(405, { error: { message: 'Method not allowed' } });
   }
+}
+
+// ─── Local sandbox ───────────────────────────────────────────────────────────
+
+export const SANDBOX_JIRA_URL = 'https://jira.sandbox.cadena.local';
+export const SANDBOX_SERVICENOW_URL = 'https://servicenow.sandbox.cadena.local';
+
+export interface ProviderSandbox {
+  jira: FakeJiraApi;
+  servicenow: FakeServiceNowApi;
+  fetch: ConnectorFetch;
+}
+
+let sandbox: ProviderSandbox | null = null;
+
+/** Process-wide sandbox with a small seeded Jira project and ServiceNow incident queue. */
+export function getProviderSandbox(): ProviderSandbox {
+  if (sandbox) return sandbox;
+  const jira = new FakeJiraApi(SANDBOX_JIRA_URL, 'any', null);
+  const servicenow = new FakeServiceNowApi(SANDBOX_SERVICENOW_URL, 'svc.cadena', null);
+  jira.addIssue({ key: 'CAD-101', summary: 'Checkout latency regression', status: 'In Progress', priority: 'High' });
+  jira.addIssue({ key: 'CAD-102', summary: 'Retry payment webhook deliveries', status: 'To Do', priority: 'Medium' });
+  jira.addIssue({ key: 'CAD-103', summary: 'Publish incident runbook links', status: 'Done', priority: 'Low' });
+  servicenow.addRecord('incident', { short_description: 'Checkout pages slow for EU customers', state: '2', priority: '2' });
+  servicenow.addRecord('incident', { short_description: 'Payment confirmation emails delayed', state: '1', priority: '3' });
+  const fetch: ConnectorFetch = (url, init) => {
+    if (url.startsWith(SANDBOX_JIRA_URL)) return jira.fetch(url, init);
+    if (url.startsWith(SANDBOX_SERVICENOW_URL)) return servicenow.fetch(url, init);
+    return Promise.resolve(respond(404, { errorMessages: [`Sandbox has no provider at ${new URL(url).host}`] }));
+  };
+  sandbox = { jira, servicenow, fetch };
+  return sandbox;
 }

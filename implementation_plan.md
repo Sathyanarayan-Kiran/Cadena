@@ -2,6 +2,58 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude US20.2 connector-led management workspace — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Code, Opus 5)** on 2026-09-22.
+
+**Status:** US20.2 moves from not started to **done**. The ledger is now **36 done / 6 partial / 31 not started** across **20 epics / 73 stories**.
+
+### Scope delivered by Claude
+
+- **Interaction mode.** `CADENA_INTERACTION_MODE` is `connector-led`, `pilot` or `standalone`. It defaults to `pilot` for the local runtime and `connector-led` for staging and production. `pilot` is refused outside local mode. The staging configmap and env example set `connector-led` explicitly. `GET /workspace/config` reports the mode, whether local creation is allowed, and whether pilot actions are offered.
+- **Local-creation gating on the server.** In connector-led mode, `POST /workitems` and `POST /workitems/import-backlog` return HTTP 403 with an explanation. The UI hides the controls, but the API enforces the rule too.
+- **Connector-led landing view.** Four tiles cover connected sources (healthy and needing attention), synchronized twins, worst synchronization lag, and queued or failed write-backs. Below them sit per-source health cards (status, last success, lag, twins, write-back queues, last error) with Discover and Synchronize actions. A first-run onboarding panel appears when no source is connected. **Connect source** is the primary header action. The work board, SLA tiles, local-work navigation and **New work item** are hidden.
+- **Placement by mode.** In pilot mode the sources section sits above the existing board, and **New work item** moves into **Pilot actions**. In standalone mode **New work item** stays a primary action.
+- **Synchronized-twin workspace.** A searchable table shows record (native key linked to the source), source, native state, sync state, last successful sync, field authority, correlated counterpart and write-back activity. Opening a row shows a drawer with provenance, counterparts, per-field ownership and write-back history.
+- **Governed edits of externally owned fields.** `GET /workspace/twins/:id` returns a policy for each field. Edits go to `POST /workspace/twins/:id/edits`, with these outcomes:
+  - **No outbound mapping** (every field except state): the edit is blocked with an ownership explanation and a `TwinEditBlocked` audit event.
+  - **State, with write-back disabled** (the default, since connectors are read-only unless `writeBack.state` is enabled at registration or through `POST /integrations/connectors/:id/write-back`), **connector unavailable**, or **state values unknown**: the edit is blocked and audited.
+  - **Permitted state change:** it is validated against the discovered state values and recorded as an `operator_edit` work order (origin, requesting actor, `TwinEditRouted` audit event). The owning connector executes it, the write is recorded for echo suppression, and the change is translated to linked counterparts through the published US13.1 mapping.
+  - **The twin is never mutated locally.** It reflects the source after the next synchronization, so no path creates silent divergence.
+  - **Failed and refused writes stay visible** on the twin, the source card and the landing tiles.
+- **Local provider sandbox.** `CADENA_CONNECTOR_SANDBOX=enabled` (local runtime only; refused elsewhere) routes the real Jira and ServiceNow adapters to in-process provider stand-ins with seeded records. The acceptance tests and the connector-led browser suite use the same stand-ins, which moved from `test/fixtures` to `src/modules/connectors/sandbox/provider-sandbox.ts`.
+- **Clearer degraded messages.** An identity conflict now names the owning connector instead of its UUID.
+
+### Verification added by Claude
+
+- `test/us20.2.spec.ts` (7 tests): mode derivation and refusals; creation and import gating per mode; overview totals for empty, healthy and degraded sources; twin provenance, counterparts, field policies and tenant isolation; blocked and audited edits; a routed edit that executes, propagates, suppresses its echo and refreshes on the next poll; retrying, refused and paused write-backs.
+- `test/ui-smoke.spec.ts` adds a second browser server running connector-led against the sandbox: onboarding with no creation path, healthy sources with native links and counterparts, twin inspection with read-only ownership and a routed state change, and a degraded source at phone width with no console errors. It also covers pilot-mode placement of **New work item**.
+- TypeScript build: **PASS**
+- Non-browser regression: **PASS — 162 tests across 43 files**
+- Browser smoke suite: **PASS — 21 tests**
+- Tracker generation: **PASS — 36 done / 6 partial / 31 not started**
+- Staging Kustomize render: **PASS**
+
+### Remaining boundary
+
+- Connector twins live in `integration_canonical_twins`. They are not yet merged into the work-item SLA, traceability, notification and metrics engines, which still operate on local `work_items`.
+- Only state has an outbound mapping. Field-level write-back needs US17.2 visual field mappings.
+- The target-specific required fields that a mapped transition needs are not yet prompted for in the drawer (US13.1 boundary).
+- Per-twin durable queues and failure isolation (US16.4/US16.5) and a database sync lease are prerequisites for multi-replica synchronization.
+
+### Primary files added / updated by Claude
+
+- `src/config/runtime-config.ts`
+- `src/modules/workspace/workspace.controller.ts`, `workspace.module.ts`, `workspace-config.ts` (new)
+- `src/modules/connectors/connector.service.ts`, `connector.controller.ts`, `connector.types.ts`
+- `src/modules/connectors/sandbox/provider-sandbox.ts` (moved from `test/fixtures`)
+- `src/modules/work-items/work-item.controller.ts`
+- `src/database/database.service.ts`, `src/app.module.ts`
+- `public/index.html`
+- `test/us20.2.spec.ts` (new), `test/us17.1.spec.ts`, `test/ui-smoke.spec.ts`
+- `.env.staging.example`, `deploy/staging/configmap.yaml`
+- `implementation-status.json`, `public/status.html` (generated), `walkthrough.md`, `README.md`
+
 ## Claude US17.1 native connector correction and completion of the Jira/ServiceNow slice — 2026-09-22
 
 > **Attribution boundary:** Everything in this section was reviewed, designed and implemented by **Claude (Claude Code, Opus 5)** on 2026-09-22. It is kept separate from both the Codex records below and the original Gemini material.

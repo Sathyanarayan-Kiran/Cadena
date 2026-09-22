@@ -1,7 +1,18 @@
 export type RuntimeMode = 'local' | 'staging' | 'production';
 
+/**
+ * How the workspace presents work (US20.2).
+ * - `connector-led`: Jira/ServiceNow are the systems of record; local work-item creation is refused.
+ * - `pilot`: local demonstration with seeded data; creation lives under Pilot actions. Local runtime only.
+ * - `standalone`: local work management is intentionally enabled alongside connectors.
+ */
+export type InteractionMode = 'connector-led' | 'pilot' | 'standalone';
+
 export interface RuntimeConfig {
   mode: RuntimeMode;
+  interactionMode: InteractionMode;
+  /** Wires connectors to in-process sandbox provider APIs. Local runtime only. */
+  connectorSandbox: boolean;
   port: number;
   seedDemoData: boolean;
   trustProxy: number | false;
@@ -21,6 +32,17 @@ function parseMode(value: string | undefined): RuntimeMode {
   const mode = (value || 'local').trim().toLowerCase();
   if (mode === 'local' || mode === 'staging' || mode === 'production') return mode;
   throw new Error('CADENA_RUNTIME_MODE must be local, staging, or production');
+}
+
+function parseInteractionMode(value: string | undefined, runtime: RuntimeMode): InteractionMode {
+  const mode = (value || (runtime === 'local' ? 'pilot' : 'connector-led')).trim().toLowerCase();
+  if (mode !== 'connector-led' && mode !== 'pilot' && mode !== 'standalone') {
+    throw new Error('CADENA_INTERACTION_MODE must be connector-led, pilot, or standalone');
+  }
+  if (mode === 'pilot' && runtime !== 'local') {
+    throw new Error(`${runtime} mode forbids CADENA_INTERACTION_MODE=pilot; use connector-led or standalone`);
+  }
+  return mode;
 }
 
 function parsePort(value: string | undefined): number {
@@ -56,6 +78,14 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
   const seedDemoData = booleanValue(env.CADENA_SEED_DEMO_DATA, mode === 'local');
   const sslMode = (env.CADENA_DATABASE_SSL || (databaseUrl ? 'verify-full' : 'disable')).trim().toLowerCase();
 
+  const interactionMode = parseInteractionMode(env.CADENA_INTERACTION_MODE, mode);
+  const sandboxText = (env.CADENA_CONNECTOR_SANDBOX || '').trim().toLowerCase();
+  if (sandboxText && sandboxText !== 'enabled' && sandboxText !== 'disabled') {
+    throw new Error('CADENA_CONNECTOR_SANDBOX must be enabled or disabled');
+  }
+  const connectorSandbox = sandboxText === 'enabled';
+  if (connectorSandbox && mode !== 'local') throw new Error(`${mode} mode forbids CADENA_CONNECTOR_SANDBOX=enabled`);
+
   if (databaseUrl) validateDatabaseUrl(databaseUrl);
   if (databaseUrl && dataDir) throw new Error('Configure DATABASE_URL or CADENA_DATA_DIR, not both');
 
@@ -77,6 +107,8 @@ export function loadRuntimeConfig(env: NodeJS.ProcessEnv = process.env): Runtime
 
   return {
     mode,
+    interactionMode,
+    connectorSandbox,
     port: parsePort(env.PORT),
     seedDemoData,
     trustProxy,

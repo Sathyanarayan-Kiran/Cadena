@@ -40,6 +40,13 @@ export interface ConnectorConfigDto {
   tableNames?: string[];
   /** Fields that synchronization depends on, keyed by entity type. Missing fields block activation. */
   requiredFields?: Record<string, string[]>;
+  /** Operator edits Cadena may write back to this source. Everything is read-only by default. */
+  writeBack?: ConnectorWriteBackPolicy;
+}
+
+export interface ConnectorWriteBackPolicy {
+  /** Allow operators to change a twin's native state through an audited connector work order. */
+  state?: boolean;
 }
 
 export interface ConnectorFieldSchema {
@@ -179,10 +186,15 @@ export interface IngestionPollResult {
 
 export type ConnectorWorkOrderStatus = 'pending' | 'executed' | 'failed' | 'dead' | 'noop';
 
+export type ConnectorWorkOrderOrigin = 'state_translation' | 'operator_edit';
+
 export interface ConnectorWorkOrder {
   id: string;
   orgId: string;
-  transactionId: string;
+  /** US13.1 state-sync transaction for translations; null for operator edits. */
+  transactionId: string | null;
+  origin: ConnectorWorkOrderOrigin;
+  requestedBy?: string;
   sourceConnectorId: string | null;
   targetConnectorId: string;
   targetTwinId: string;
@@ -221,4 +233,75 @@ export interface ConnectorProviderDescriptor {
   scopeLabel: string;
   authTypes: Array<'basic' | 'bearer'>;
   capabilities: ConnectorCapability[];
+}
+
+export type TwinFieldEditReason =
+  | 'write_back_enabled'
+  | 'no_outbound_mapping'
+  | 'write_back_disabled'
+  | 'connector_unavailable'
+  | 'capability_missing'
+  | 'state_values_unknown';
+
+export interface TwinFieldPolicy {
+  /** Canonical field name; `state` for the native lifecycle field. */
+  field: string;
+  /** Provider-native field id, e.g. `status` (Jira) or `state` (ServiceNow). */
+  nativeField: string;
+  label: string;
+  value: unknown;
+  /** System that owns the field. */
+  authority: string;
+  editable: boolean;
+  reason: TwinFieldEditReason;
+  message: string;
+  allowedValues?: string[];
+}
+
+export interface TwinCounterpart {
+  nodeId: string;
+  system: string;
+  entityType: string;
+  immutableId: string;
+  displayKey: string | null;
+  url: string | null;
+  twinId?: string;
+  status?: string;
+}
+
+export interface TwinWorkspaceRow extends CanonicalTwin {
+  connectorName: string;
+  connectorStatus: ConnectorStatus;
+  lastSuccessAt?: string;
+  counterparts: TwinCounterpart[];
+  queuedWrites: number;
+  failedWrites: number;
+}
+
+export interface TwinDetail extends TwinWorkspaceRow {
+  fields: TwinFieldPolicy[];
+  workOrders: ConnectorWorkOrder[];
+}
+
+export interface TwinEditResult {
+  decision: 'routed' | 'noop';
+  twinId: string;
+  field: string;
+  value: string;
+  workOrder?: ConnectorWorkOrder;
+  propagation: { prepared: number; executed: number; held: number };
+  message: string;
+}
+
+export interface WorkspaceOverview {
+  sources: Array<ConnectorHealth & { name: string }>;
+  totals: {
+    sources: number;
+    healthy: number;
+    attention: number;
+    twins: number;
+    maxLagSeconds: number;
+    queuedWrites: number;
+    failedWrites: number;
+  };
 }

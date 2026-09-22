@@ -680,6 +680,18 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await closeAnyDialog();
   });
 
+  it('keeps local creation under Pilot actions and shows sources above the pilot board', async () => {
+    await closeAnyDialog();
+    expect(await page.$eval('#createButton', (node) => (node as HTMLElement).hidden)).toBe(true);
+    expect(await page.$eval('#sourceWorkspace', (node) => (node as HTMLElement).hidden)).toBe(false);
+    expect(await page.$eval('#workspaceSection', (node) => (node as HTMLElement).hidden)).toBe(false);
+    await page.click('#pilotActionsButton');
+    await page.waitForSelector('#pilotDialog[open]', { timeout: 10000 });
+    await page.click('#pilotCreateButton');
+    await page.waitForSelector('#createDialog[open]', { timeout: 10000 });
+    await closeAnyDialog();
+  });
+
   it('renders without console errors and does not overflow at phone width', async () => {
     await page.setViewport({ width: 390, height: 844 });
     await page.reload({ waitUntil: 'networkidle0' });
@@ -696,6 +708,220 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     );
     expect(menuVisible).toBe(true);
 
+    expect(consoleErrors).toEqual([]);
+  });
+});
+
+/**
+ * Connector-led mode (US20.2), driven against the local provider sandbox so the real Jira and
+ * ServiceNow adapters run end to end without contacting any provider.
+ */
+describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
+  const LED_PORT = 3478;
+  const LED_BASE = `http://127.0.0.1:${LED_PORT}`;
+  const LED_ORG = '00000000-0000-0000-0000-000000000099';
+  const JIRA_URL = 'https://jira.sandbox.cadena.local';
+  const SNOW_URL = 'https://servicenow.sandbox.cadena.local';
+  let server: ChildProcess;
+  let browser: Browser;
+  let page: Page;
+  const consoleErrors: string[] = [];
+
+  const call = async (path: string, body?: unknown) => {
+    const response = await fetch(`${LED_BASE}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: { 'x-org-id': LED_ORG, 'x-actor-id': 'ui.operator', 'Content-Type': 'application/json' },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+    return { status: response.status, body: await response.json().catch(() => null) as any };
+  };
+
+  const onboard = async (config: Record<string, unknown>) => {
+    const created = await call('/integrations/connectors', config);
+    expect(created.status).toBe(201);
+    for (const step of ['test', 'discover', 'activate', 'sync']) {
+      const result = await call(`/integrations/connectors/${created.body.id}/${step}`, {});
+      expect(result.status).toBe(201);
+    }
+    return created.body.id as string;
+  };
+
+  const jiraConfig = (name: string) => ({
+    name,
+    provider: 'jira',
+    baseUrl: JIRA_URL,
+    credentials: { apiToken: 'env:UI_SANDBOX_TOKEN' },
+    options: { accountEmail: 'sync@acme.test' },
+    projectKeys: ['CAD'],
+    writeBack: { state: true },
+  });
+
+  const textOf = (selector: string) => page.$eval(selector, (node) => (node as HTMLElement).innerText);
+  const isHidden = (selector: string) => page.$eval(selector, (node) => (node as HTMLElement).hidden || getComputedStyle(node).display === 'none');
+  const reload = async () => {
+    await page.reload({ waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.querySelector('#sourceKpiSources')?.textContent !== '—', { timeout: 15000 });
+  };
+  const openTwinRow = async (key: string) => {
+    const clicked = await page.evaluate((target) => {
+      const row = Array.from(document.querySelectorAll('#twinRows tr')).find((node) => node.querySelector('a')?.textContent === target) as HTMLElement | undefined;
+      row?.click();
+      return Boolean(row);
+    }, key);
+    expect(clicked).toBe(true);
+    await page.waitForSelector('#twinDialog[open] .twin-field', { timeout: 10000 });
+  };
+
+  beforeAll(async () => {
+    server = spawn(process.execPath, [serverEntry], {
+      env: {
+        ...process.env,
+        PORT: String(LED_PORT),
+        CADENA_DATA_DIR: '',
+        CADENA_INTERACTION_MODE: 'connector-led',
+        CADENA_CONNECTOR_SANDBOX: 'enabled',
+        CADENA_CONNECTOR_LIVE_HTTP: '',
+        UI_SANDBOX_TOKEN: 'sandbox-token',
+      },
+      stdio: 'ignore',
+    });
+    const deadline = Date.now() + 60000;
+    while (Date.now() < deadline) {
+      try {
+        if ((await fetch(`${LED_BASE}/health/ready`)).ok) break;
+      } catch {
+        // not listening yet
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    browser = await puppeteer.launch({ executablePath, headless: true, args: ['--no-sandbox', '--disable-dev-shm-usage'] });
+    page = await browser.newPage();
+    await page.setViewport({ width: 1440, height: 900 });
+    page.on('console', (message) => {
+      if (message.type() === 'error') consoleErrors.push(message.text());
+    });
+    page.on('pageerror', (error) => consoleErrors.push(`pageerror: ${error.message}`));
+    await page.goto(LED_BASE, { waitUntil: 'networkidle0' });
+    await page.waitForFunction(() => document.querySelector('#sourceKpiSources')?.textContent !== '—', { timeout: 20000 });
+  }, 180000);
+
+  afterAll(async () => {
+    await browser?.close();
+    server?.kill();
+  });
+
+  it('opens on connector onboarding with no local creation path', async () => {
+    expect(await textOf('#pageTitle')).toBe('Synchronization health');
+    expect(await isHidden('#sourceOnboarding')).toBe(false);
+    expect(await isHidden('#workspaceSection')).toBe(true);
+    expect(await isHidden('#workKpis')).toBe(true);
+    expect(await isHidden('#createButton')).toBe(true);
+    expect(await isHidden('#pilotActionsButton')).toBe(true);
+    expect(await page.$$eval('[data-local-work]', (nodes) => nodes.every((node) => (node as HTMLElement).hidden))).toBe(true);
+    expect(await textOf('#connectSourceButton')).toContain('Connect source');
+    const refused = await call('/workitems', { type: 'story', title: 'Duplicate backlog', team_id: '00000000-0000-0000-0000-000000000001' });
+    expect(refused.status).toBe(403);
+
+    await page.click('#onboardingConnectButton');
+    await page.waitForSelector('#connectorsDialog[open]', { timeout: 10000 });
+    await page.evaluate(() => (document.querySelector('#connectorsDialog') as HTMLDialogElement).close());
+  });
+
+  it('shows healthy sources, twins, native links and counterparts', async () => {
+    await onboard(jiraConfig('Sandbox Jira'));
+    await onboard({
+      name: 'Sandbox ServiceNow',
+      provider: 'servicenow',
+      baseUrl: SNOW_URL,
+      credentials: { password: 'env:UI_SANDBOX_TOKEN' },
+      options: { username: 'svc.cadena' },
+      tableNames: ['incident'],
+    });
+    expect((await call('/integrations/correlations', {
+      source: { system: 'servicenow', entity_type: 'incident', immutable_id: 'sys10000' },
+      target: { system: 'jira', entity_type: 'issue', immutable_id: '20000' },
+    })).status).toBe(201);
+    const draft = await call('/integrations/state-mappings', {
+      name: 'Sandbox lifecycle',
+      source: { system: 'servicenow', entity_type: 'incident' },
+      target: { system: 'jira', entity_type: 'issue' },
+      rules: [{ direction: 'target_to_source', from_state: 'Done', to_state: 'Resolved' }],
+    });
+    expect((await call(`/integrations/state-mappings/${draft.body.id}/publish`, {})).status).toBe(201);
+
+    await reload();
+    expect(await isHidden('#sourceOnboarding')).toBe(true);
+    expect(await textOf('#sourceKpiSources')).toBe('2');
+    expect(await textOf('#sourceKpiTwins')).toBe('5');
+    expect((await textOf('#sourceKpiSourcesContext')).toLowerCase()).toContain('2 healthy');
+    expect(await page.$$eval('#sourceHealthList .source-card', (cards) => cards.length)).toBe(2);
+    expect(await textOf('#sourceHealthList')).toContain('Sandbox ServiceNow');
+    expect(await page.$$eval('#twinRows tr', (rows) => rows.length)).toBe(5);
+
+    const row = await page.evaluate(() => {
+      const tr = Array.from(document.querySelectorAll('#twinRows tr')).find((node) => node.querySelector('a')?.textContent === 'CAD-101');
+      const link = tr?.querySelector('a') as HTMLAnchorElement | undefined;
+      return { href: link?.href, target: link?.target, text: (tr as HTMLElement | undefined)?.innerText };
+    });
+    expect(row.href).toBe('https://jira.sandbox.cadena.local/browse/CAD-101');
+    expect(row.target).toBe('_blank');
+    expect(row.text).toContain('ServiceNow INC0010000');
+    expect(row.text).toContain('Sandbox Jira');
+  });
+
+  it('inspects a twin, explains ownership, and routes a permitted state change', async () => {
+    await openTwinRow('INC0010000');
+    const snowState = await page.$eval('#twinBody .twin-field[data-field="state"]', (node) => (node as HTMLElement).innerText);
+    expect(snowState).toContain('Owned by ServiceNow');
+    expect(snowState).toContain('write-back is disabled');
+    expect(await page.$('#twinBody .twin-field[data-field="state"] select')).toBeNull();
+    await page.evaluate(() => (document.querySelector('#twinDialog') as HTMLDialogElement).close());
+
+    await openTwinRow('CAD-101');
+    const drawer = await textOf('#twinBody');
+    expect(drawer).toContain('Sandbox Jira · Jira');
+    expect(drawer).toContain('Open in Jira');
+    expect(drawer).toContain('ServiceNow INC0010000');
+    const summary = await page.$eval('#twinBody .twin-field[data-field="summary"]', (node) => (node as HTMLElement).innerText);
+    expect(summary).toContain('Owned by Jira');
+    expect(summary).toContain('no outbound mapping');
+    expect(await page.$('#twinBody .twin-field[data-field="summary"] select')).toBeNull();
+
+    await page.select('#twinBody .twin-field[data-field="state"] select', 'Done');
+    await page.click('#twinBody .twin-field[data-field="state"] button');
+    await page.waitForFunction(
+      () => (document.querySelector('#twinBody')?.textContent ?? '').includes('Operator edit → Done'),
+      { timeout: 10000 },
+    );
+    expect(await textOf('#twinBody .activity-list')).toContain('executed');
+    await page.evaluate(() => (document.querySelector('#twinDialog') as HTMLDialogElement).close());
+
+    // The counterpart incident was resolved through the published mapping.
+    const snow = (await call('/integrations/connectors')).body.find((connector: any) => connector.provider === 'servicenow');
+    await call(`/integrations/connectors/${snow.id}/sync`, {});
+    const twins = (await call('/workspace/twins')).body;
+    expect(twins.find((twin: any) => twin.nativeKey === 'INC0010000').status).toBe('Resolved');
+  });
+
+  it('flags a degraded source and stays within a phone viewport without console errors', async () => {
+    await onboard(jiraConfig('Overlapping Jira'));
+    await reload();
+    expect((await textOf('#sourceKpiSourcesContext')).toLowerCase()).toContain('1 needs attention');
+    const degraded = await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('#sourceHealthList .source-card')).find((node) => node.textContent?.includes('Overlapping Jira'));
+      return { attention: card?.classList.contains('attention'), text: (card as HTMLElement | undefined)?.innerText };
+    });
+    expect(degraded.attention).toBe(true);
+    expect(degraded.text).toContain('degraded');
+    expect(degraded.text).toContain('already managed by connector');
+
+    await page.setViewport({ width: 390, height: 844 });
+    await reload();
+    const overflows = await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1);
+    expect(overflows).toBe(false);
+    await openTwinRow('CAD-102');
+    const drawerFits = await page.$eval('#twinDialog', (node) => node.getBoundingClientRect().width <= window.innerWidth + 1);
+    expect(drawerFits).toBe(true);
     expect(consoleErrors).toEqual([]);
   });
 });

@@ -2,8 +2,29 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, and the partial US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed state propagation, verified against deterministic API fakes). The canonical backlog is **20 epics / 73 stories**, with **35 done / 6 partial / 32 not started**.
-**Verification:** 155 automated tests across 42 test files, plus 16 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, and the partial US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed state propagation, verified against deterministic API fakes), and the US20.2 connector-led management workspace. The canonical backlog is **20 epics / 73 stories**, with **36 done / 6 partial / 31 not started**.
+**Verification:** 162 automated tests across 43 test files, plus 21 browser smoke tests driving the real page in pilot and connector-led modes.
+
+---
+
+## 2026-09-22 — US20.2 Connector-led management workspace (Claude)
+
+The workspace now matches the product decision: Jira and ServiceNow are the systems of record, and Cadena governs their records.
+
+- **Three interaction modes.** `CADENA_INTERACTION_MODE`:
+  - **connector-led** is the default in staging and production. Local creation is refused, and the landing view is source health.
+  - **pilot** is local only. The demo board stays, and **New work item** moves into **Pilot actions**.
+  - **standalone** keeps local work management alongside connectors.
+- **Landing view.** Tiles for connected sources, synchronized twins, worst lag and write-back queues, followed by per-source health cards with **Discover** and **Synchronize**, and an onboarding panel when nothing is connected.
+- **Twin workspace.** Each twin shows its native key linked to Jira/ServiceNow, source, state, sync state, last successful sync, field authority, counterpart and write-back activity. A drawer explains who owns each field.
+- **Governed edits.** Fields are read-only unless an outbound mapping exists. With state write-back enabled on a connector, a state change becomes an audited connector work order. It is executed on the source and translated to linked counterparts, and its echo is suppressed. Blocked edits are explained and audited. Nothing is changed locally.
+- **Local sandbox.** `CADENA_CONNECTOR_SANDBOX=enabled` (local runtime only) runs the real adapters against in-process Jira/ServiceNow stand-ins for demos.
+
+**Try it:** set `CADENA_INTERACTION_MODE=connector-led`, `CADENA_CONNECTOR_SANDBOX=enabled` and `SANDBOX_TOKEN=x`, then run `npm run dev`. Choose **Connect source**, use base URL `https://jira.sandbox.cadena.local`, any account email, `env:SANDBOX_TOKEN` and project `CAD`, and tick write-back. Then **Test → Discover → Activate → Synchronize** on the card, and open a twin.
+
+**Still open:** connector twins do not yet feed the work-item SLA, traceability and metrics engines; only state has an outbound mapping; per-twin queues (US16.4/US16.5) come before multi-replica synchronization.
+
+**Verified by** `test/us20.2.spec.ts` (7 tests), the browser suite (21 tests, including 4 connector-led), and 162 non-browser tests across 43 files.
 
 ---
 
