@@ -1,131 +1,284 @@
-import { ConnectorAdapter } from './connector.interface';
+import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorStateWrite } from './connector.interface';
 import {
+  ConnectorFetch,
+  ConnectorConfigurationError,
+  ConnectorCredentialError,
+  ConnectorRemoteError,
+  assertTimeZone,
+  basicAuthHeader,
+  createLiveConnectorFetch,
+  formatInTimeZone,
+  requestJson,
+  trimBaseUrl,
+} from './connector-http';
+import {
+  ConnectorCapability,
   ConnectorDiscoveryResult,
-  ConnectorProviderType,
-  ConnectorRecord,
+  ConnectorEntitySchema,
+  ConnectorFieldSchema,
+  ConnectorProviderDescriptor,
   ExternalRecordPayload,
   WatermarkCursor,
 } from './connector.types';
+import { optionNumber, optionString, stringList } from './connector-config';
 
-export interface ServiceNowFixtureItem {
-  sys_id: string;
-  number: string;
-  short_description: string;
-  state: string;
-  priority?: string;
-  assigned_to?: string;
-  sys_updated_on: string;
-}
+const TABLE_NAME = /^[a-z][a-z0-9_]{0,79}$/;
+/** Core ITSM tables extend `task`, whose dictionary rows hold the shared columns such as `state`. */
+const TASK_TABLES = new Set(['incident', 'change_request', 'problem', 'sc_req_item', 'sc_task']);
+const SYNC_FIELDS = ['sys_id', 'number', 'short_description', 'state', 'priority', 'assigned_to', 'sys_updated_on', 'sys_updated_by'];
+const PAGE_SIZE = 100;
 
 /**
- * ServiceNow Native Connector Adapter Boundary.
+ * Native ServiceNow connector (Table API).
  *
- * Implements standard connector adapter contract for ServiceNow Table API (`incident`, `change_request`).
+ * - Connection: `GET /api/now/table/{table}?sysparm_limit=1`
+ * - Discovery: `sys_dictionary` for columns (including inherited `task` columns) and
+ *   `sys_choice` for state labels and codes
+ * - Incremental ingestion: `sys_updated_on>=<watermark>^ORDERBYsys_updated_on`, offset-paginated
+ * - State write: `PATCH /api/now/table/{table}/{sys_id}` with the discovered state code
  */
 export class ServiceNowConnectorAdapter implements ConnectorAdapter {
-  public readonly provider: ConnectorProviderType = 'servicenow';
+  public readonly provider = 'servicenow' as const;
+  public readonly capabilities: readonly ConnectorCapability[] = [
+    'connection_test',
+    'scope_discovery',
+    'field_discovery',
+    'custom_field_discovery',
+    'state_discovery',
+    'incremental_query',
+    'state_write',
+  ];
+  public readonly descriptor: ConnectorProviderDescriptor = {
+    provider: 'servicenow',
+    displayName: 'ServiceNow ITSM',
+    scopeLabel: 'Tables',
+    authTypes: ['basic', 'bearer'],
+    capabilities: [...this.capabilities],
+  };
 
-  private fixtures: ServiceNowFixtureItem[] = [];
+  constructor(private readonly http: ConnectorFetch = createLiveConnectorFetch()) {}
 
-  constructor(initialFixtures?: ServiceNowFixtureItem[]) {
-    if (initialFixtures) {
-      this.fixtures = [...initialFixtures];
+  public validateConfig(config: Record<string, unknown>): void {
+    const baseUrl = optionString(config, 'baseUrl');
+    if (!baseUrl || !/^https?:\/\/[^\s]+$/i.test(baseUrl)) {
+      throw new ConnectorConfigurationError('ServiceNow connectors require an http(s) baseUrl such as https://acme.service-now.com');
+    }
+    const tables = stringList(config.tableNames);
+    if (tables.length === 0) throw new ConnectorConfigurationError('ServiceNow connectors require at least one table name');
+    const invalid = tables.filter((table) => !TABLE_NAME.test(table));
+    if (invalid.length) throw new ConnectorConfigurationError(`Invalid ServiceNow table names: ${invalid.join(', ')}`);
+    assertTimeZone(this.timeZone(config));
+
+    const credentials = (config.credentials || {}) as Record<string, string>;
+    const authType = config.authType || 'basic';
+    if (authType === 'basic') {
+      if (!credentials.password) throw new ConnectorCredentialError('Basic ServiceNow auth requires credentials.password');
+      if (!optionString(config.options, 'username')) {
+        throw new ConnectorConfigurationError('Basic ServiceNow auth requires options.username');
+      }
+    } else if (authType === 'bearer') {
+      if (!credentials.accessToken) throw new ConnectorCredentialError('Bearer ServiceNow auth requires credentials.accessToken');
+    } else {
+      throw new ConnectorConfigurationError(`Unsupported ServiceNow authType '${String(authType)}'`);
     }
   }
 
-  public setFixtures(fixtures: ServiceNowFixtureItem[]): void {
-    this.fixtures = [...fixtures];
+  public entityTypes(config: Record<string, unknown>): string[] {
+    return stringList(config.tableNames);
   }
 
-  public async testConnection(connector: ConnectorRecord): Promise<boolean> {
-    return true;
+  public async testConnection(ctx: ConnectorContext): Promise<{ account: string }> {
+    const [table] = this.entityTypes(ctx.connector.config);
+    await this.get(ctx, `/api/now/table/${table}?sysparm_limit=1&sysparm_fields=sys_id`);
+    return { account: optionString(ctx.connector.config.options, 'username') || 'oauth-client' };
   }
 
-  public async discoverSchema(connector: ConnectorRecord): Promise<ConnectorDiscoveryResult> {
-    const config = connector.config || {};
-    const tableNames = (config.tableNames as string[]) || ['incident', 'change_request'];
+  public async discoverSchema(ctx: ConnectorContext): Promise<ConnectorDiscoveryResult> {
+    const tables = this.entityTypes(ctx.connector.config);
+    const entities: ConnectorEntitySchema[] = [];
+    const scopes: ConnectorDiscoveryResult['scopes'] = [];
+
+    for (const table of tables) {
+      const dictionaryNames = TASK_TABLES.has(table) ? `${table},task` : table;
+      const dictionary = await this.get(
+        ctx,
+        `/api/now/table/sys_dictionary?sysparm_query=${encodeURIComponent(`nameIN${dictionaryNames}^elementISNOTEMPTY`)}`
+          + '&sysparm_fields=name,element,column_label,internal_type,mandatory&sysparm_limit=2000',
+      );
+      const rows: any[] = Array.isArray(dictionary?.result) ? dictionary.result : [];
+      const ownRows = rows.filter((row) => row?.name === table);
+      scopes.push({ id: table, name: table, entityType: table, found: ownRows.length > 0 });
+      if (ownRows.length === 0) continue;
+
+      const choices = await this.get(
+        ctx,
+        `/api/now/table/sys_choice?sysparm_query=${encodeURIComponent(`name=${table}^element=state^inactive=false^ORDERBYsequence`)}`
+          + '&sysparm_fields=label,value&sysparm_limit=200',
+      );
+      const stateChoices: any[] = Array.isArray(choices?.result) ? choices.result : [];
+
+      const byElement = new Map<string, ConnectorFieldSchema>();
+      // Table-specific columns override inherited task columns of the same name.
+      for (const row of [...rows.filter((r) => r?.name !== table), ...ownRows]) {
+        const element = String(row?.element || '');
+        if (!element) continue;
+        const field: ConnectorFieldSchema = {
+          id: element,
+          name: String(row.column_label || element),
+          type: this.fieldType(String(row.internal_type || '')),
+          required: String(row.mandatory) === 'true',
+          custom: element.startsWith('u_'),
+        };
+        if (element === 'state' && stateChoices.length) {
+          field.allowedValues = stateChoices.map((choice) => String(choice.label));
+          field.allowedValueCodes = stateChoices.map((choice) => String(choice.value));
+        }
+        byElement.set(element, field);
+      }
+      entities.push({ entityType: table, name: `ServiceNow ${table}`, fields: Array.from(byElement.values()) });
+    }
 
     return {
       provider: 'servicenow',
-      entities: tableNames.map((table) => ({
-        entityType: table,
-        name: `ServiceNow ${table}`,
-        fields: [
-          { id: 'number', name: 'Number', type: 'string', required: true, custom: false },
-          { id: 'short_description', name: 'Short Description', type: 'string', required: true, custom: false },
-          { id: 'state', name: 'State', type: 'string', required: true, custom: false, allowedValues: ['New', 'In Progress', 'On Hold', 'Resolved', 'Closed'] },
-          { id: 'priority', name: 'Priority', type: 'string', required: false, custom: false, allowedValues: ['1 - Critical', '2 - High', '3 - Moderate', '4 - Low'] },
-          { id: 'assigned_to', name: 'Assigned To', type: 'string', required: false, custom: false },
-        ],
-      })),
+      entities,
+      scopes,
       discoveredAt: new Date().toISOString(),
-      supportedCapabilities: [
-        'encoded_query_sync',
-        'table_schema_discovery',
-        'sys_id_correlation',
-        'state_translation_write',
-      ],
+      supportedCapabilities: [...this.capabilities],
     };
   }
 
-  public async fetchChanges(
-    connector: ConnectorRecord,
-    cursor?: WatermarkCursor,
-  ): Promise<{ records: ExternalRecordPayload[]; nextCursor: WatermarkCursor }> {
-    const cursorValue = cursor?.cursorValue || '1970-01-01T00:00:00.000Z';
-    const cursorDate = new Date(cursorValue).getTime();
+  public async fetchChanges(ctx: ConnectorContext, entityType: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {
+    const config = ctx.connector.config;
+    if (!this.entityTypes(config).includes(entityType)) {
+      throw new ConnectorConfigurationError(`Table '${entityType}' is not configured on this connector`);
+    }
+    const maxPages = optionNumber(config.options, 'maxPagesPerPoll', 10, 1, 100);
+    const since = cursor?.cursorValue ? formatInTimeZone(new Date(cursor.cursorValue), this.timeZone(config)) : null;
+    const query = `${since ? `sys_updated_on>=${since}^` : ''}ORDERBYsys_updated_on^ORDERBYsys_id`;
 
-    const updated = this.fixtures.filter((f) => new Date(f.sys_updated_on).getTime() >= cursorDate);
+    const records: ExternalRecordPayload[] = [];
+    const priorWatermark = cursor?.cursorValue ? Date.parse(cursor.cursorValue) : -Infinity;
+    let offset = 0;
+    let pages = 0;
+    let exhausted = false;
+    let advanced = false;
+    // As in the Jira adapter, the page budget applies only after the watermark has moved.
+    do {
+      const page = await this.get(
+        ctx,
+        `/api/now/table/${entityType}?sysparm_query=${encodeURIComponent(query)}&sysparm_display_value=all`
+          + `&sysparm_fields=${SYNC_FIELDS.join(',')}&sysparm_limit=${PAGE_SIZE}&sysparm_offset=${offset}`,
+      );
+      const rows: any[] = Array.isArray(page?.result) ? page.result : [];
+      for (const row of rows) {
+        const record = this.toRecord(ctx, entityType, row);
+        records.push(record);
+        if (Date.parse(record.updatedAt) > priorWatermark) advanced = true;
+      }
+      offset += rows.length;
+      exhausted = rows.length < PAGE_SIZE;
+      pages++;
+    } while (!exhausted && (pages < maxPages || !advanced));
 
-    const records: ExternalRecordPayload[] = updated.map((item) => ({
-      externalId: item.sys_id,
-      artifactType: 'incident',
-      title: item.short_description,
-      nativeKey: item.number,
-      nativeUrl: `https://servicenow.example.com/nav_to.do?uri=incident.do?sys_id=${item.sys_id}`,
-      status: item.state,
+    let watermark = cursor?.cursorValue ? Date.parse(cursor.cursorValue) : 0;
+    for (const record of records) watermark = Math.max(watermark, Date.parse(record.updatedAt));
+    return {
+      records,
+      hasMore: !exhausted,
+      nextCursor: { entityType, cursorValue: new Date(watermark).toISOString(), updatedAt: new Date().toISOString() },
+    };
+  }
+
+  public async pushStateChange(ctx: ConnectorContext, write: ConnectorStateWrite): Promise<{ nativeKey?: string; message: string }> {
+    const entity = ctx.connector.discoveryMetadata?.entities?.find((candidate) => candidate.entityType === write.entityType);
+    const stateField = entity?.fields.find((field) => field.id === 'state');
+    const labels = stateField?.allowedValues || [];
+    const codes = stateField?.allowedValueCodes || [];
+    const index = labels.findIndex((label) => label.trim().toLowerCase() === write.targetState.trim().toLowerCase());
+    if (index < 0 || !codes[index]) {
+      throw new ConnectorRemoteError(
+        `ServiceNow ${write.entityType} has no discovered state choice '${write.targetState}'`,
+        null,
+        false,
+      );
+    }
+    const body = { ...(write.fields || {}), state: codes[index] };
+    const updated = await requestJson(
+      this.http,
+      `${trimBaseUrl(ctx.baseUrl)}/api/now/table/${write.entityType}/${encodeURIComponent(write.externalId)}`,
+      { method: 'PATCH', headers: this.headers(ctx), body: JSON.stringify(body) },
+    );
+    const number = updated?.result?.number;
+    return {
+      nativeKey: typeof number === 'string' ? number : number?.value,
+      message: `Updated ServiceNow ${write.entityType} ${write.externalId} to ${write.targetState}`,
+    };
+  }
+
+  private toRecord(ctx: ConnectorContext, table: string, row: any): ExternalRecordPayload {
+    const value = (field: string) => fieldValue(row?.[field]);
+    const display = (field: string) => fieldDisplay(row?.[field]);
+    const sysId = value('sys_id');
+    const status = display('state') || value('state');
+    return {
+      externalId: sysId,
+      artifactType: table,
+      title: display('short_description'),
+      nativeKey: value('number') || sysId,
+      nativeUrl: `${trimBaseUrl(ctx.baseUrl)}/nav_to.do?uri=${encodeURIComponent(`${table}.do?sys_id=${sysId}`)}`,
+      status,
       fields: {
-        number: item.number,
-        short_description: item.short_description,
-        state: item.state,
-        priority: item.priority || '3 - Moderate',
-        assigned_to: item.assigned_to || '',
+        number: value('number'),
+        short_description: display('short_description'),
+        state: status,
+        stateCode: value('state'),
+        priority: display('priority') || null,
+        assigned_to: display('assigned_to') || null,
       },
-      fieldAuthority: {
-        short_description: 'servicenow',
-        state: 'servicenow',
-        priority: 'servicenow',
-      },
-      updatedAt: item.sys_updated_on,
-    }));
-
-    let maxDate = cursorDate;
-    for (const item of updated) {
-      const itemTime = new Date(item.sys_updated_on).getTime();
-      if (itemTime > maxDate) maxDate = itemTime;
-    }
-
-    const nextCursor: WatermarkCursor = {
-      entityType: 'incident',
-      cursorValue: new Date(maxDate).toISOString(),
-      updatedAt: new Date().toISOString(),
+      fieldAuthority: { short_description: 'servicenow', state: 'servicenow', priority: 'servicenow', assigned_to: 'servicenow' },
+      // With sysparm_display_value=all, `value` is the UTC system value; `display_value` is user-local.
+      updatedAt: parseServiceNowUtc(value('sys_updated_on')),
+      updatedBy: value('sys_updated_by') || undefined,
     };
-
-    return { records, nextCursor };
   }
 
-  public async pushStateChange(
-    connector: ConnectorRecord,
-    externalId: string,
-    targetState: string,
-    fields?: Record<string, unknown>,
-  ): Promise<{ success: boolean; nativeKey?: string; message?: string }> {
-    const item = this.fixtures.find((f) => f.sys_id === externalId || f.number === externalId);
-    if (item) {
-      item.state = targetState;
-      item.sys_updated_on = new Date().toISOString();
-      return { success: true, nativeKey: item.number, message: `Updated ServiceNow ${item.number} state to ${targetState}` };
-    }
-    return { success: true, nativeKey: externalId, message: `Updated ServiceNow record to ${targetState}` };
+  private fieldType(internalType: string): ConnectorFieldSchema['type'] {
+    if (['integer', 'decimal', 'float', 'longint', 'currency'].includes(internalType)) return 'number';
+    if (internalType === 'boolean') return 'boolean';
+    if (['glide_date_time', 'glide_date', 'due_date'].includes(internalType)) return 'date';
+    if (internalType === 'glide_list') return 'array';
+    if (internalType === 'reference') return 'object';
+    return 'string';
   }
+
+  private timeZone(config: Record<string, unknown>): string {
+    return optionString(config.options, 'queryTimeZone') || 'UTC';
+  }
+
+  private headers(ctx: ConnectorContext): Record<string, string> {
+    const authType = ctx.connector.config.authType || 'basic';
+    const authorization = authType === 'bearer'
+      ? `Bearer ${ctx.credentials.accessToken}`
+      : basicAuthHeader(optionString(ctx.connector.config.options, 'username') || '', ctx.credentials.password || '');
+    return { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json' };
+  }
+
+  private get(ctx: ConnectorContext, path: string): Promise<any> {
+    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) });
+  }
+}
+
+function fieldValue(field: unknown): string {
+  if (field && typeof field === 'object') return String((field as any).value ?? '');
+  return field === undefined || field === null ? '' : String(field);
+}
+
+function fieldDisplay(field: unknown): string {
+  if (field && typeof field === 'object') return String((field as any).display_value ?? (field as any).value ?? '');
+  return field === undefined || field === null ? '' : String(field);
+}
+
+export function parseServiceNowUtc(value: string): string {
+  const parsed = Date.parse(value ? `${value.replace(' ', 'T')}Z` : '');
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date(0).toISOString();
 }

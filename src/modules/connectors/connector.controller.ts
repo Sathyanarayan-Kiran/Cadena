@@ -20,12 +20,17 @@ function requireOrg(orgId?: string): string {
 }
 
 function resolveActor(actorId?: string): string {
-  return actorId?.trim() || 'system';
+  return actorId?.trim() || 'integration-admin';
 }
 
 @Controller('integrations/connectors')
 export class ConnectorController {
   constructor(@Inject(ConnectorService) private readonly service: ConnectorService) {}
+
+  @Get('providers')
+  public providers() {
+    return this.service.listProviders();
+  }
 
   @Post()
   public async createConnector(
@@ -34,76 +39,80 @@ export class ConnectorController {
     @Body() dto?: ConnectorConfigDto,
   ) {
     const orgId = requireOrg(orgHeader);
-    const actorId = resolveActor(actorHeader);
-    if (!dto) {
+    if (!dto || typeof dto !== 'object') {
       throw new HttpException('Request body is required', HttpStatus.BAD_REQUEST);
     }
-    return this.service.createConnector(orgId, dto, actorId);
+    return this.service.createConnector(orgId, dto, resolveActor(actorHeader));
   }
 
   @Get()
   public async listConnectors(@Headers('x-org-id') orgHeader?: string) {
-    const orgId = requireOrg(orgHeader);
-    return this.service.listConnectors(orgId);
+    return this.service.listConnectors(requireOrg(orgHeader));
   }
 
   @Get('twins')
   public async listAllTwins(@Headers('x-org-id') orgHeader?: string) {
-    const orgId = requireOrg(orgHeader);
-    return this.service.listTwins(orgId);
+    return this.service.listTwins(requireOrg(orgHeader));
   }
 
   @Get(':id')
-  public async getConnector(
-    @Headers('x-org-id') orgHeader?: string,
-    @Param('id') id?: string,
-  ) {
-    const orgId = requireOrg(orgHeader);
-    if (!id) throw new HttpException('Connector id is required', HttpStatus.BAD_REQUEST);
-    return this.service.getConnector(orgId, id);
+  public async getConnector(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
+    return this.service.getConnector(requireOrg(orgHeader), id);
   }
 
   @Post(':id/test')
-  public async testConnection(
-    @Headers('x-org-id') orgHeader?: string,
-    @Param('id') id?: string,
-  ) {
-    const orgId = requireOrg(orgHeader);
-    if (!id) throw new HttpException('Connector id is required', HttpStatus.BAD_REQUEST);
-    return this.service.testConnection(orgId, id);
+  public async testConnection(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
+    return this.service.testConnection(requireOrg(orgHeader), id);
   }
 
   @Post(':id/discover')
   public async discoverSchema(
+    @Param('id') id: string,
     @Headers('x-org-id') orgHeader?: string,
     @Headers('x-actor-id') actorHeader?: string,
-    @Param('id') id?: string,
   ) {
-    const orgId = requireOrg(orgHeader);
-    const actorId = resolveActor(actorHeader);
-    if (!id) throw new HttpException('Connector id is required', HttpStatus.BAD_REQUEST);
-    return this.service.discoverSchema(orgId, id, actorId);
+    return this.service.discoverSchema(requireOrg(orgHeader), id, resolveActor(actorHeader));
+  }
+
+  @Post(':id/activate')
+  public async activate(
+    @Param('id') id: string,
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.service.activate(requireOrg(orgHeader), id, resolveActor(actorHeader));
+  }
+
+  @Post(':id/pause')
+  public async pause(
+    @Param('id') id: string,
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.service.pause(requireOrg(orgHeader), id, resolveActor(actorHeader));
   }
 
   @Post(':id/sync')
   public async syncConnector(
+    @Param('id') id: string,
     @Headers('x-org-id') orgHeader?: string,
     @Headers('x-actor-id') actorHeader?: string,
-    @Param('id') id?: string,
   ) {
-    const orgId = requireOrg(orgHeader);
-    const actorId = resolveActor(actorHeader);
-    if (!id) throw new HttpException('Connector id is required', HttpStatus.BAD_REQUEST);
-    return this.service.syncConnector(orgId, id, actorId);
+    return this.service.syncConnector(requireOrg(orgHeader), id, resolveActor(actorHeader));
+  }
+
+  @Get(':id/health')
+  public async health(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
+    return this.service.getHealth(requireOrg(orgHeader), id);
   }
 
   @Get(':id/twins')
-  public async listTwins(
-    @Headers('x-org-id') orgHeader?: string,
-    @Param('id') id?: string,
-  ) {
-    const orgId = requireOrg(orgHeader);
-    if (!id) throw new HttpException('Connector id is required', HttpStatus.BAD_REQUEST);
-    return this.service.listTwins(orgId, id);
+  public async listTwins(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
+    return this.service.listTwins(requireOrg(orgHeader), id);
+  }
+
+  @Get(':id/work-orders')
+  public async workOrders(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
+    return this.service.listWorkOrders(requireOrg(orgHeader), id);
   }
 }

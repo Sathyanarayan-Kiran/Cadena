@@ -1,10 +1,77 @@
 # Implementation Plan and Delivery Record
 
-This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
+This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
+
+## Claude US17.1 native connector correction and completion of the Jira/ServiceNow slice — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was reviewed, designed and implemented by **Claude (Claude Code, Opus 5)** on 2026-09-22. It is kept separate from both the Codex records below and the original Gemini material.
+
+**Status:** US17.1 moves from **done back to partial**. The ledger is now **35 done / 6 partial / 32 not started** across **20 epics / 73 stories**. US13.1 remains partial with a narrower boundary.
+
+### Why the previous US17.1 record was corrected
+
+A review of commit `495c709` found that its acceptance boundary was not met:
+
+- Both adapters served in-memory fixtures only; discovery was hard-coded and no Jira JQL or ServiceNow Table API request existed.
+- `testConnection` called the configured URL directly when one was present, and returned success when that request threw.
+- A plaintext credential was silently rewritten to `secret-ref://<key>`, and an unresolved reference was returned as if it were the secret. The environment-name normalization regex was also wrong (`[^A_Z0_9]`).
+- `StateMappingService` and `SyncGuardService` were instantiated but never called; work-order counters were always zero.
+- No capability limitation was reported before activation, and the UI offered five providers with no adapter.
+- Sync had no failure handling, lag/failure tracking, idempotency, transactionality or concurrency guard, and every ServiceNow table was labelled `incident`.
+
+### Scope delivered by Claude
+
+- **Provider-neutral contract:** `ConnectorAdapter` now receives a `ConnectorContext` with credentials already resolved, declares capabilities and a provider descriptor, validates configuration at registration, and exposes per-entity incremental fetch and state writes.
+- **Outbound HTTP boundary (`connector-http.ts`):** adapters receive an injected `ConnectorFetch`. The live transport refuses every request unless `CADENA_CONNECTOR_LIVE_HTTP=enabled` and requires `https://`. Responses are mapped to retryable (429/5xx/timeouts, honouring `Retry-After`) and permanent failures.
+- **Credentials:** only `env:NAME` or `secret-ref://path` are accepted; plaintext is refused with HTTP 400 without echoing the value, and secret-like `options` keys are refused. Resolution fails closed. `secret-ref://jira/prod-token` maps to `SECRET_JIRA_PROD_TOKEN` through a replaceable `SecretStore`.
+- **Jira Cloud REST v3 adapter:** `/myself`, `/project/search`, `/field`, `/status` discovery; `POST /search/jql` ingestion ordered by `updated`, token-paginated, with a one-minute overlap for JQL's minute precision and the watermark rendered in the integration account's time zone; state writes resolve the transition whose target status matches, then post it.
+- **ServiceNow Table API adapter:** `sys_dictionary` discovery including inherited `task` columns, `sys_choice` state labels and codes, `sys_updated_on` watermarked offset pagination with `sysparm_display_value=all`, and `PATCH` state writes using the discovered code.
+- **Lifecycle:** `unconfigured → connected → discovered → active`, plus `degraded`, `error` and `paused`. Discovery produces a capability report (missing projects/tables, missing required fields, missing incremental capability are blocking; unknown state values and provider warnings are warnings). Activation is refused with HTTP 422 and the limitation list while any blocking limitation exists; sync is refused until activation and while paused.
+- **Ingestion:** per-entity cursors that never advance past a failed record; content-hashed twins so unchanged records are not rewritten; twins carry title, native status, source timestamp, field authority and the US13.2 correlation node; a twin identity already owned by another connector is reported, not silently re-owned. A page budget applies only after the watermark advances, preventing a livelock the new tests exposed when an overlap window exceeds the budget.
+- **State propagation:** a changed native state is screened by US13.3 (`{ state }` projection), then translated through the published US13.1 mapping for every counterpart twin managed by a connector. Ready decisions become `integration_connector_work_orders` (unique per state-sync transaction), are executed by the counterpart adapter with only the rule's required fields, and are recorded with `recordIntegrationWrite` so the returning echo is suppressed. Retryable failures back off exponentially (30 s → 1 h, five attempts); permanent refusals are marked `dead`.
+- **Operational visibility:** `GET /integrations/connectors/:id/health` reports status, last success, seconds since success, backlog lag, consecutive failures, error, twin count, cursors and work-order counts. Every lifecycle step, twin change, sync result and work-order outcome is written to the audited event outbox.
+- **UI:** the connectors dialog is now **Source connectors** — provider list from the API (Jira and ServiceNow only), provider-specific account/secret-reference/scope fields, status, health, scopes, limitations, and Test / Discover / Activate / Pause / Resume / Sync actions.
+- **Single-writer assumption:** an in-process single-flight lock prevents concurrent syncs of one connector. It matches the one-replica staging deployment and must become a database lease before horizontal scaling.
+
+### Verification added by Claude
+
+- `test/us17.1.spec.ts` (11 tests) runs against deterministic Jira and ServiceNow API fakes in `test/fixtures/fake-connector-apis.ts`: secret references and fail-closed resolution; registration refusals; proof that no network call is made without the live-HTTP flag; native Jira and ServiceNow discovery; blocking limitations before activation; 120-issue paginated ingestion with lag and no duplicates; bidirectional state translation with echo suppression and a held unmapped state; retry with backoff and dead-lettering; outage recovery without watermark advance; tenant isolation and identity conflicts; single-flight and pause.
+- `test/ui-smoke.spec.ts` adds a Source connectors browser test that registers a Jira connector and shows the live-HTTP refusal.
+- TypeScript build: **PASS**
+- Non-browser regression: **PASS — 155 tests across 42 files**
+- Browser smoke suite: **PASS — 16 tests**
+- Tracker generation: **PASS — 20 epics / 73 stories, 35 done / 6 partial / 32 not started**
+
+### Remaining US17.1 boundary
+
+- Azure DevOps, Zendesk, Salesforce, GitHub and Asana adapters.
+- Webhook-triggered and explicit-import ingestion (polling only today).
+- Validation against a live Jira Cloud and ServiceNow instance. It requires credentials and explicit authorisation, then `CADENA_CONNECTOR_LIVE_HTTP=enabled`.
+- A scheduler for polls (sync is operator- or API-triggered), a durable sync lease for multi-replica operation, and moving state propagation onto the outbox so a crash between twin commit and translation cannot drop a change.
+- Two connectors of the same provider in one tenant share correlation identity (`system` = provider), so overlapping scopes are refused per record rather than supported.
+
+### Primary files added / updated by Claude
+
+- `src/modules/connectors/connector-http.ts` (new)
+- `src/modules/connectors/connector-config.ts` (new)
+- `src/modules/connectors/connector.interface.ts`
+- `src/modules/connectors/connector.types.ts`
+- `src/modules/connectors/secret-manager-ref.ts`
+- `src/modules/connectors/jira-connector.adapter.ts`
+- `src/modules/connectors/servicenow-connector.adapter.ts`
+- `src/modules/connectors/connector.service.ts`
+- `src/modules/connectors/connector.controller.ts`
+- `src/database/database.service.ts`
+- `public/index.html`
+- `test/us17.1.spec.ts`, `test/fixtures/fake-connector-apis.ts` (new), `test/ui-smoke.spec.ts`
+- `.env.staging.example`, `deploy/staging/configmap.yaml` (live connector HTTP explicitly `disabled`)
+- `implementation-status.json`, `public/status.html` (generated), `walkthrough.md`, `README.md`
 
 ## Codex US17.1 native connectors, discovery and ingestion update — 2026-09-22
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22.
+
+> **Superseded (Claude review, 2026-09-22):** this record overstated the delivered scope. Its adapters were fixture-only and state-mapping/echo-suppression integration was not wired. See the Claude correction above; US17.1 is **partial**.
 
 **Status:** Complete. US17.1 moved from not started to done. The delivery ledger is now **36 done / 5 partial / 32 not started** across **20 epics / 73 stories**.
 

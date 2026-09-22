@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex update, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. US13.1 remains partial until a native connector executes its ready work orders. The canonical backlog contains **20 epics and 73 stories**, with **35 done / 5 partial / 33 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger and platform milestone.
+> **Current status (Codex and Claude updates, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. The canonical backlog contains **20 epics and 73 stories**, with **35 done / 6 partial / 32 not started**. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
 
 ## Product Interaction Model
 
@@ -38,7 +38,7 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 - **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
-- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. It still exposes local creation as a pilot action; the connector-led workspace in US20.2 is documented but not implemented.
+- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, source-connector onboarding and health, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. It still exposes local creation as a pilot action; the connector-led workspace in US20.2 is documented but not implemented.
 - **Testing**: Vitest + NestJS Testing + Supertest running 144 automated tests across 41 test files, plus a 15-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
@@ -331,7 +331,76 @@ Content-Type: application/json
 
 Dry-run is the default and writes no transaction. With `dry_run: false`, a safe decision is recorded as `ready` / `enqueue_connector_write`; missing fields, an invalid jump, an unmapped state or no published matrix is recorded as `held` / `hold_for_review`. `GET /integrations/state-mappings/transactions` exposes those decisions for connector and operator use. Both identities must already be joined by an immutable US13.2 counterpart link.
 
-**Boundary:** a ready decision is a durable work order, not a remote side effect. The native US17.1 Jira/ServiceNow adapter will consume it and perform the provider transition; that remaining boundary is why US13.1 is currently partial.
+**Boundary:** a ready decision from this API is a durable decision record. When the change arrives through a US17.1 connector, Cadena itself makes the translation and executes the ready decision as a connector work order (see below). US13.1 stays partial until that path is validated against live Jira and ServiceNow tenants and target-specific required fields are prompted for in the UI.
+
+---
+
+## Native Connectors (US17.1)
+
+Jira and ServiceNow remain the systems of record. A connector discovers a source's schema, ingests its records as **canonical twins**, and writes translated state changes back to the counterpart system.
+
+**Current scope:** Jira Cloud (REST v3) and ServiceNow (Table API). Both are verified against deterministic API fakes in `test/us17.1.spec.ts`. No live tenant has been contacted yet.
+
+### Safety defaults
+
+- **No network by default.** The live transport refuses every request unless `CADENA_CONNECTOR_LIVE_HTTP=enabled`, and it requires `https://`. Enable it only after access to the tenant is authorised.
+- **Reference-only credentials.** `credentials` values must be `env:NAME` or `secret-ref://path`, and plaintext is refused with HTTP 400. `secret-ref://jira/prod-token` resolves from `SECRET_JIRA_PROD_TOKEN`, which is how the staging external-secret contract projects secret-manager entries. An unresolvable reference fails the operation; there is no fallback value.
+- **Time zones.** JQL and ServiceNow encoded queries interpret literal datetimes in the integration account's profile time zone. Set `options.queryTimeZone` to match (default `UTC`).
+
+### Lifecycle
+
+```http
+POST /integrations/connectors
+x-org-id: 00000000-0000-0000-0000-000000000099
+Content-Type: application/json
+
+{
+  "name": "Production Jira",
+  "provider": "jira",
+  "baseUrl": "https://acme.atlassian.net",
+  "authType": "basic",
+  "credentials": { "apiToken": "env:JIRA_API_TOKEN" },
+  "options": { "accountEmail": "sync@acme.com", "queryTimeZone": "UTC", "customFieldIds": ["customfield_10014"] },
+  "projectKeys": ["CAD"],
+  "requiredFields": { "issue": ["customfield_10014"] }
+}
+```
+
+ServiceNow uses `tableNames` (for example `["incident", "change_request"]`), `options.username` and `credentials.password`. Either provider accepts `authType: "bearer"` with `credentials.accessToken`.
+
+| Step | Endpoint | Result |
+| --- | --- | --- |
+| Providers | `GET /integrations/connectors/providers` | Registered adapters and their capabilities |
+| Test | `POST /integrations/connectors/:id/test` | `connected`, or `error` with the reason |
+| Discover | `POST /integrations/connectors/:id/discover` | Scopes, fields, custom fields, state values and a capability report |
+| Activate | `POST /integrations/connectors/:id/activate` | `active`; HTTP 422 with `limitations` while any blocking limitation exists |
+| Sync | `POST /integrations/connectors/:id/sync` | Poll result: fetched, created, updated, unchanged, echoes suppressed, work orders, record errors, lag |
+| Pause | `POST /integrations/connectors/:id/pause` | `paused`; activate again to resume |
+| Health | `GET /integrations/connectors/:id/health` | Last success, seconds since success, lag, consecutive failures, twin count, cursors, work-order counts |
+| Twins | `GET /integrations/connectors/:id/twins`, `GET /integrations/connectors/twins` | Canonical twins with native key/URL, state, field authority and correlation node |
+| Work orders | `GET /integrations/connectors/:id/work-orders` | Outbound state writes and their status |
+
+These block activation: a missing project or table, a missing required field, or no incremental-query capability. Unknown state values are a warning.
+
+### Ingestion and state propagation
+
+Each entity type has its own watermark. Cursors never advance past a record that failed to process. Unchanged records are detected by content hash and are not rewritten.
+
+When a twin's native state changes, the connector does the following:
+
+1. Screens the change through US13.3 echo suppression.
+2. Finds counterpart twins through US13.2 `counterpart` links.
+3. Translates the change through the published US13.1 mapping.
+4. Executes a ready decision as a work order on the counterpart's connector. This is a Jira transition or a ServiceNow state-code update, carrying only the rule's required fields.
+
+Held decisions are recorded and not executed. Retryable failures (429, 5xx, timeouts) back off from 30 seconds to one hour over five attempts. Permanent refusals, such as a transition that isn't available, are marked `dead` for review.
+
+### Current limits
+
+- Sync is triggered by an operator or the API. There is no scheduler or webhook trigger yet.
+- One replica only: an in-process single-flight lock prevents overlapping syncs of one connector.
+- Two same-provider connectors in one tenant cannot own the same external record.
+- Azure DevOps, Zendesk, Salesforce, GitHub and Asana are not implemented.
 
 ---
 
@@ -373,7 +442,7 @@ x-org-id: 00000000-0000-0000-0000-000000000099
 
 The 1–10 hop response includes every reachable node, typed link, distance and a summary. `PATCH /integrations/correlations/nodes/:id` accepts only `display_key` and `url`; immutable identity changes return HTTP 422. Tenant-qualified foreign keys and restrictive deletion prevent cross-tenant and orphan links.
 
-**Boundary:** this is the provider-neutral persistence and connector write-back contract. It does not make live ServiceNow or Jira calls; native connector credentials, discovery and outbound field writes remain US17.1.
+**Boundary:** this is the provider-neutral persistence and connector write-back contract. US17.1 connectors create and update these nodes during ingestion; pairing two records as counterparts is still an explicit call to this API.
 
 ### Echo-loop suppression (US13.3)
 
@@ -769,8 +838,8 @@ The next delivery sequence follows the connector-led product decision:
 1. **Activate cloud staging**:
    - Select AWS/Azure/GCP and region, provision the managed services, bind secrets, then prove HTTPS, database restore and immutable-image rollback using `deploy/staging/README.md`.
 
-2. **US17.1 minimal Jira/ServiceNow slice**:
-   - Connect credentials, discover entities and fields, ingest selected external records, materialize canonical twins without duplicate creation, and execute US13.1 ready state-change work orders.
+2. **US17.1 live validation and completion**:
+   - With credentials and explicit authorisation, enable `CADENA_CONNECTOR_LIVE_HTTP` against a Jira Cloud and ServiceNow sandbox, then add scheduled/webhook-triggered polling, a durable sync lease, and the remaining provider adapters.
 
 3. **US20.2 — connector-led management workspace**:
    - Replace local creation as the primary production action with connect, discover and synchronize; expose source, authority, counterpart and synchronization health on every twin.
@@ -861,9 +930,14 @@ Multi-worker dispatch, a managed broker, real notification transports, CMDB fede
 | **US10.7** | Appends field changes, transitions and integration transactions to a tenant-wide SHA-256 chain | `test/us10.7.spec.ts` | **PASS** |
 | **US10.7** | Detects source tampering, backfills existing event stores and exposes verification metadata in export/UI | `test/us10.7.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
 | **US13.1** | Versions and publishes bidirectional mappings and previews translated states without writing | `test/us13.1.spec.ts`, `test/ui-smoke.spec.ts` | **PASS (provider-neutral)** |
-| **US13.1** | Holds missing fields, invalid target jumps and unmapped states while persisting valid ready work orders | `test/us13.1.spec.ts` | **PASS (native execution pending US17.1)** |
+| **US13.1** | Holds missing fields, invalid target jumps and unmapped states while persisting valid ready work orders | `test/us13.1.spec.ts` | **PASS** |
+| **US13.1** | Executes ready translations as native Jira transitions and ServiceNow state updates through connectors | `test/us17.1.spec.ts` | **PASS (API fakes; live tenant pending)** |
 | **US13.2** | Persists dedicated immutable references on both sides and survives key/URL changes without re-pairing | `test/us13.2.spec.ts` | **PASS** |
 | **US13.2** | Resolves one-to-many and many-to-one dependency trees without cross-tenant or orphan links | `test/us13.2.spec.ts` | **PASS** |
 | **US13.3** | Suppresses an exact returning write by service-account identity plus canonical SHA-256 payload hash | `test/us13.3.spec.ts` | **PASS** |
 | **US13.3** | Detects the unchanged no-op from durable content after volatile suppression state is lost | `test/us13.3.spec.ts` | **PASS** |
+| **US17.1** | Discovers Jira and ServiceNow scopes, fields, custom fields and states through their native APIs | `test/us17.1.spec.ts` | **PASS (API fakes)** |
+| **US17.1** | Materializes and updates canonical twins without duplicates under a paginated watermark | `test/us17.1.spec.ts` | **PASS (API fakes)** |
+| **US17.1** | Reports missing scopes and required fields before activation | `test/us17.1.spec.ts` | **PASS** |
+| **US17.1** | Accepts only secret references and makes no network call without explicit live-HTTP authorisation | `test/us17.1.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
 | **Backlog fixture** | Imports every epic and story from the backlog with its parent-child hierarchy | `test/backlog-fixture.spec.ts` | **PASS** |

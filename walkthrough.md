@@ -2,8 +2,28 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, and US17.1 native connectors, discovery and ingestion. The canonical backlog is **20 epics / 73 stories**, with **36 done / 5 partial / 32 not started**.
-**Verification:** 148 automated tests across 42 test files, plus 15 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, and the partial US17.1 Jira/ServiceNow connector slice (native discovery, watermarked ingestion into canonical twins, and echo-suppressed state propagation, verified against deterministic API fakes). The canonical backlog is **20 epics / 73 stories**, with **35 done / 6 partial / 32 not started**.
+**Verification:** 155 automated tests across 42 test files, plus 16 browser smoke tests driving the real page.
+
+---
+
+## 2026-09-22 — US17.1 corrected: native Jira and ServiceNow connectors (Claude)
+
+Claude reviewed the earlier US17.1 increment, found it fixture-only with state propagation unwired, and rebuilt the connector slice. **US17.1 is now partial rather than done.**
+
+- **Jira Cloud REST v3** and **ServiceNow Table API** adapters. Discovery enumerates projects/tables, standard and custom fields, and state values. Ingestion is watermarked and paginated. State writes go through Jira transitions and ServiceNow state codes.
+- **No network by default.** Adapters call providers only through an injected transport, and the live transport refuses requests unless `CADENA_CONNECTOR_LIVE_HTTP=enabled`.
+- **Reference-only credentials.** Only `env:NAME` or `secret-ref://path` are accepted, plaintext is refused, and an unresolvable reference fails the operation.
+- **Lifecycle with a capability check.** Test → Discover → Activate. Missing projects, tables or required fields block activation with HTTP 422 and a limitation list.
+- **Connector-led propagation.** A changed native state passes US13.3 echo suppression and the published US13.1 mapping, then becomes an idempotent work order executed on the counterpart. Retryable failures back off; refusals are dead-lettered for review.
+- **Health.** Last success, lag, consecutive failures, errors, twin count, cursors and work-order counts per connector.
+- **Source connectors** dialog replaces the earlier native connectors dialog.
+
+**Try it:** open **Source connectors** in the sidebar and connect Jira with an account email, `env:JIRA_API_TOKEN` and a project key. Then choose **Test**. Without `CADENA_CONNECTOR_LIVE_HTTP=enabled`, the card reports that live provider access is not authorised. The full lifecycle runs end to end in `test/us17.1.spec.ts`.
+
+**Still open:** the other five providers, webhook-triggered ingestion, a poll scheduler, a multi-replica sync lease, and validation against a live Jira/ServiceNow tenant.
+
+**Verified by** `test/us17.1.spec.ts` (11 tests), the browser smoke suite (16 tests), and 155 non-browser tests across 42 files.
 
 ---
 
@@ -18,7 +38,7 @@ Codex delivered native connector discovery and ingestion for external systems of
 - Integrated with `StateMappingService` (US13.1) and `SyncGuardService` (US13.3) for echo-suppressed outbound work orders.
 - Responsive **Native connectors & ingestion** management UI in `public/index.html`.
 
-**Status:** Complete. The canonical backlog is now **20 epics / 73 stories**, with **36 done / 5 partial / 32 not started**. Verified by `test/us17.1.spec.ts` (4 tests) and 148 non-browser tests across 42 files.
+**Status (superseded):** recorded as complete at the time; the correction above returned US17.1 to partial.
 
 ---
 

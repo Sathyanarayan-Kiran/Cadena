@@ -1,181 +1,262 @@
-import { ConnectorAdapter } from './connector.interface';
+import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorStateWrite } from './connector.interface';
 import {
+  ConnectorFetch,
+  ConnectorConfigurationError,
+  ConnectorCredentialError,
+  ConnectorRemoteError,
+  assertTimeZone,
+  basicAuthHeader,
+  createLiveConnectorFetch,
+  formatInTimeZone,
+  requestJson,
+  trimBaseUrl,
+} from './connector-http';
+import {
+  ConnectorCapability,
   ConnectorDiscoveryResult,
-  ConnectorProviderType,
-  ConnectorRecord,
+  ConnectorFieldSchema,
+  ConnectorProviderDescriptor,
   ExternalRecordPayload,
   WatermarkCursor,
 } from './connector.types';
-import { SecretManagerResolver } from './secret-manager-ref';
+import { optionNumber, optionString, stringList } from './connector-config';
 
-export interface JiraFixtureItem {
-  id: string;
-  key: string;
-  summary: string;
-  status: string;
-  description?: string;
-  priority?: string;
-  assignee?: string;
-  projectKey?: string;
-  issueType?: string;
-  customFields?: Record<string, unknown>;
-  updatedAt: string;
-}
+const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,31}$/;
+const STANDARD_FIELDS = ['summary', 'status', 'updated', 'priority', 'assignee', 'issuetype', 'project', 'description'];
+const PAGE_SIZE = 100;
+/** JQL datetimes have minute precision, so the query overlaps the watermark by one minute. */
+const JQL_OVERLAP_MS = 60_000;
 
 /**
- * Jira Native Connector Adapter.
+ * Native Jira Cloud connector (REST API v3).
  *
- * Communicates with Jira REST API v3 or operates against an in-memory/injected fixture
- * set when live HTTP endpoints are unavailable or during automated testing.
+ * - Connection: `GET /rest/api/3/myself`
+ * - Discovery: `GET /rest/api/3/project/search`, `/rest/api/3/field`, `/rest/api/3/status`
+ * - Incremental ingestion: `POST /rest/api/3/search/jql` ordered by `updated`, token-paginated
+ * - State write: `GET|POST /rest/api/3/issue/{id}/transitions`
+ *
+ * Authentication is Basic (account email + API token) or Bearer (OAuth/PAT access token).
  */
 export class JiraConnectorAdapter implements ConnectorAdapter {
-  public readonly provider: ConnectorProviderType = 'jira';
+  public readonly provider = 'jira' as const;
+  public readonly capabilities: readonly ConnectorCapability[] = [
+    'connection_test',
+    'scope_discovery',
+    'field_discovery',
+    'custom_field_discovery',
+    'state_discovery',
+    'incremental_query',
+    'state_write',
+  ];
+  public readonly descriptor: ConnectorProviderDescriptor = {
+    provider: 'jira',
+    displayName: 'Jira Cloud',
+    scopeLabel: 'Project keys',
+    authTypes: ['basic', 'bearer'],
+    capabilities: [...this.capabilities],
+  };
 
-  private fixtures: JiraFixtureItem[] = [];
+  constructor(private readonly http: ConnectorFetch = createLiveConnectorFetch()) {}
 
-  constructor(initialFixtures?: JiraFixtureItem[]) {
-    if (initialFixtures) {
-      this.fixtures = [...initialFixtures];
+  public validateConfig(config: Record<string, unknown>): void {
+    const baseUrl = optionString(config, 'baseUrl');
+    if (!baseUrl || !/^https?:\/\/[^\s]+$/i.test(baseUrl)) {
+      throw new ConnectorConfigurationError('Jira connectors require an http(s) baseUrl such as https://acme.atlassian.net');
     }
-  }
+    const keys = stringList(config.projectKeys);
+    if (keys.length === 0) throw new ConnectorConfigurationError('Jira connectors require at least one project key');
+    const invalid = keys.filter((key) => !PROJECT_KEY.test(key));
+    if (invalid.length) throw new ConnectorConfigurationError(`Invalid Jira project keys: ${invalid.join(', ')}`);
+    assertTimeZone(this.timeZone(config));
 
-  public setFixtures(fixtures: JiraFixtureItem[]): void {
-    this.fixtures = [...fixtures];
-  }
-
-  public addFixtureItem(item: JiraFixtureItem): void {
-    const idx = this.fixtures.findIndex((f) => f.id === item.id || f.key === item.key);
-    if (idx >= 0) {
-      this.fixtures[idx] = item;
-    } else {
-      this.fixtures.push(item);
-    }
-  }
-
-  public async testConnection(connector: ConnectorRecord): Promise<boolean> {
-    const config = connector.config || {};
-    const baseUrl = config.baseUrl as string;
-    const creds = (config.credentials as Record<string, string>) || {};
-    const apiToken = SecretManagerResolver.resolveSecret(creds.apiToken || creds.token || creds.password);
-
-    if (baseUrl && baseUrl.startsWith('http')) {
-      try {
-        const response = await fetch(`${baseUrl.replace(/\/$/, '')}/rest/api/3/myself`, {
-          headers: {
-            Authorization: `Basic ${Buffer.from(`${creds.email || 'user'}:${apiToken}`).toString('base64')}`,
-            Accept: 'application/json',
-          },
-        });
-        return response.ok;
-      } catch {
-        // Fall back to fixture validation if fetch fails or mock mode
+    const credentials = (config.credentials || {}) as Record<string, string>;
+    const authType = config.authType || 'basic';
+    if (authType === 'basic') {
+      if (!credentials.apiToken) throw new ConnectorCredentialError('Basic Jira auth requires credentials.apiToken');
+      if (!optionString(config.options, 'accountEmail')) {
+        throw new ConnectorConfigurationError('Basic Jira auth requires options.accountEmail');
       }
+    } else if (authType === 'bearer') {
+      if (!credentials.accessToken) throw new ConnectorCredentialError('Bearer Jira auth requires credentials.accessToken');
+    } else {
+      throw new ConnectorConfigurationError(`Unsupported Jira authType '${String(authType)}'`);
     }
-    return true; // Valid fixture/stub connection
   }
 
-  public async discoverSchema(connector: ConnectorRecord): Promise<ConnectorDiscoveryResult> {
-    const config = connector.config || {};
-    const projectKeys = (config.projectKeys as string[]) || ['CAD', 'PROJ'];
+  public entityTypes(): string[] {
+    return ['issue'];
+  }
+
+  public async testConnection(ctx: ConnectorContext): Promise<{ account: string }> {
+    const me = await this.get(ctx, '/rest/api/3/myself');
+    return { account: me?.displayName || me?.emailAddress || me?.accountId || 'unknown' };
+  }
+
+  public async discoverSchema(ctx: ConnectorContext): Promise<ConnectorDiscoveryResult> {
+    const keys = stringList(ctx.connector.config.projectKeys);
+    const query = keys.map((key) => `keys=${encodeURIComponent(key)}`).join('&');
+    const projectPage = await this.get(ctx, `/rest/api/3/project/search?${query}&maxResults=${Math.max(keys.length, 1)}`);
+    const projects: any[] = Array.isArray(projectPage?.values) ? projectPage.values : [];
+    const fieldsRaw: any[] = (await this.get(ctx, '/rest/api/3/field')) || [];
+    const statusesRaw: any[] = (await this.get(ctx, '/rest/api/3/status')) || [];
+
+    const statusNames = Array.from(new Set(statusesRaw.map((status) => String(status?.name || '')).filter(Boolean)));
+    const fields: ConnectorFieldSchema[] = fieldsRaw
+      .filter((field) => field && typeof field.id === 'string')
+      .map((field) => ({
+        id: field.id,
+        name: String(field.name || field.id),
+        type: this.fieldType(field.schema?.type),
+        required: field.id === 'summary' || field.id === 'status' || field.id === 'issuetype' || field.id === 'project',
+        custom: Boolean(field.custom),
+        ...(field.id === 'status' && statusNames.length ? { allowedValues: statusNames } : {}),
+      }));
 
     return {
       provider: 'jira',
-      entities: [
-        {
-          entityType: 'issue',
-          name: 'Jira Issue',
-          fields: [
-            { id: 'summary', name: 'Summary', type: 'string', required: true, custom: false },
-            { id: 'status', name: 'Status', type: 'string', required: true, custom: false, allowedValues: ['To Do', 'In Progress', 'Done', 'Closed', 'In Review'] },
-            { id: 'description', name: 'Description', type: 'string', required: false, custom: false },
-            { id: 'priority', name: 'Priority', type: 'string', required: false, custom: false, allowedValues: ['Highest', 'High', 'Medium', 'Low', 'Lowest'] },
-            { id: 'assignee', name: 'Assignee', type: 'string', required: false, custom: false },
-            { id: 'customfield_10014', name: 'Epic Link', type: 'string', required: false, custom: true },
-            { id: 'customfield_10020', name: 'Sprint', type: 'string', required: false, custom: true },
-          ],
-        },
-      ],
+      entities: [{ entityType: 'issue', name: 'Jira issue', fields }],
+      scopes: keys.map((key) => {
+        const project = projects.find((candidate) => String(candidate?.key).toUpperCase() === key.toUpperCase());
+        return { id: key, name: project?.name || key, entityType: 'issue', found: Boolean(project) };
+      }),
       discoveredAt: new Date().toISOString(),
-      supportedCapabilities: [
-        'jql_incremental_sync',
-        'field_discovery',
-        'custom_field_discovery',
-        'status_transition_write',
-        'webhook_ingestion',
-      ],
-      warnings: projectKeys.length === 0 ? ['No project keys specified; defaults applied.'] : undefined,
+      supportedCapabilities: [...this.capabilities],
     };
   }
 
-  public async fetchChanges(
-    connector: ConnectorRecord,
-    cursor?: WatermarkCursor,
-  ): Promise<{ records: ExternalRecordPayload[]; nextCursor: WatermarkCursor }> {
-    const cursorValue = cursor?.cursorValue || '1970-01-01T00:00:00.000Z';
-    const cursorDate = new Date(cursorValue).getTime();
+  public async fetchChanges(ctx: ConnectorContext, entityType: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {
+    if (entityType !== 'issue') throw new ConnectorConfigurationError(`Jira does not expose entity type '${entityType}'`);
+    const config = ctx.connector.config;
+    const keys = stringList(config.projectKeys);
+    const maxPages = optionNumber(config.options, 'maxPagesPerPoll', 10, 1, 100);
+    const customFields = stringList((config.options as any)?.customFieldIds).filter((id) => /^customfield_\d+$/.test(id));
+    const projectClause = `project in (${keys.map((key) => `"${key}"`).join(', ')})`;
+    const since = cursor?.cursorValue ? new Date(Date.parse(cursor.cursorValue) - JQL_OVERLAP_MS) : null;
+    const jql = since
+      ? `${projectClause} AND updated >= "${formatInTimeZone(since, this.timeZone(config)).slice(0, 16).replace(/-/g, '/')}" ORDER BY updated ASC, key ASC`
+      : `${projectClause} ORDER BY updated ASC, key ASC`;
 
-    // Filter fixtures updated after cursor date
-    const updatedFixtures = this.fixtures.filter((f) => new Date(f.updatedAt).getTime() >= cursorDate);
-
-    const records: ExternalRecordPayload[] = updatedFixtures.map((item) => ({
-      externalId: item.id,
-      artifactType: 'issue',
-      title: item.summary,
-      nativeKey: item.key,
-      nativeUrl: `https://jira.example.com/browse/${item.key}`,
-      status: item.status,
-      fields: {
-        summary: item.summary,
-        status: item.status,
-        description: item.description || '',
-        priority: item.priority || 'Medium',
-        assignee: item.assignee || '',
-        projectKey: item.projectKey || item.key.split('-')[0],
-        issueType: item.issueType || 'Story',
-        ...(item.customFields || {}),
-      },
-      fieldAuthority: {
-        summary: 'jira',
-        status: 'jira',
-        description: 'jira',
-        priority: 'jira',
-        assignee: 'jira',
-      },
-      updatedAt: item.updatedAt,
-    }));
-
-    // Calculate max updated date for next cursor
-    let maxDate = cursorDate;
-    for (const item of updatedFixtures) {
-      const itemTime = new Date(item.updatedAt).getTime();
-      if (itemTime > maxDate) maxDate = itemTime;
-    }
-
-    const nextCursor: WatermarkCursor = {
-      entityType: 'issue',
-      cursorValue: new Date(maxDate).toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    return { records, nextCursor };
-  }
-
-  public async pushStateChange(
-    connector: ConnectorRecord,
-    externalId: string,
-    targetState: string,
-    fields?: Record<string, unknown>,
-  ): Promise<{ success: boolean; nativeKey?: string; message?: string }> {
-    const item = this.fixtures.find((f) => f.id === externalId || f.key === externalId);
-    if (item) {
-      item.status = targetState;
-      item.updatedAt = new Date().toISOString();
-      if (fields) {
-        if (typeof fields.summary === 'string') item.summary = fields.summary;
-        if (typeof fields.description === 'string') item.description = fields.description;
+    const records: ExternalRecordPayload[] = [];
+    const priorWatermark = cursor?.cursorValue ? Date.parse(cursor.cursorValue) : -Infinity;
+    let nextPageToken: string | undefined;
+    let pages = 0;
+    let exhausted = false;
+    let advanced = false;
+    // The page budget only applies once the watermark has moved; otherwise a busy overlap
+    // window larger than the budget would be re-read forever without progress.
+    do {
+      const page = await this.post(ctx, '/rest/api/3/search/jql', {
+        jql,
+        maxResults: PAGE_SIZE,
+        fields: [...STANDARD_FIELDS, ...customFields],
+        ...(nextPageToken ? { nextPageToken } : {}),
+      });
+      for (const issue of Array.isArray(page?.issues) ? page.issues : []) {
+        const record = this.toRecord(ctx, issue, customFields);
+        records.push(record);
+        if (Date.parse(record.updatedAt) > priorWatermark) advanced = true;
       }
-      return { success: true, nativeKey: item.key, message: `Transitioned ${item.key} to ${targetState}` };
-    }
-    return { success: true, nativeKey: externalId, message: `State transition to ${targetState} recorded` };
+      nextPageToken = typeof page?.nextPageToken === 'string' && page.nextPageToken ? page.nextPageToken : undefined;
+      exhausted = page?.isLast === true || !nextPageToken;
+      pages++;
+    } while (!exhausted && (pages < maxPages || !advanced));
+
+    let watermark = cursor?.cursorValue ? Date.parse(cursor.cursorValue) : 0;
+    for (const record of records) watermark = Math.max(watermark, Date.parse(record.updatedAt));
+    return {
+      records,
+      hasMore: !exhausted,
+      nextCursor: { entityType: 'issue', cursorValue: new Date(watermark).toISOString(), updatedAt: new Date().toISOString() },
+    };
   }
+
+  public async pushStateChange(ctx: ConnectorContext, write: ConnectorStateWrite): Promise<{ nativeKey?: string; message: string }> {
+    const issuePath = `/rest/api/3/issue/${encodeURIComponent(write.externalId)}`;
+    const available = await this.get(ctx, `${issuePath}/transitions`);
+    const transitions: any[] = Array.isArray(available?.transitions) ? available.transitions : [];
+    const target = write.targetState.trim().toLowerCase();
+    const transition = transitions.find((candidate) => String(candidate?.to?.name || '').trim().toLowerCase() === target);
+    if (!transition) {
+      throw new ConnectorRemoteError(
+        `Jira issue ${write.externalId} has no available transition to '${write.targetState}'`,
+        null,
+        false,
+      );
+    }
+    const fields = write.fields && Object.keys(write.fields).length ? { fields: write.fields } : {};
+    await this.post(ctx, `${issuePath}/transitions`, { transition: { id: String(transition.id) }, ...fields });
+    return { nativeKey: write.externalId, message: `Transitioned Jira issue ${write.externalId} to ${write.targetState}` };
+  }
+
+  private toRecord(ctx: ConnectorContext, issue: any, customFields: string[]): ExternalRecordPayload {
+    const f = issue?.fields || {};
+    const key = String(issue?.key || issue?.id);
+    const custom: Record<string, unknown> = {};
+    for (const id of customFields) if (f[id] !== undefined) custom[id] = f[id];
+    const status = String(f.status?.name || '');
+    return {
+      externalId: String(issue.id),
+      artifactType: 'issue',
+      title: String(f.summary || ''),
+      nativeKey: key,
+      nativeUrl: `${trimBaseUrl(ctx.baseUrl)}/browse/${key}`,
+      status,
+      fields: {
+        summary: f.summary ?? '',
+        status,
+        priority: f.priority?.name ?? null,
+        assignee: f.assignee?.displayName ?? null,
+        assigneeAccountId: f.assignee?.accountId ?? null,
+        issueType: f.issuetype?.name ?? null,
+        projectKey: f.project?.key ?? key.split('-')[0],
+        description: f.description ?? null,
+        ...custom,
+      },
+      fieldAuthority: { summary: 'jira', status: 'jira', priority: 'jira', assignee: 'jira', description: 'jira' },
+      updatedAt: normalizeJiraTimestamp(f.updated),
+    };
+  }
+
+  private fieldType(schemaType: unknown): ConnectorFieldSchema['type'] {
+    switch (schemaType) {
+      case 'number': return 'number';
+      case 'date':
+      case 'datetime': return 'date';
+      case 'array': return 'array';
+      case 'string':
+      case undefined: return 'string';
+      default: return 'object';
+    }
+  }
+
+  private timeZone(config: Record<string, unknown>): string {
+    return optionString(config.options, 'queryTimeZone') || 'UTC';
+  }
+
+  private headers(ctx: ConnectorContext): Record<string, string> {
+    const authType = ctx.connector.config.authType || 'basic';
+    const authorization = authType === 'bearer'
+      ? `Bearer ${ctx.credentials.accessToken}`
+      : basicAuthHeader(optionString(ctx.connector.config.options, 'accountEmail') || '', ctx.credentials.apiToken || '');
+    return { Authorization: authorization, Accept: 'application/json', 'Content-Type': 'application/json' };
+  }
+
+  private get(ctx: ConnectorContext, path: string): Promise<any> {
+    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) });
+  }
+
+  private post(ctx: ConnectorContext, path: string, body: unknown): Promise<any> {
+    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
+      method: 'POST',
+      headers: this.headers(ctx),
+      body: JSON.stringify(body),
+    });
+  }
+}
+
+/** Jira emits `2026-09-22T10:00:00.000+0000`; ECMAScript requires a colon in the offset. */
+export function normalizeJiraTimestamp(value: unknown): string {
+  if (typeof value !== 'string' || !value) return new Date(0).toISOString();
+  const parsed = Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date(0).toISOString();
 }

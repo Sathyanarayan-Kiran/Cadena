@@ -466,7 +466,7 @@
       "phase": 3,
       "isNew": true,
       "expandedIn": "master-2026-09-21",
-      "note": "Verified by <code>test/us13.1.spec.ts</code> and the browser smoke suite: tenant-scoped versioned draft/publish mappings translate both directions, validate required target fields and allowed current states, and persist auditable ready/held connector work orders. Partial until US17.1 executes a ready work order against native Jira/ServiceNow APIs."
+      "note": "Verified by <code>test/us13.1.spec.ts</code> and the browser smoke suite: tenant-scoped versioned draft/publish mappings translate both directions, validate required target fields and allowed current states, and persist auditable ready/held connector work orders. Connector ingestion now feeds native state changes through published mappings and executes ready work orders as Jira transitions and ServiceNow state updates (<code>test/us17.1.spec.ts</code>). Partial until that execution path is validated against a live Jira and ServiceNow tenant and platform-specific required fields are prompted for in the UI."
     },
     "US13.2": {
       "name": "Immutable correlation references",
@@ -610,12 +610,12 @@
     },
     "US17.1": {
       "name": "Native connectors, discovery and ingestion",
-      "status": "done",
+      "status": "partial",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
       "expandedIn": "connector-led-2026-09-22",
-      "note": "Verified by <code>test/us17.1.spec.ts</code> — provider-neutral connector boundary, native Jira REST adapter, ServiceNow ITSM adapter boundary, secret reference resolution, schema discovery, watermarked ingestion into canonical twins, correlation node linking, and connector management workspace UI."
+      "note": "Verified by <code>test/us17.1.spec.ts</code> and the browser smoke suite against deterministic Jira Cloud REST v3 and ServiceNow Table API fakes: reference-only credentials, a live-HTTP guard, native project/table, field, custom-field and state discovery, capability limitations that block activation, watermarked paginated ingestion into canonical twins with immutable correlation nodes, echo-suppressed US13.1 state propagation and retried connector work orders. Partial: Azure DevOps, Zendesk, Salesforce, GitHub and Asana adapters, webhook-triggered ingestion, and validation against a live Jira/ServiceNow tenant remain."
     },
     "US17.2": {
       "name": "Visual mappings with sandboxed scripts",
@@ -687,7 +687,7 @@
       "phase": 3,
       "isNew": true,
       "addedIn": "connector-led-2026-09-22",
-      "note": "Added by the connector-led product decision. The pilot still presents local work-item creation as a primary action and does not yet expose source connection, discovery, synchronization health or field ownership as the production journey."
+      "note": "Added by the connector-led product decision. The pilot still presents local work-item creation as a primary action and does not yet make source connection, discovery, synchronization health or field ownership the production journey. The US17.1 Source connectors dialog provides connection, discovery, activation and health as a building block, but it is not yet the primary workspace."
     },
     "US10.9": {
       "name": "Authenticated tenant and actor identity",

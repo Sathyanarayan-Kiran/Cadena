@@ -15,3 +15,4 @@ data:
   CADENA_TRUST_PROXY: "1"
   CADENA_CORS_ORIGINS: https://staging.cadena.example
   CADENA_SERVICE_NAME: cadena-api
+  CADENA_CONNECTOR_LIVE_HTTP: disabled

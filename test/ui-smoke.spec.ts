@@ -146,7 +146,7 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     server = spawn(process.execPath, [serverEntry], {
       // Forced ephemeral: this suite seeds its own scenario and must start from the seed
       // every run, even if the surrounding shell exports a data directory.
-      env: { ...process.env, PORT: String(PORT), CADENA_DATA_DIR: '' },
+      env: { ...process.env, PORT: String(PORT), CADENA_DATA_DIR: '', CADENA_CONNECTOR_LIVE_HTTP: '', UI_SMOKE_JIRA_TOKEN: 'ui-smoke-token' },
       stdio: 'ignore',
     });
     await waitForServer();
@@ -641,6 +641,42 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
         && (document.querySelector('#stateMappingList')?.textContent ?? '').includes('published'),
       { timeout: 10000 },
     );
+    await closeAnyDialog();
+  });
+
+  it('connects a source system and reports that live provider access is not yet authorised', async () => {
+    await closeAnyDialog();
+    await page.click('#openConnectorsFromNav');
+    await page.waitForSelector('#connectorsDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => !document.querySelector('#connectorList .skeleton'), { timeout: 10000 });
+    const providers = await page.$$eval('#connectorProvider option', (options) => options.map((option) => (option as HTMLOptionElement).value));
+    expect(providers.sort()).toEqual(['jira', 'servicenow']);
+    expect(await textOf('#connectorList')).toContain('No source systems are connected');
+
+    await page.type('#connectorName', 'UI Jira Cloud');
+    await page.type('#connectorBaseUrl', 'https://acme.atlassian.net');
+    await page.type('#connectorAccount', 'sync@acme.test');
+    await page.type('#connectorSecretRef', 'env:UI_SMOKE_JIRA_TOKEN');
+    await page.type('#connectorScopes', 'CAD');
+    await page.click('#saveConnectorButton');
+    await page.waitForFunction(
+      () => (document.querySelector('#connectorList')?.textContent ?? '').includes('UI Jira Cloud'),
+      { timeout: 10000 },
+    );
+    expect(await textOf('#connectorList')).toContain('unconfigured');
+
+    const tested = await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('#connectorList .mapping-card')).find((node) => node.textContent?.includes('UI Jira Cloud'));
+      const button = Array.from(card?.querySelectorAll('button') ?? []).find((node) => node.textContent === 'Test') as HTMLButtonElement | undefined;
+      button?.click();
+      return Boolean(button);
+    });
+    expect(tested).toBe(true);
+    await page.waitForFunction(
+      () => (document.querySelector('#connectorList')?.textContent ?? '').includes('Live connector HTTP is disabled'),
+      { timeout: 10000 },
+    );
+    expect(await textOf('#connectorList')).toContain('error');
     await closeAnyDialog();
   });
 

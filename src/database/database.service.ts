@@ -541,6 +541,26 @@ export class DatabaseService {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE (org_id, provider, artifact_type, external_id)
       );
+
+      CREATE TABLE IF NOT EXISTS integration_connector_work_orders (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        transaction_id UUID NOT NULL UNIQUE,
+        source_connector_id UUID REFERENCES integration_connectors(id) ON DELETE SET NULL,
+        target_connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        target_twin_id UUID NOT NULL REFERENCES integration_canonical_twins(id) ON DELETE CASCADE,
+        target_entity_type TEXT NOT NULL,
+        target_external_id TEXT NOT NULL,
+        target_state TEXT NOT NULL,
+        fields TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_attempt_at TIMESTAMP WITH TIME ZONE,
+        executed_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
     `);
 
     // Safe migration for pilot databases created before stable work-item keys existed.
@@ -555,6 +575,12 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;`);
     await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS actor_type TEXT NOT NULL DEFAULT 'user';`);
+    await this.db.exec(`ALTER TABLE integration_connectors ADD COLUMN IF NOT EXISTS activated_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`ALTER TABLE integration_connectors ADD COLUMN IF NOT EXISTS consecutive_failures INT NOT NULL DEFAULT 0;`);
+    await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS title TEXT;`);
+    await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS native_status TEXT;`);
+    await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS content_hash TEXT;`);
+    await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS source_updated_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`
       UPDATE audit_events SET actor_type = 'integration'
       WHERE actor_type = 'user'
@@ -589,6 +615,10 @@ export class DatabaseService {
         ON integration_state_sync_transactions (org_id, created_at);
       CREATE INDEX IF NOT EXISTS integration_state_sync_transactions_nodes
         ON integration_state_sync_transactions (org_id, source_node_id, target_node_id, created_at);
+      CREATE INDEX IF NOT EXISTS integration_canonical_twins_node
+        ON integration_canonical_twins (org_id, correlation_node_id);
+      CREATE INDEX IF NOT EXISTS integration_connector_work_orders_queue
+        ON integration_connector_work_orders (org_id, target_connector_id, status, next_attempt_at);
     `);
     await this.db.exec(`
       UPDATE work_items
