@@ -1,7 +1,7 @@
 import { Injectable, OnApplicationBootstrap } from '@nestjs/common';
 import { randomUUID } from 'crypto';
-import { Transaction } from '@electric-sql/pglite';
 import { DatabaseService } from '../../database/database.service';
+import { DatabaseQueryable } from '../../database/database-adapter';
 import { DomainEventEnvelope, InProcessEventBus } from './event-bus';
 import { appendAuditIntegrityEntry } from '../audit/audit-integrity';
 
@@ -20,7 +20,7 @@ export interface OutboxEventInput {
  * Transactional outbox for canonical work-item mutations (US5.1).
  *
  * The business write, immutable `domain_events` row and pending outbox marker are inserted
- * through the same PGlite transaction supplied by the caller. Publication happens only after
+ * through the same datastore transaction supplied by the caller. Publication happens only after
  * commit. A process that stops in that gap leaves a pending row which is delivered on the next
  * application bootstrap with the original event id; US5.2 then makes redelivery harmless.
  */
@@ -33,7 +33,7 @@ export class EventOutboxService implements OnApplicationBootstrap {
     await this.recoverPending();
   }
 
-  public async enqueue(tx: Transaction, input: OutboxEventInput): Promise<DomainEventEnvelope> {
+  public async enqueue(tx: DatabaseQueryable, input: OutboxEventInput): Promise<DomainEventEnvelope> {
     const event: DomainEventEnvelope = {
       event_id: input.event_id || randomUUID(),
       event_type: input.event_type,

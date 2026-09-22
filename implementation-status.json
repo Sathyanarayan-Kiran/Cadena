@@ -1,6 +1,23 @@
 {
   "_comment": "Status overlay for the implementation tracker. backlog.json owns the stories and their acceptance criteria; this file owns delivery status, the abridged title shown in the tracker, and phase alignment. Regenerate the page with `npm run tracker`. test/tracker.spec.ts fails if the two files fall out of sync.",
   "source_of_truth": "repository",
+  "platform_milestones": [
+    {
+      "id": "cloud-staging-foundation-2026-09-22",
+      "name": "Cloud staging foundation",
+      "date": "2026-09-22",
+      "status": "partial",
+      "note": "The repository now supports pooled managed PostgreSQL with verified TLS, staging configuration fail-closed rules, public liveness/readiness probes, graceful shutdown, structured request telemetry, a non-root immutable container, Kubernetes TLS/secret manifests, and CI publish/deploy workflows. kubectl v1.37.0 successfully rendered the staging Kustomize bundle locally; the Docker image build awaits the Windows restart required after enabling WSL and Virtual Machine Platform.",
+      "evidence": [
+        "test/cloud-staging.spec.ts",
+        "Dockerfile",
+        "deploy/staging",
+        ".github/workflows/ci.yml",
+        ".github/workflows/staging.yml"
+      ],
+      "remaining": "Not cloud-activated: choose AWS/Azure/GCP, provision the managed database/cluster/DNS/secret binding, then prove HTTPS, backup restore and image rollback in that account."
+    }
+  ],
   "deltas": [
     {
       "id": "master-2026-09-21",
@@ -58,6 +75,22 @@
         "US10.9"
       ],
       "expanded_stories": []
+    },
+    {
+      "id": "connector-led-2026-09-22",
+      "source": "connector-led product decision",
+      "date": "2026-09-22",
+      "baseline_epics": 20,
+      "baseline_stories": 72,
+      "current_epics": 20,
+      "current_stories": 73,
+      "added_epics": [],
+      "added_stories": [
+        "US20.2"
+      ],
+      "expanded_stories": [
+        "US17.1"
+      ]
     }
   ],
   "spec_phases": [
@@ -429,11 +462,11 @@
     },
     "US13.1": {
       "name": "ITIL to Agile state matrix",
-      "status": "idle",
+      "status": "partial",
       "phase": 3,
       "isNew": true,
       "expandedIn": "master-2026-09-21",
-      "note": "Expanded by the master backlog: configurable translation now also validates required target fields and logs invalid state jumps before execution."
+      "note": "Verified by <code>test/us13.1.spec.ts</code> and the browser smoke suite: tenant-scoped versioned draft/publish mappings translate both directions, validate required target fields and allowed current states, and persist auditable ready/held connector work orders. Partial until US17.1 executes a ready work order against native Jira/ServiceNow APIs."
     },
     "US13.2": {
       "name": "Immutable correlation references",
@@ -576,12 +609,13 @@
       "note": "New from the master backlog. Consumer DLQ replay exists, but no twin queue can pause independently while unrelated synchronization continues."
     },
     "US17.1": {
-      "name": "Native connector and entity discovery matrix",
+      "name": "Native connectors, discovery and ingestion",
       "status": "idle",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
-      "note": "New from the master backlog. Only normalized Git/CI and monitoring webhooks exist; there is no multi-platform schema discovery."
+      "expandedIn": "connector-led-2026-09-22",
+      "note": "Expanded by the connector-led product decision. Only normalized Git/CI and monitoring webhooks exist; there is no native Jira/ServiceNow discovery or ingestion that materializes an externally owned canonical twin."
     },
     "US17.2": {
       "name": "Visual mappings with sandboxed scripts",
@@ -646,6 +680,14 @@
       "isNew": true,
       "addedIn": "master-2026-09-21",
       "note": "New from the master backlog. No Chrome/Edge extension shows twin status or RBAC-gated resync and unlink actions on native ticket pages."
+    },
+    "US20.2": {
+      "name": "Connector-led management workspace",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "connector-led-2026-09-22",
+      "note": "Added by the connector-led product decision. The pilot still presents local work-item creation as a primary action and does not yet expose source connection, discovery, synchronization health or field ownership as the production journey."
     },
     "US10.9": {
       "name": "Authenticated tenant and actor identity",

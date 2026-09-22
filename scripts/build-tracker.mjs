@@ -118,6 +118,7 @@ export function buildModel() {
     problems,
     specPhases: overlay.spec_phases,
     rollouts: overlay.rollout_phases,
+    platformMilestones: overlay.platform_milestones ?? [],
     latestDelta,
   };
 }
@@ -134,6 +135,7 @@ function page(model, meta) {
     epics: model.epics,
     specPhases: model.specPhases,
     rollouts: model.rollouts,
+    platformMilestones: model.platformMilestones,
     latestDelta: model.latestDelta,
   });
 
@@ -209,6 +211,7 @@ function page(model, meta) {
   .callout li { margin-bottom:5px; }
   .callout.delta-callout { border-left-color:var(--accent); }
   .callout.delta-callout h3 { color:var(--accent); }
+  .callout .milestone-status { margin-left:8px; vertical-align:middle; }
   .callout code, .prose code, .story-note code, .provenance code { font-family:var(--mono); font-size:.89em; background:var(--surface-2); padding:1px 5px; border-radius:2px; }
   .controls { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:12px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); margin-bottom:26px; position:sticky; top:env(safe-area-inset-top,0px); background:var(--ground); z-index:5; }
   .ctl-label { font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-3); margin-right:2px; }
@@ -285,6 +288,14 @@ function page(model, meta) {
     </div>
     <div class="phases" id="phases"></div>
   </section>
+
+${model.platformMilestones.map((milestone) => `
+  <section class="callout delta-callout">
+    <h3>Platform milestone &middot; ${milestone.name} &middot; ${milestone.date}<span class="pill ${milestone.status} milestone-status">${STATUS_LABEL[milestone.status] ?? milestone.status}</span></h3>
+    <p>${milestone.note}</p>
+    <ul>${milestone.evidence.map((item) => `<li><code>${item}</code></li>`).join('')}</ul>
+    <p><b>Activation gap:</b> ${milestone.remaining}</p>
+  </section>`).join('')}
 
   <section class="callout delta-callout">
     <h3>Latest scope delta &middot; ${model.latestDelta?.date ?? 'not recorded'}</h3>

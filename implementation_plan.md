@@ -2,6 +2,200 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex cloud-staging foundation update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. It is a platform milestone separate from the product-story ledger and does not claim that a cloud account or managed service has been provisioned.
+
+**Status:** Implemented but not cloud-activated. The repository now contains the application, container, Kubernetes and pipeline boundary needed for staging. Activation remains partial until a platform owner selects AWS/Azure/GCP and the HTTPS, restore and rollback checks are executed in that account. Product scope remains **20 epics / 73 stories, 35 done / 5 partial / 33 not started**.
+
+### Scope delivered by Codex
+
+- Added a shared datastore adapter that preserves embedded PGlite for local/test use and selects a pooled native PostgreSQL connection whenever `DATABASE_URL` is configured.
+- Added explicit staging/production configuration validation. Non-local startup fails closed without managed PostgreSQL, verified database TLS, disabled header impersonation and a bootstrap credential of at least 32 characters.
+- Added certificate-authority injection, pool sizing and connection/idle timeout settings without logging the database URL or secrets.
+- Disabled demo-data seeding by default outside local mode and rejected simultaneous `DATABASE_URL` and `CADENA_DATA_DIR` configuration.
+- Added unauthenticated `/health/live` and `/health/ready` endpoints. Liveness does not depend on the database; readiness initializes and queries it, returning HTTP 503 when unavailable.
+- Added JSON request telemetry with request id, path, response status and duration, plus SIGTERM/SIGINT shutdown that closes HTTP and database resources.
+- Added a multi-stage, non-root runtime `Dockerfile`, a read-only-root-filesystem Kubernetes deployment, startup/liveness/readiness probes, a TLS ingress, external secret contract and a single-writer `Recreate` rollout strategy.
+- Added GitHub CI for build, service tests, tracker freshness, browser smoke and container build, plus a manually approved staging workflow that publishes an immutable commit-SHA image and waits for rollout readiness.
+- Upgraded the internet-facing runtime to NestJS 12 and Express 5, and made a zero-known-vulnerability production dependency audit a CI gate.
+- Added a staging activation/rollback/restore runbook. The managed database must supply multi-zone availability, point-in-time recovery and a demonstrated restore before provider webhooks are enabled.
+- Added a separate platform-milestone panel to the generated delivery ledger so infrastructure readiness is visible without inventing or promoting a product user story.
+
+### Verification added by Codex
+
+- `test/cloud-staging.spec.ts` verifies fail-closed staging configuration, connection-string TLS override rejection, public health probes, database readiness and the deployment contract.
+- TypeScript production build: **PASS**
+- Focused staging/state-mapping/tracker suite: **PASS — 16 tests**
+- Production dependency audit: **PASS — 0 known vulnerabilities**
+- Full non-browser regression: **PASS — 144 tests across 41 files**
+- Built-page browser smoke suite: **PASS — 15 tests**
+- Tracker: **PASS — 20 epics / 73 stories, 35 done / 5 partial / 33 not started; cloud staging shown as a partial platform milestone**
+- Kubernetes manifest render: **PASS — kubectl v1.37.0 / Kustomize v5.8.1 rendered `deploy/staging` successfully on 2026-09-22**
+- Local container build: **pending restart — Docker Desktop 4.91.0 / Docker CLI 29.8.0 are installed; WSL and Virtual Machine Platform were enabled successfully, but Windows must restart before the Docker engine can start and build the image**
+
+### Files added by Codex
+
+- `src/database/database-adapter.ts`
+- `src/config/runtime-config.ts`
+- `src/modules/health/health.controller.ts`
+- `src/modules/health/health.module.ts`
+- `src/observability/request-logging.ts`
+- `src/scripts/validate-runtime.ts`
+- `test/cloud-staging.spec.ts`
+- `Dockerfile`
+- `.dockerignore`
+- `.env.staging.example`
+- `deploy/staging/*`
+- `.github/workflows/ci.yml`
+- `.github/workflows/staging.yml`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/events/event-outbox.service.ts`
+- `src/modules/auth/auth.guard.ts`
+- `src/app.module.ts`
+- `src/server.ts`
+- `package.json` / `package-lock.json`
+- `scripts/build-tracker.mjs`
+- `test/tracker.spec.ts`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `Unified SDLC & ITSM Platform — Technical Specification.md`
+- `implementation_plan.md`
+
+### Activation boundary and next step
+
+- No cloud account, cluster, database, DNS record, certificate, secret or backup policy was created by this repository-only increment.
+- Choose the staging provider and region, provision the managed services, bind protected secrets, run a restore drill and deploy/rollback two immutable SHAs.
+- After activation, begin the minimal US17.1 Jira/ServiceNow connector against staging and use it to complete the remote-execution boundary of US13.1.
+
+## Codex US13.1 state-translation update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. The Gemini-authored baseline did not contain the mapping tables, API, operator interface, durable decisions or acceptance tests described here.
+
+**Status:** Partial. The provider-neutral acceptance surface is implemented and verified, moving US13.1 from not started to partial. The canonical ledger is now **35 done / 5 partial / 33 not started** across **20 epics / 73 stories**. The story remains partial because no native Jira or ServiceNow adapter yet consumes a ready work order and performs the counterpart transition; that execution boundary belongs to US17.1.
+
+### Scope delivered by Codex
+
+- Added tenant-scoped, versioned state-mapping definitions with explicit `draft`, `published` and `superseded` lifecycle states. Publishing a replacement version atomically supersedes the previous active matrix for that system/entity pair.
+- Added directional rules for source-to-target and target-to-source translation, with case-insensitive state matching, required target-field paths and allowed current target states.
+- Required both records to resolve through their immutable US13.2 identities and a real `counterpart` link; the engine never falls back to mutable keys, titles or URLs.
+- Added dry-run evaluation for safe previews. A preview returns the selected version and proposed state without writing a transaction.
+- Added committed evaluation that durably records either a `ready` connector work order or a `held` decision with an actionable reason: no published matrix, unmapped source state, missing required fields, or invalid target transition.
+- Added transactional outbox events and existing audit-chain coverage for mapping creation, publication, prepared changes and held changes.
+- Added a responsive **State mappings** operator dialog for creating rule sets, reviewing versions and publishing a draft.
+
+### API delivered by Codex
+
+```http
+POST /integrations/state-mappings
+GET  /integrations/state-mappings
+GET  /integrations/state-mappings/:id
+POST /integrations/state-mappings/:id/publish
+POST /integrations/state-mappings/translate
+GET  /integrations/state-mappings/transactions
+```
+
+`POST /integrations/state-mappings/translate` defaults to `dry_run: true`. With `dry_run: false`, a valid decision is persisted as `ready` with action `enqueue_connector_write`; an unsafe or incomplete decision is persisted as `held` with action `hold_for_review`. It does not claim that the provider API was called.
+
+### Verification added by Codex
+
+- `test/us13.1.spec.ts` covers version/publish/supersede semantics, both translation directions, non-destructive preview, required nested fields, invalid jumps, unmapped states, missing mappings, immutable correlation, tenant isolation, duplicate-rule validation, durable transactions and integration events.
+- `test/ui-smoke.spec.ts` creates and publishes a lifecycle matrix through the built production page.
+- TypeScript production build: **PASS**
+- Automated API/service suite: **PASS — 137 tests across 40 files**
+- Built-page browser smoke suite: **PASS — 15 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 73 stories, 35 done / 5 partial / 33 not started**
+
+### Files added by Codex
+
+- `src/modules/integrations/state-mapping.types.ts`
+- `src/modules/integrations/state-mapping.service.ts`
+- `src/modules/integrations/state-mapping.controller.ts`
+- `test/us13.1.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/integrations/integration.module.ts`
+- `public/index.html`
+- `test/ui-smoke.spec.ts`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Remaining boundary and next step
+
+- A `ready` transaction is a durable connector work order, not proof of a remote Jira/ServiceNow transition.
+- The next implementation increment is the cloud staging foundation, followed by the minimal US17.1 Jira/ServiceNow connector that discovers schemas, ingests canonical twins and consumes these work orders.
+
+## Codex connector-led product-direction update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section is a **Codex-authored scope and sequencing decision** recorded on 2026-09-22. It does not relabel Gemini code or claim that native Jira/ServiceNow connectors or the revised workspace have already been implemented.
+
+**Status:** Documentation and backlog update complete; runtime implementation not started. The canonical ledger is now **35 done / 4 partial / 34 not started** across **20 epics / 73 stories**.
+
+### Decision
+
+The original pilot used local work-item creation to prove the canonical model, workflow, SLA, traceability and audit capabilities before any native connector existed. The consolidated master backlog positions Cadena as an integration control plane. The production product therefore must not ask users to recreate records that Jira, ServiceNow or another provider already owns.
+
+The resolved product model is:
+
+| Concern | Decision |
+| --- | --- |
+| Provider records | Jira, ServiceNow and other providers remain authoritative by default for the fields assigned to them. |
+| Cadena record | The `WorkItem` is an internal canonical twin, normally materialized or updated by connector ingestion. |
+| Cadena authority | Cadena owns correlation, mapping versions, synchronization decisions, derived policy state, audit evidence and cross-system traceability. |
+| Editing | Externally owned fields are written through an allowed audited mapping or rejected; Cadena never saves a silent local divergence. |
+| Local creation | Retained for pilot, administration, automated incident generation and explicitly selected standalone operation, but removed as the primary production action. |
+| Primary production journey | Connect source → discover → map → synchronize → operate. |
+
+### Backlog changes made by Codex
+
+- Expanded **US17.1** from native connector/schema discovery to connector-led ingestion. Its new acceptance criterion requires an ingested record to materialize a canonical twin carrying the source system, immutable external identity, native key/URL, synchronization state and field-authority metadata, with subsequent delivery updating the same twin.
+- Added **US20.2 — Connector-led management workspace**. It requires connect/discover/synchronize as the primary production actions, makes source and synchronization health visible, and routes or rejects edits according to field authority.
+- Added the `connector-led-2026-09-22` scope delta to `implementation-status.json`; no existing delivery status was promoted.
+- Updated the master backlog, technical specification, README, walkthrough and generated status ledger to use the same system-of-record decision.
+
+### Recommended delivery order
+
+1. **US13.1** — configurable Jira/ServiceNow state translation and target-field validation.
+2. **Cloud staging foundation** — managed PostgreSQL, HTTPS, secrets, CI/CD, observability and backup boundary.
+3. **US17.1 minimal Jira/ServiceNow slice** — native connection, discovery and ingestion into canonical twins.
+4. **US20.2** — connector-led management workspace and local-create mode boundary.
+5. **US13.4 / US13.5** — work-note privacy and resolution metadata write-back.
+
+### Current implementation boundary
+
+- The pilot's **New work item** action and `POST /workitems` API remain unchanged and available.
+- No live Jira or ServiceNow credentials, discovery, ingestion or outbound writes are implemented yet.
+- US13.2 immutable correlation and US13.3 echo suppression are reusable foundations for the next connector work.
+- This documentation decision must not be presented as a completed UI or connector story.
+
+### Verification
+
+- Tracker generation: **PASS — 20 epics / 73 stories, 35 done / 4 partial / 34 not started**
+- Tracker source-of-truth consistency: **PASS — 6 tests**
+- Runtime code changed: **No**
+
+### Files updated by Codex
+
+- `Unified SDLC & ITSM Platform — Technical Specification.md`
+- `cadena-master-epics-and-user-stories.md`
+- `backlog.json`
+- `Backlog.md`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
 ## Codex US13.3 echo-loop suppression update — 2026-09-22
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. The Gemini-authored baseline did not contain this sync guard, normalized snapshot, API contract, audit evidence or acceptance test.

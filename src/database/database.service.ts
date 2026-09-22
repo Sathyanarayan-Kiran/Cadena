@@ -1,5 +1,10 @@
 import { PGlite } from '@electric-sql/pglite';
 import { appendAuditIntegrityEntry, AuditEventSource } from '../modules/audit/audit-integrity';
+import {
+  DatabaseAdapter,
+  ManagedPostgresDatabaseAdapter,
+  PGliteDatabaseAdapter,
+} from './database-adapter';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { vector } = require('@electric-sql/pglite/vector');
 
@@ -16,23 +21,38 @@ function resolveDataDir(): string | undefined {
   return configured ? configured : undefined;
 }
 
+function resolveDatabaseUrl(): string | undefined {
+  const configured = process.env.DATABASE_URL?.trim();
+  return configured ? configured : undefined;
+}
+
+export type DatabaseBackend = 'pglite-memory' | 'pglite-directory' | 'managed-postgres';
+
 export class DatabaseService {
   private static instance: DatabaseService;
-  public db: PGlite;
+  public db: DatabaseAdapter;
   /** The directory this instance persists to, or null when it is in-memory. */
   public readonly dataDir: string | null;
+  public readonly backend: DatabaseBackend;
   private initialized = false;
 
-  private constructor(dataDir?: string) {
+  private constructor(dataDir?: string, databaseUrl?: string) {
     this.dataDir = dataDir ?? null;
-    this.db = dataDir
-      ? new PGlite(dataDir, { extensions: { vector } })
-      : new PGlite({ extensions: { vector } });
+    if (databaseUrl) {
+      this.backend = 'managed-postgres';
+      this.db = new ManagedPostgresDatabaseAdapter(databaseUrl);
+    } else {
+      this.backend = dataDir ? 'pglite-directory' : 'pglite-memory';
+      const client = dataDir
+        ? new PGlite(dataDir, { extensions: { vector } })
+        : new PGlite({ extensions: { vector } });
+      this.db = new PGliteDatabaseAdapter(client);
+    }
   }
 
   public static getInstance(): DatabaseService {
     if (!DatabaseService.instance) {
-      DatabaseService.instance = new DatabaseService(resolveDataDir());
+      DatabaseService.instance = new DatabaseService(resolveDataDir(), resolveDatabaseUrl());
     }
     return DatabaseService.instance;
   }
@@ -46,7 +66,16 @@ export class DatabaseService {
   }
 
   public isPersistent(): boolean {
-    return this.dataDir !== null;
+    return this.backend !== 'pglite-memory';
+  }
+
+  public isManagedPostgres(): boolean {
+    return this.backend === 'managed-postgres';
+  }
+
+  public async checkReady(): Promise<void> {
+    await this.initialize();
+    await this.db.query('SELECT 1 AS ready');
   }
 
   /** Releases the underlying connection. Reopening the same directory recovers the data. */
@@ -239,6 +268,52 @@ export class DatabaseService {
         PRIMARY KEY (org_id, node_id),
         FOREIGN KEY (org_id, node_id)
           REFERENCES integration_correlation_nodes(org_id, id) ON DELETE RESTRICT
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_state_mapping_definitions (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        name TEXT NOT NULL,
+        source_system TEXT NOT NULL,
+        source_entity_type TEXT NOT NULL,
+        target_system TEXT NOT NULL,
+        target_entity_type TEXT NOT NULL,
+        version INT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'superseded')),
+        definition JSONB NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        published_by TEXT,
+        published_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE(org_id, source_system, source_entity_type, target_system, target_entity_type, version),
+        UNIQUE(org_id, id),
+        CHECK (source_system <> target_system OR source_entity_type <> target_entity_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_state_sync_transactions (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        mapping_definition_id UUID,
+        mapping_version INT,
+        source_node_id UUID NOT NULL,
+        target_node_id UUID NOT NULL,
+        direction TEXT CHECK (direction IN ('source_to_target', 'target_to_source')),
+        source_state TEXT NOT NULL,
+        target_state_before TEXT,
+        mapped_target_state TEXT,
+        required_target_fields JSONB NOT NULL DEFAULT '[]'::jsonb,
+        provided_target_fields JSONB NOT NULL DEFAULT '{}'::jsonb,
+        status TEXT NOT NULL CHECK (status IN ('ready', 'held')),
+        reason TEXT NOT NULL,
+        actor_id TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (org_id, mapping_definition_id)
+          REFERENCES integration_state_mapping_definitions(org_id, id) ON DELETE RESTRICT,
+        FOREIGN KEY (org_id, source_node_id)
+          REFERENCES integration_correlation_nodes(org_id, id) ON DELETE RESTRICT,
+        FOREIGN KEY (org_id, target_node_id)
+          REFERENCES integration_correlation_nodes(org_id, id) ON DELETE RESTRICT,
+        CHECK (source_node_id <> target_node_id)
       );
 
       CREATE TABLE IF NOT EXISTS integration_deliveries (
@@ -463,6 +538,13 @@ export class DatabaseService {
         ON integration_correlation_links (org_id, target_node_id);
       CREATE INDEX IF NOT EXISTS integration_sync_snapshots_hash
         ON integration_sync_snapshots (org_id, node_id, payload_hash);
+      CREATE INDEX IF NOT EXISTS integration_state_mappings_lookup
+        ON integration_state_mapping_definitions
+        (org_id, source_system, source_entity_type, target_system, target_entity_type, status, version);
+      CREATE INDEX IF NOT EXISTS integration_state_sync_transactions_time
+        ON integration_state_sync_transactions (org_id, created_at);
+      CREATE INDEX IF NOT EXISTS integration_state_sync_transactions_nodes
+        ON integration_state_sync_transactions (org_id, source_node_id, target_node_id, created_at);
     `);
     await this.db.exec(`
       UPDATE work_items

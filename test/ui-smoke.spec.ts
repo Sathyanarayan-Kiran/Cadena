@@ -603,6 +603,47 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await closeAnyDialog();
   });
 
+  it('creates and publishes a lifecycle state mapping', async () => {
+    await closeAnyDialog();
+    await page.click('#openStateMappingsFromNav');
+    await page.waitForSelector('#stateMappingDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(
+      () => !document.querySelector('#stateMappingList .skeleton'),
+      { timeout: 10000 },
+    );
+
+    await page.type('#mappingName', 'UI incident lifecycle');
+    await page.type('.mapping-from', 'New');
+    await page.type('.mapping-to', 'To Do');
+    await page.type('.mapping-required', 'priority');
+    await page.click('#saveMappingButton');
+
+    await page.waitForFunction(
+      () => (document.querySelector('#stateMappingList')?.textContent ?? '').includes('UI incident lifecycle')
+        && (document.querySelector('#stateMappingList')?.textContent ?? '').includes('draft'),
+      { timeout: 10000 },
+    );
+    expect(await textOf('#stateMappingList')).toContain('New → To Do');
+
+    const publishClicked = await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('#stateMappingList .mapping-card')).find(
+        (node) => node.textContent?.includes('UI incident lifecycle'),
+      );
+      const button = card?.querySelector('button') as HTMLButtonElement | undefined;
+      if (!button) return false;
+      button.click();
+      return true;
+    });
+    expect(publishClicked).toBe(true);
+
+    await page.waitForFunction(
+      () => (document.querySelector('#stateMappingList')?.textContent ?? '').includes('UI incident lifecycle')
+        && (document.querySelector('#stateMappingList')?.textContent ?? '').includes('published'),
+      { timeout: 10000 },
+    );
+    await closeAnyDialog();
+  });
+
   it('renders without console errors and does not overflow at phone width', async () => {
     await page.setViewport({ width: 390, height: 844 });
     await page.reload({ waitUntil: 'networkidle0' });

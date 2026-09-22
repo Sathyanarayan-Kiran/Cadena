@@ -5,6 +5,12 @@
 
 ## Executive Summary & Capability Architecture
 
+### Product interaction and system-of-record decision — 2026-09-22
+
+Cadena is primarily a synchronization control plane, not a replacement screen where teams must recreate work already owned by Jira, ServiceNow or another connected platform. Provider records remain authoritative by default for the fields assigned to them. Cadena's canonical record is an internal twin used for correlation, mapping, policy, audit, queueing and analytics, and is normally materialized or updated by connector ingestion.
+
+The production console therefore leads with **connect source → discover → map → synchronize → operate**. Manual local work-item creation is an explicitly enabled pilot, administrator or standalone capability, not the primary production action. A permitted edit to an externally owned field must travel through an audited outbound mapping; otherwise it is rejected rather than creating silent local divergence.
+
 The Cadena Master Backlog incorporates **100% of the problem-solving capabilities** provided by scriptable integration tools like Exalate while elevating the architecture to an enterprise-grade, zero-maintenance platform. Cadena replaces Groovy scripting debt with a **domain-aware AST rich-text engine**, **CMDB-aware priority matrices**, **agentic AI triage**, and an **order-preserving, twin-isolated message queue**.
 
 ```
@@ -270,6 +276,15 @@ The Cadena Master Backlog incorporates **100% of the problem-solving capabilitie
   * Visual network topology map displaying connected nodes and instances.
   * Daily cumulative active synced-item tracking for TCO forecasting.
   * Real-time queue health, latency, and throughput diagnostics.
+
+#### **US9.3: Connector-Led Management Workspace**
+* **As an** Integration Operator,
+* **I want** Cadena's management workspace centred on source connections and synchronized twins,
+* **So that** teams govern existing Jira and ServiceNow records without maintaining a duplicate local backlog.
+* **Acceptance Criteria:**
+  * Primary production actions are connect source, discover records, and start synchronization; local creation requires an explicitly enabled pilot, administrator, or standalone mode.
+  * Externally sourced records show their native link, sync state, last successful sync, field authority, and linked twin.
+  * Edits to externally owned fields are either sent through a permitted audited mapping or blocked before a local divergence can be saved.
 
 ---
 

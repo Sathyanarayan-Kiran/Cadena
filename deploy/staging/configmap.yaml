@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cadena-staging-config
+  namespace: cadena-staging
+data:
+  CADENA_RUNTIME_MODE: staging
+  PORT: "3000"
+  CADENA_DATABASE_SSL: verify-full
+  CADENA_DATABASE_POOL_MAX: "10"
+  CADENA_DATABASE_CONNECT_TIMEOUT_MS: "10000"
+  CADENA_DATABASE_IDLE_TIMEOUT_MS: "30000"
+  CADENA_ALLOW_HEADER_AUTH: "false"
+  CADENA_SEED_DEMO_DATA: "false"
+  CADENA_TRUST_PROXY: "1"
+  CADENA_CORS_ORIGINS: https://staging.cadena.example
+  CADENA_SERVICE_NAME: cadena-api

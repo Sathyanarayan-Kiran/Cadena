@@ -4,7 +4,7 @@
 
 ## 1. Executive summary
 
-This specification defines a unified SDLC and ITSM platform that replaces the split between product delivery tools (Jira-class) and IT service management tools (ServiceNow-class) with one canonical work model, one state engine, and one traceability graph spanning idea to production support.
+This specification defines a unified SDLC and ITSM synchronization and governance platform that connects the existing systems where teams already work. Cadena normalizes their records into one canonical twin model, applies shared policy and traceability, and synchronizes permitted changes without requiring users to recreate a duplicate backlog.
 
 **Problem.** Today a feature's history is scattered: an idea lives in a product tool, its stories in a tracker, its code in git, its deployment in a CI/CD system, and any resulting incident in a separate ITSM tool. No system holds the full chain, so nobody can answer "which incidents trace back to this feature" or "where is work silently aging" without manual cross-referencing.
 
@@ -15,17 +15,19 @@ This specification defines a unified SDLC and ITSM platform that replaces the sp
 - One governance model for delivery and operational SLAs, instead of two disconnected policy systems.
 - A single pane of glass for status across product and ops leadership.
 
-**Approach.** A canonical `WorkItem` entity used by every item type (idea, story, incident, change, release, etc.), a configurable but shared state-machine and aging/SLA engine, an event-sourced core for audit and analytics, and an integration layer that connects to (rather than immediately replaces) existing git, CI/CD, monitoring, and CMDB tooling.
+**Approach.** A canonical `WorkItem` twin used to normalize every item type (idea, story, incident, change, release, etc.), a configurable state-translation and policy engine, an event-sourced core for audit and analytics, and a connector layer that discovers, ingests and synchronizes records in Jira, ServiceNow and other authoritative tools. Cadena may own explicitly local records, but connector-led ingestion is the default production path.
 
 ## 2. Scope, principles and non-goals
 
-**In scope (v1 platform capability, not necessarily v1 delivery — see roadmap).** Idea intake and backlog; epics, features, stories, tasks, bugs; release and change management; incident and problem management; cross-lifecycle traceability; aging and SLA governance; dashboards and reporting; integrations to git, CI/CD, monitoring, CMDB, chatops, and identity.
+**In scope (v1 platform capability, not necessarily v1 delivery — see roadmap).** Bidirectional connector discovery and synchronization; optional local idea intake and backlog; epics, features, stories, tasks, bugs; release and change management; incident and problem management; cross-lifecycle traceability; aging and SLA governance; dashboards and reporting; integrations to git, CI/CD, monitoring, CMDB, chatops, and identity.
 
-**Non-goals.** The platform does not aim to replace a full enterprise CMDB, become an APM/observability tool, become a source-code host, or become a general-purpose wiki. It integrates with those systems rather than reimplementing them.
+**Non-goals.** The platform does not require teams to replace Jira or ServiceNow or manually recreate their records. It also does not aim to replace a full enterprise CMDB, become an APM/observability tool, become a source-code host, or become a general-purpose wiki. It integrates with those systems rather than reimplementing them.
 
 **Guiding principles.**
 
 - **One canonical model, many item types.** Every unit of work — idea, story, incident, change — is a typed `WorkItem`, not a bespoke schema per domain.
+- **Canonical does not mean locally re-entered.** In connector mode, an external record creates or updates its canonical twin with source, immutable identity, field ownership and synchronization metadata.
+- **Connector-led user experience.** The primary production journey is connect, discover, map, synchronize and operate. Manual local creation is an explicitly enabled pilot, administrator or standalone capability.
 - **Event-sourced core.** State changes are immutable events, not overwritten fields; this gives audit trail and analytics for free.
 - **Configuration over code.** Workflow, SLA thresholds, and escalation policy are data, so operations and product teams can tune their own lifecycles without a redeploy.
 - **API-first, integration-friendly.** Every capability is available via API before it is available via UI; existing tools connect in as adapters during transition.
@@ -224,11 +226,11 @@ Microservices around bounded contexts, communicating primarily through the event
 
 | Service | Responsibility | Primary store | Sync/async |
 | --- | --- | --- | --- |
-| Work Item Service | CRUD on canonical WorkItem, emits domain events | Postgres | Sync write, async publish |
+| Work Item Service | Materializes canonical twins and optional local WorkItems, emits domain events | Postgres | Sync write, async publish |
 | Workflow Engine | Validates transitions, enforces WorkflowDefinition | Postgres (definitions) | Sync |
 | Aging & SLA Engine | Computes time-in-state, fires warnings/breaches | Redis (clocks) + Postgres | Async, scheduled |
 | Traceability Graph Service | Edge storage, lineage queries | Postgres (MVP) → graph DB (v2) | Sync read |
-| Integration Gateway | Normalizes inbound webhooks from git/CI/monitoring/CMDB | Stateless | Async |
+| Integration Gateway | Discovers provider schemas, normalizes inbound records and performs governed outbound writes | Stateless | Async |
 | Notification Service | Routes warnings/breaches/mentions to email/Slack/Teams | Redis queue | Async |
 | Analytics/Reporting Service | Flow metrics, DORA/ITIL KPIs, materialized views | OLAP store (e.g. ClickHouse) | Async, batch + streaming |
 | Identity/Access Service | AuthN/AuthZ, RBAC, SSO/SCIM | Postgres | Sync |
@@ -280,6 +282,7 @@ All external systems connect through the Integration Gateway, which normalizes v
 
 | Integration | Direction | Protocol | Data synced |
 | --- | --- | --- | --- |
+| Work management / ITSM (Jira, ServiceNow) | Bidirectional | Native REST APIs + webhooks/polling | Issues, incidents, changes, comments and closure metadata → canonical twins with configured field authority |
 | Git (GitHub/GitLab/Bitbucket) | Inbound | Webhooks | Commits, PRs, branches → linked to WorkItems via commit message references |
 | CI/CD (Jenkins/GH Actions/CircleCI) | Inbound | Webhooks | Pipeline runs, deployments → linked to Story/Release, can auto-transition state |
 | Monitoring/APM (Datadog, Prometheus, PagerDuty) | Inbound | Webhooks/polling | Alerts fired/resolved → auto-create or update Incident WorkItems |
@@ -287,7 +290,18 @@ All external systems connect through the Integration Gateway, which normalizes v
 | ChatOps (Slack/Teams) | Bidirectional | Bot + webhooks | Status queries, incident commands, approvals |
 | Identity (Okta/Azure AD) | Inbound | SAML/OIDC + SCIM | SSO login, user/team provisioning |
 
-**System-of-record decision.** For each integration, decide explicitly whether the external tool remains authoritative for its own data (platform stores a reference/link only) or whether the platform becomes the system of record post-migration. Recommendation for v1: git, CI/CD, and monitoring tools stay authoritative (platform stores links + status); the platform becomes authoritative for work-item state and traceability from day one, since that is the capability gap it exists to close.
+**System-of-record decision.** External tools remain authoritative by default for the fields assigned to them. Cadena is authoritative for immutable correlation, mapping versions, synchronization decisions, audit history, derived policy state and cross-system traceability. Direction and field ownership are configured explicitly, so a permitted Cadena-side action is written back through the connector and an unowned local edit is rejected. A tenant may opt into Cadena-owned local records, but that is not the default production posture.
+
+### 9.1 Lifecycle translation and connector execution contract
+
+State translation is configured per tenant and source/target entity pair. Definitions are versioned through `draft`, `published` and `superseded` states and contain separate rules for each direction. A rule maps the provider-native incoming state to the target-native state and may declare required target field paths and allowed current target states.
+
+Every evaluation resolves both records through immutable provider identities and a stored counterpart relationship. Preview is non-destructive. A committed evaluation produces one durable, auditable connector work order:
+
+- `ready / enqueue_connector_write` when a published rule matches and every field and transition guard passes;
+- `held / hold_for_review` when the mapping is absent, the state is unmapped, required data is missing or the target jump is unsafe.
+
+The provider adapter consumes a ready work order, performs the native API transition, records the intended write for echo-loop suppression and relies on the returning webhook to confirm convergence. Preparing a work order must never be reported as a successful remote transition.
 
 ## 10. API design
 
@@ -307,6 +321,9 @@ All external systems connect through the Integration Gateway, which normalizes v
 | `GET /workitems/{id}/lineage` | Traceability query (§5.2) |
 | `GET /workitems?state=in_review&aging_bucket=red` | Aging/filter queries for dashboards |
 | `POST /webhooks/{integration}` | Inbound integration events |
+| `POST /integrations/state-mappings` | Create a draft versioned lifecycle matrix |
+| `POST /integrations/state-mappings/{id}/publish` | Publish a matrix and supersede the previous active version |
+| `POST /integrations/state-mappings/translate` | Preview or persist a guarded ready/held connector work order |
 | `GET /reports/flow-metrics` | Cycle time, lead time, throughput |
 
 ### 10.2 Example: attempting a transition
@@ -337,6 +354,18 @@ Cloud-agnostic reference stack (mappable to AWS/Azure/GCP equivalents):
 | Object storage | S3-compatible | Attachments, cold audit export |
 
 **Environments.** dev → staging → prod, each an isolated namespace/cluster; infrastructure as code via Terraform; deployment via GitOps (ArgoCD/Flux) so environment state is itself version-controlled and auditable — fitting, for a platform whose whole premise is traceability.
+
+### 11.1 Implemented staging activation boundary
+
+The repository supplies a cloud-agnostic first staging slice while the provider decision remains open:
+
+- Local development keeps embedded PGlite; staging and production use pooled native PostgreSQL selected by `DATABASE_URL`.
+- Non-local startup requires certificate-verified database TLS, bearer authentication bootstrap, disabled header impersonation and demo seeding off by default.
+- The application exposes separate unauthenticated liveness and database-backed readiness endpoints, emits structured request telemetry and drains HTTP/database resources on termination.
+- A non-root immutable container and Kubernetes manifests define external secrets, TLS ingress, resource limits and startup/liveness/readiness probes.
+- CI builds and tests every change; a protected manual workflow publishes a commit-SHA image and performs a readiness-gated staging rollout.
+
+This is an activation boundary, not an active environment. The selected cloud must still provision the cluster, managed PostgreSQL, DNS/certificate and secret binding, configure multi-zone/PITR backups and demonstrate restore and rollback. Until that evidence exists, staging is reported as partial in the platform-milestone ledger.
 
 **Scaling.** Stateless services scale horizontally; Kafka partitioning isolates noisy tenants; read replicas serve the reporting/analytics path so heavy queries never contend with transactional writes.
 
@@ -398,9 +427,11 @@ All dashboards read from the Analytics Service's materialized views (§7), never
 | 0 — Foundation | Core data model | Canonical WorkItem service, single shared state machine, two item types live (Story, Incident), manual linking, basic RBAC |
 | 1 — Signal | Aging & first integrations | Aging/SLA engine, team + executive dashboards, git and CI/CD integration, auto-transitions from pipeline events |
 | 2 — Traceability | Full lineage | Traceability graph service and API, monitoring/APM integration (auto-incident creation), notification/escalation service |
-| 3 — Scale & governance | Enterprise hardening | CMDB federation, chatops, DORA/ITIL analytics suite, multi-tenant hardening, graph DB migration if warranted by volume |
+| 3 — Scale & governance | Enterprise hardening | Native Jira/ServiceNow discovery and bidirectional synchronization, connector-led workspace, CMDB federation, chatops, DORA/ITIL analytics suite, multi-tenant hardening, graph DB migration if warranted by volume |
 
 Each phase is independently shippable and demonstrable: Phase 0 alone already proves the canonical-model thesis on two item types before any integration work begins.
+
+**Post-pilot product posture.** Phase 0's local-create flow is a validation mechanism for the model and remains useful in demo, administration and standalone deployments. Once native connectors are enabled, the primary production entry point is external-record ingestion and the console manages synchronized twins rather than asking users to maintain a second backlog.
 
 ## 16. Open questions, risks & assumptions
 
@@ -489,6 +520,8 @@ Aging/SLA engine (Epic 3), event bus (Epic 5), all external integrations (Epics 
 - [ ] A typed link can be created between a Story and an Incident, and an upstream/downstream lineage query (US4.2) returns the correct chain.
 - [ ] Every acceptance criterion in the four in-scope epics has a passing automated test.
 - [ ] A written note on what would need to change to extend into Phase 1 (aging engine, first integration) — this becomes the input to the next scoping pass.
+
+The local creation criterion above is historical pilot evidence, not the target production entry path. The connector-led product posture defined in §2, §9 and §15 supersedes it for connected deployments.
 
 ### 18.5 Suggested duration
 

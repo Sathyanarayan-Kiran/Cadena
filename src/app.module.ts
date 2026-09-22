@@ -11,12 +11,13 @@ import { NotificationModule } from './modules/notifications/notification.module'
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditController } from './modules/audit/audit.controller';
+import { HealthModule } from './modules/health/health.module';
 
 @Module({
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
-      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*', '/services*', '/notifications*', '/metrics*', '/events*', '/dlq*', '/auth*', '/audit*'],
+      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*', '/services*', '/notifications*', '/metrics*', '/events*', '/dlq*', '/auth*', '/audit*', '/health*'],
     }),
     SlaModule,
     IntegrationModule,
@@ -24,6 +25,7 @@ import { AuditController } from './modules/audit/audit.controller';
     NotificationModule,
     MetricsModule,
     AuthModule,
+    HealthModule,
   ],
   controllers: [WorkItemController, WorkflowController, LineageController, AuditController],
   providers: [],

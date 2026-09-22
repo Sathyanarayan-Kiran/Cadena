@@ -609,9 +609,10 @@
       "stories": [
         {
           "id": "US17.1",
-          "statement": "As an enterprise administrator, I want native connector and entity discovery across major ITSM, SDLC and work-management platforms, so that integrations do not begin with custom API code.",
+          "statement": "As an enterprise administrator, I want native connector discovery and connector-led ingestion across major ITSM, SDLC and work-management platforms, so that external records enter Cadena without custom API code or duplicate manual entry.",
           "acceptance_criteria": [
             "Given configured credentials, when discovery runs against ServiceNow, Jira, Azure DevOps, Zendesk, Salesforce, GitHub or Asana, then supported entities and standard/custom fields are enumerated through the platform's native API.",
+            "Given a source record is selected by webhook, native query or explicit import, when it is first ingested, then Cadena creates a canonical twin carrying its source system, immutable external id, native key/URL, synchronization state and field-authority metadata; later deliveries update that twin rather than creating a duplicate.",
             "Given a connector lacks a required entity or field capability, when configuration is attempted, then the limitation is reported before publishing rather than failing during synchronization."
           ]
         },
@@ -698,6 +699,15 @@
           "acceptance_criteria": [
             "Given a record has a linked twin, when its Jira or ServiceNow page opens in a supported Chrome/Edge extension, then current sync status and a direct link to the remote twin are shown.",
             "Given the user has the required RBAC permission, when they request resync or unlink from the panel, then the action is executed through the same audited platform API and its outcome is displayed."
+          ]
+        },
+        {
+          "id": "US20.2",
+          "statement": "As an integration operator, I want Cadena's management workspace centred on connected sources and synchronized twins, so that teams govern Jira and ServiceNow data without maintaining a duplicate local backlog.",
+          "acceptance_criteria": [
+            "Given production connector mode is enabled, when an operator opens the workspace, then its primary actions are connect source, discover records and start synchronization; local work-item creation is available only in an explicitly enabled pilot, administrator or standalone mode.",
+            "Given a work item originated outside Cadena, when it is displayed, then the source system, native record link, synchronization state, last successful sync, field authority and linked counterpart are visible.",
+            "Given a user attempts to edit an externally owned field, when no permitted outbound mapping exists, then the edit is blocked; when a permitted mapping exists, the change is routed through the audited connector rather than saved as an untracked local divergence."
           ]
         }
       ]

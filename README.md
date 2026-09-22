@@ -2,29 +2,44 @@
 
 This repository contains the pilot implementation of the Unified SDLC & ITSM platform as specified in the **Technical Specification** and **Backlog**.
 
-The pilot proves the platform's core thesis: **one canonical work-item model** and **one state-machine engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them.
+The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex update, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 team heatmap and cross-team executive rollup, US9.3 interactive explorer, US9.4 DORA/ITIL metrics, US10.4 audit export, US10.7 SHA-256 audit verification, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, and the integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog contains **20 epics and 72 stories**, with **35 done / 4 partial / 33 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger.
+> **Current status (Codex update, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. US13.1 remains partial until a native connector executes its ready work orders. The canonical backlog contains **20 epics and 73 stories**, with **35 done / 5 partial / 33 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger and platform milestone.
+
+## Product Interaction Model
+
+Cadena's production role is a synchronization control plane over the systems where teams already work:
+
+```text
+Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceNow record
+```
+
+- Jira, ServiceNow and other providers remain authoritative by default for the fields assigned to them.
+- Cadena owns the immutable correlation, mapping versions, synchronization decisions, derived policy state, audit evidence and cross-system traceability.
+- Connector ingestion creates or updates the internal canonical twin; users are not expected to maintain a duplicate backlog.
+- A permitted edit to an externally owned field is written back through the audited connector. An edit with no permitted outbound mapping is rejected rather than stored as silent divergence.
+- Local creation remains useful for the current pilot, automated incident generation, administration and optional standalone deployments. US20.2 will remove it as the primary production action and put connect, discover and synchronize first.
 
 ---
 
 ## Technical Stack & Architecture
 
 - **Runtime & Framework**: TypeScript throughout, NestJS backend API.
-- **Datastore**: PostgreSQL with `pgvector` enabled via the `@electric-sql/pglite` in-process WASM engine, persisting to `CADENA_DATA_DIR` and in-memory when that is unset.
+- **Datastore**: One query/transaction contract over embedded `@electric-sql/pglite` for local/test use and pooled native PostgreSQL via `DATABASE_URL` for staging. Non-local mode requires certificate-verified TLS.
+- **Staging Runtime**: Non-root multi-stage container, fail-closed environment validation, public liveness/readiness probes, graceful shutdown, JSON request telemetry, Kubernetes TLS/secret manifests and immutable-image CI/deploy workflows.
 - **Workflow Engine**: Hand-rolled state-machine engine implementing Spec §4, supporting versioned definitions, role guards, required fields, and reachability validation.
 - **Traceability Graph**: Typed edge table (`work_item_links`) supporting semantic upstream/downstream traversal, an interactive depth-bounded explorer, Service impact analysis, and immutable point-in-time JSON lineage reports.
 - **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, warning/breach events, and durable pause/resume semantics for configured hold states.
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
-- **Cross-system Synchronization Safety**: Tenant-scoped immutable provider identities, typed one-to-many/many-to-one dependency links, exact-id graph resolution, metadata-only rename/move updates, a dedicated counterpart write-back contract, and actor-plus-hash echo suppression with durable content fallback after restart.
+- **Cross-system Synchronization Safety**: Tenant-scoped immutable provider identities, typed one-to-many/many-to-one dependency links, exact-id graph resolution, versioned bidirectional state matrices with guarded target fields/transitions, durable ready/held connector work orders, metadata-only rename/move updates, a dedicated counterpart write-back contract, and actor-plus-hash echo suppression with durable content fallback after restart.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
 - **Transactional Event Backbone**: Canonical work-item creation, transitions and typed links commit their immutable event and outbox marker atomically; inbound webhooks persist before returning HTTP 202 and process from a queryable queue; pending envelopes recover on bootstrap with the same event id, and every consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
 - **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
-- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs.
-- **Testing**: Vitest + NestJS Testing + Supertest running 134 automated tests across 39 test files, plus a 14-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. It still exposes local creation as a pilot action; the connector-led workspace in US20.2 is documented but not implemented.
+- **Testing**: Vitest + NestJS Testing + Supertest running 144 automated tests across 41 test files, plus a 15-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -66,7 +81,7 @@ Expected output:
  ✓ test/us9.2.spec.ts (3 tests)
  ✓ test/us9.3.spec.ts (5 tests)
  ✓ test/us9.4.spec.ts (7 tests)
- ✓ test/tracker.spec.ts (6 tests)
+ ✓ test/tracker.spec.ts (7 tests)
  ✓ test/persistence.spec.ts (5 tests)
  ✓ test/us5.1.spec.ts (4 tests)
  ✓ test/us5.4.spec.ts (4 tests)
@@ -79,9 +94,11 @@ Expected output:
  ✓ test/us13.3.spec.ts (2 tests)
  ✓ test/us10.9.spec.ts (13 tests)
  ✓ test/backlog-fixture.spec.ts (1 test)
+ ✓ test/us13.1.spec.ts (3 tests)
+ ✓ test/cloud-staging.spec.ts (6 tests)
 
- Test Files  39 passed (39)
-      Tests  134 passed (134)
+ Test Files  41 passed (41)
+      Tests  144 passed (144)
 ```
 
 ### 2. Run the Server
@@ -103,9 +120,30 @@ The server states its mode at boot:
 
 Schema creation is additive — `CREATE TABLE IF NOT EXISTS` and `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` — so reopening an existing directory with a newer build migrates it rather than resetting it. Demo seeding is guarded on an empty tenant and every supporting insert is an upsert, so a restart never duplicates the seed.
 
-**Boundary:** this is a single-process embedded datastore. It is durable across restarts but is not a managed Postgres: no replication, no point-in-time recovery, and no concurrent access from a second process. Backing up means copying the directory while the server is stopped.
+**Local boundary:** `CADENA_DATA_DIR` remains a single-process embedded datastore. It is durable across restarts but has no replication or point-in-time recovery. Staging instead uses the native PostgreSQL adapter described below.
 
-### 3. Run Browser Smoke Tests
+### 3. Validate and Activate Staging
+
+Copy `.env.staging.example` into your secret-management workflow, supply an external PostgreSQL URL and CA certificate, then validate the non-secret environment contract:
+
+```bash
+npm run staging:validate
+```
+
+`CADENA_RUNTIME_MODE=staging` fails startup unless `DATABASE_URL` is present, `CADENA_DATABASE_SSL=verify-full`, header-based identity is disabled and `CADENA_BOOTSTRAP_TOKEN` contains at least 32 characters. Demo seeding defaults off.
+
+The container and Kubernetes resources live in `Dockerfile` and `deploy/staging/`. The deployment exposes:
+
+```http
+GET /health/live   # process is alive; no database dependency
+GET /health/ready  # schema initialized and database answered
+```
+
+The complete provider prerequisites, secret fields, rollout and restore checklist are in `deploy/staging/README.md`. The GitHub **Publish and deploy staging** workflow is manual and targets a protected `staging` environment.
+
+**Activation boundary:** no cloud account has been selected or modified. Provisioning managed PostgreSQL, Kubernetes, DNS/TLS, secret binding and backups is still required, followed by an actual restore and immutable-image rollback drill.
+
+### 4. Run Browser Smoke Tests
 
 Drives the real page in headless Chrome against the built server. Uses a browser already installed on the machine, so there is no Chromium download; the suite skips if none is found.
 
@@ -233,6 +271,67 @@ x-org-id: 00000000-0000-0000-0000-000000000099
 `automation_actor_role` is the role the integration presents to the workflow engine when it proposes mitigation. It is evaluated by the transition guard like any other actor role, not trusted: if the configured role fails the guard, the transition is recorded as skipped with its reason and the Incident is left where it was.
 
 Alert evidence is available at `GET /workitems/:id/monitoring-alerts` (and through the shared `GET /workitems/:id/external-links`); poll `GET /integrations/monitoring/deliveries/:deliveryId?provider=:provider` for `queued`, `processing`, `completed` or `failed` state and the eventual `result`.
+
+---
+
+## Lifecycle State Translation (US13.1)
+
+The provider-neutral translation engine versions mappings independently for each tenant and source/target entity pair. Operators can create drafts in the **State mappings** dialog or through the API, then explicitly publish the version that synchronization should use.
+
+```http
+POST /integrations/state-mappings
+x-org-id: 00000000-0000-0000-0000-000000000099
+x-actor-id: mapping-admin
+Content-Type: application/json
+
+{
+  "name": "Incident delivery lifecycle",
+  "source": { "system": "servicenow", "entity_type": "incident" },
+  "target": { "system": "jira", "entity_type": "issue" },
+  "rules": [
+    {
+      "direction": "source_to_target",
+      "from_state": "Resolved",
+      "to_state": "Done",
+      "required_target_fields": ["resolution.code", "resolution.notes"],
+      "allowed_target_from_states": ["In Progress"]
+    }
+  ]
+}
+```
+
+Publish the draft with `POST /integrations/state-mappings/:id/publish`. Publishing a newer version for the same pair supersedes the old published version without rewriting its history.
+
+Evaluate a correlated change from either direction:
+
+```http
+POST /integrations/state-mappings/translate
+x-org-id: 00000000-0000-0000-0000-000000000099
+Content-Type: application/json
+
+{
+  "source_identity": {
+    "system": "servicenow",
+    "entity_type": "incident",
+    "immutable_id": "8b31-sys-id"
+  },
+  "target_identity": {
+    "system": "jira",
+    "entity_type": "issue",
+    "immutable_id": "1004821"
+  },
+  "source_state": "Resolved",
+  "current_target_state": "In Progress",
+  "target_fields": {
+    "resolution": { "code": "Solved", "notes": "Verified in production" }
+  },
+  "dry_run": false
+}
+```
+
+Dry-run is the default and writes no transaction. With `dry_run: false`, a safe decision is recorded as `ready` / `enqueue_connector_write`; missing fields, an invalid jump, an unmapped state or no published matrix is recorded as `held` / `hold_for_review`. `GET /integrations/state-mappings/transactions` exposes those decisions for connector and operator use. Both identities must already be joined by an immutable US13.2 counterpart link.
+
+**Boundary:** a ready decision is a durable work order, not a remote side effect. The native US17.1 Jira/ServiceNow adapter will consume it and perform the provider transition; that remaining boundary is why US13.1 is currently partial.
 
 ---
 
@@ -665,19 +764,21 @@ The pilot is deliberately explicit about what is not production-ready:
 
 ## Next Extension Work
 
-The specification's Phase 1 operational-visibility scope is now complete: SLA clocks can pause on hold, the team heatmap is browser-verified, and the executive rollup reports SLA compliance, cycle time and aging distribution per team and business unit. The next extension work is:
+The next delivery sequence follows the connector-led product decision:
 
-1. **Remaining Event Backbone (Epic 5)**:
-   - Mutation-to-event delivery, HTTP 202 webhook acceptance and consumption are reliable: transactional, idempotent, retried, dead-lettered and replayable. Still open beyond the completed Epic 5 stories: a continuously polling multi-worker dispatcher and replacing the in-process bus with Kafka / AWS MSK.
+1. **Activate cloud staging**:
+   - Select AWS/Azure/GCP and region, provision the managed services, bind secrets, then prove HTTPS, database restore and immutable-image rollback using `deploy/staging/README.md`.
 
-2. **Real Notification Transports (Epic 8 hardening)**:
-   - Replace the pilot channel adapters with SES/SendGrid, the Slack Web API, and Microsoft Graph. Routing, fallback, and the delivery log already work and are transport-independent.
+2. **US17.1 minimal Jira/ServiceNow slice**:
+   - Connect credentials, discover entities and fields, ingest selected external records, materialize canonical twins without duplicate creation, and execute US13.1 ready state-change work orders.
 
-3. **CMDB Federation (Epic 11)**:
-   - Replace pilot-discovered Service stubs with a federated read from the authoritative CMDB, including staleness flagging and owning-team resolution.
+3. **US20.2 — connector-led management workspace**:
+   - Replace local creation as the primary production action with connect, discover and synchronize; expose source, authority, counterpart and synchronization health on every twin.
 
-4. **Analytics Scale Boundary (Epic 9)**:
-   - US9.2 executive rollup, US9.3 interactive traceability and US9.4 flow metrics are implemented. Still open: analytics materialized views so reporting load never contends with the workflow engine at production volume.
+4. **US13.4 and US13.5 — safe content and closure sync**:
+   - Keep private work notes out of public streams and write complete resolution metadata back to the ITSM record.
+
+Multi-worker dispatch, a managed broker, real notification transports, CMDB federation and analytics materialized views remain production-hardening tracks, but they no longer obscure the immediate product path.
 
 ---
 
@@ -759,6 +860,8 @@ The specification's Phase 1 operational-visibility scope is now complete: SLA cl
 | **US10.4** | Keeps audit history tenant-scoped and exposes it from item details as a JSON download | `test/us10.4.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
 | **US10.7** | Appends field changes, transitions and integration transactions to a tenant-wide SHA-256 chain | `test/us10.7.spec.ts` | **PASS** |
 | **US10.7** | Detects source tampering, backfills existing event stores and exposes verification metadata in export/UI | `test/us10.7.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **US13.1** | Versions and publishes bidirectional mappings and previews translated states without writing | `test/us13.1.spec.ts`, `test/ui-smoke.spec.ts` | **PASS (provider-neutral)** |
+| **US13.1** | Holds missing fields, invalid target jumps and unmapped states while persisting valid ready work orders | `test/us13.1.spec.ts` | **PASS (native execution pending US17.1)** |
 | **US13.2** | Persists dedicated immutable references on both sides and survives key/URL changes without re-pairing | `test/us13.2.spec.ts` | **PASS** |
 | **US13.2** | Resolves one-to-many and many-to-one dependency trees without cross-tenant or orphan links | `test/us13.2.spec.ts` | **PASS** |
 | **US13.3** | Suppresses an exact returning write by service-account identity plus canonical SHA-256 payload hash | `test/us13.3.spec.ts` | **PASS** |

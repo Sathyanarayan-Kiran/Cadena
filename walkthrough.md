@@ -2,8 +2,62 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation and US13.3 echo-loop suppression. The canonical backlog is **20 epics / 72 stories**, with **35 done / 4 partial / 33 not started**.
-**Verification:** 134 automated tests across 39 test files, plus 14 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression and the provider-neutral US13.1 state-translation engine. The canonical backlog is **20 epics / 73 stories**, with **35 done / 5 partial / 33 not started**.
+**Verification:** 144 automated tests across 41 test files, plus 15 browser smoke tests driving the real page.
+
+---
+
+## 2026-09-22 — Cloud staging foundation
+
+Codex added the repository-side staging boundary without pretending that a cloud account is already running:
+
+- `DATABASE_URL` selects pooled managed PostgreSQL while local development and tests retain embedded PGlite.
+- Staging and production fail closed unless database TLS is verified, header impersonation is disabled and a strong bootstrap credential is supplied.
+- Demo seeding is off by default outside local mode, and database credentials are never included in startup or request logs.
+- `/health/live` and `/health/ready` are public probe endpoints; readiness proves schema initialization and a live database query.
+- Requests emit structured JSON telemetry with a request id and latency, and shutdown drains HTTP before closing the datastore.
+- The container runs as a non-root user. Kubernetes uses a read-only root filesystem, external secrets, TLS ingress and separate startup/liveness/readiness probes.
+- CI verifies the application and container; the protected manual staging workflow publishes an immutable commit-SHA image and waits for rollout readiness.
+- The runtime moved to NestJS 12 / Express 5 and CI rejects known high-severity production dependency advisories; the current production-only audit reports zero vulnerabilities.
+- `deploy/staging/README.md` records provider prerequisites, secret binding, immutable rollback and the required database restore drill.
+- `status.html` now shows infrastructure work as a separate platform milestone, so it does not distort product-story completion.
+
+**Status:** implemented but not activated. No AWS/Azure/GCP account, managed PostgreSQL instance, cluster, DNS record, certificate or backup was created. kubectl v1.37.0 is installed and successfully rendered the staging Kustomize bundle. Docker Desktop 4.91.0 and Docker CLI 29.8.0 are installed; WSL and Virtual Machine Platform are enabled, with a Windows restart still required before the local engine and image build can run. The product ledger remains **35 done / 5 partial / 33 not started** across **20 epics / 73 stories**.
+
+**Next:** select the staging provider and region, activate this foundation, prove HTTPS/restore/rollback, then build the minimal US17.1 Jira/ServiceNow connector.
+
+---
+
+## 2026-09-22 — Versioned lifecycle state translation (US13.1)
+
+Codex implemented the guarded mapping layer between correlated Jira/ServiceNow-style records:
+
+- Mappings are tenant scoped and versioned as draft, published or superseded; a replacement publish preserves the earlier definition as history.
+- Separate source-to-target and target-to-source rules map native lifecycle names without forcing either provider to adopt Cadena's terminology.
+- Rules can require nested target fields and constrain the target's current state, so incomplete closure data or invalid jumps are held rather than guessed.
+- Translation resolves both records through their immutable US13.2 counterpart identities and supports non-destructive dry runs.
+- Committed evaluations persist an auditable `ready` connector work order or a `held` decision explaining a missing mapping, unmapped state, missing field or invalid transition.
+- The workspace now has a **State mappings** dialog for drafting, reviewing and publishing matrices.
+- `test/us13.1.spec.ts` covers both directions, versioning, preview, guards, durable decisions, audit events and tenant boundaries; the browser suite proves draft creation and publication through the built UI.
+
+US13.1 moves from not started to **partial**, taking the canonical ledger to **35 done / 5 partial / 33 not started**.
+
+**Boundary:** a ready work order has not yet called a native Jira or ServiceNow API. The story becomes complete when the US17.1 connector consumes it and verifies the remote counterpart transition. The next implementation step is the cloud staging foundation, followed by that connector slice.
+
+---
+
+## 2026-09-22 — Connector-led product direction
+
+Codex reconciled the original local-work-management pilot with the newer integration-platform scope:
+
+- Jira, ServiceNow and other connected tools remain authoritative by default for the fields they own.
+- Cadena's `WorkItem` is the canonical internal twin used for correlation, transformation, policy, audit and analytics; connector ingestion normally creates or updates it.
+- The target production journey is connect source → discover → map → synchronize → operate, not duplicate manual entry.
+- US17.1 now includes ingestion that materializes an externally identified twin, not discovery alone.
+- New US20.2 defines the management-console change: source and sync health are visible, externally owned edits use audited mappings, and local creation is available only in an explicitly enabled pilot, administrator or standalone mode.
+- The recommended sequence is US13.1, cloud staging, the minimal Jira/ServiceNow US17.1 slice, US20.2, then US13.4 and US13.5.
+
+**Implementation boundary:** this entry changes product scope and delivery order only. The current pilot UI still shows **New work item**, and no live Jira or ServiceNow connector is being claimed.
 
 ---
 

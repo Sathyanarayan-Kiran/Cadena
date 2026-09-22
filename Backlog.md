@@ -4,6 +4,8 @@ Epics below map directly to the services and phases defined in the main specific
 
 > **Master-backlog consolidation (2026-09-21):** `cadena-master-epics-and-user-stories.md` was reviewed against the existing canonical backlog rather than appended with conflicting Epic 1–10 identifiers. Nine existing stories were expanded with missing acceptance criteria and fifteen genuinely distinct stories were added across four new and six existing epics. The canonical scope therefore moves from **16 epics / 56 stories** to **20 epics / 71 stories** while preserving every original story id and delivery status.
 
+> **Connector-led product decision (2026-09-22):** Cadena's production experience is a synchronization control plane over authoritative Jira, ServiceNow and other provider records. The internal `WorkItem` remains the canonical twin used for mapping, policy, audit and analytics; it is normally created by connector ingestion rather than duplicate user entry. After the separate authentication increment brought the ledger to 72 stories, US17.1 now owns connector-led ingestion and new US20.2 owns the management-workspace transition. The canonical scope is now **20 epics / 73 stories**; the local-create pilot remains implemented but is not the target primary workflow.
+
 ## Epic 1 — Canonical work item model & core service
 
 **US1.1** As a platform engineer, I want one WorkItem schema shared across all item types, so that every type gets create/read/update/list for free.
@@ -339,9 +341,10 @@ Epics below map directly to the services and phases defined in the main specific
 
 ## Epic 17 — Connector, mapping & ingestion automation
 
-**US17.1** As an enterprise administrator, I want native connector and entity discovery across major ITSM, SDLC and work-management platforms, so that integrations do not begin with custom API code.
+**US17.1** As an enterprise administrator, I want native connector discovery and connector-led ingestion across major ITSM, SDLC and work-management platforms, so that external records enter Cadena without custom API code or duplicate manual entry.
 
 - Given configured credentials, when discovery runs against ServiceNow, Jira, Azure DevOps, Zendesk, Salesforce, GitHub or Asana, then supported entities and standard/custom fields are enumerated through the platform's native API.
+- Given a source record is selected by webhook, native query or explicit import, when it is first ingested, then Cadena creates a canonical twin carrying its source system, immutable external id, native key/URL, synchronization state and field-authority metadata; later deliveries update that twin rather than creating a duplicate.
 - Given a connector lacks a required entity or field capability, when configuration is attempted, then the limitation is reported before publishing rather than failing during synchronization.
 
 **US17.2** As an integration administrator, I want visual field mappings with a constrained scripting escape hatch, so that common transformations require no code and exceptional cases remain safely extensible.
@@ -389,3 +392,9 @@ Epics below map directly to the services and phases defined in the main specific
 
 - Given a record has a linked twin, when its Jira or ServiceNow page opens in a supported Chrome/Edge extension, then current sync status and a direct link to the remote twin are shown.
 - Given the user has the required RBAC permission, when they request resync or unlink from the panel, then the action is executed through the same audited platform API and its outcome is displayed.
+
+**US20.2** As an integration operator, I want Cadena's management workspace centred on connected sources and synchronized twins, so that teams govern Jira and ServiceNow data without maintaining a duplicate local backlog.
+
+- Given production connector mode is enabled, when an operator opens the workspace, then its primary actions are connect source, discover records and start synchronization; local work-item creation is available only in an explicitly enabled pilot, administrator or standalone mode.
+- Given a work item originated outside Cadena, when it is displayed, then the source system, native record link, synchronization state, last successful sync, field authority and linked counterpart are visible.
+- Given a user attempts to edit an externally owned field, when no permitted outbound mapping exists, then the edit is blocked; when a permitted mapping exists, the change is routed through the audited connector rather than saved as an untracked local divergence.

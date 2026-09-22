@@ -21,6 +21,8 @@ export class AuthGuard implements CanActivate {
 
   public async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest();
+    const path = request.path || request.url?.split('?')[0];
+    if (path === '/health/live' || path === '/health/ready') return true;
     const principal = await this.resolve(request);
 
     if (principal.source === 'dev_header') {

@@ -59,6 +59,20 @@ describe('Implementation tracker', () => {
     expect(bad, 'epics assigned to an unknown rollout phase').toEqual([]);
   });
 
+  it('records platform milestones separately from product-story completion', () => {
+    const milestones = (overlay as any).platform_milestones;
+    expect(Array.isArray(milestones)).toBe(true);
+    expect(milestones.length).toBeGreaterThan(0);
+    for (const milestone of milestones) {
+      expect(milestone.id?.trim()).toBeTruthy();
+      expect(milestone.name?.trim()).toBeTruthy();
+      expect(VALID_STATUSES).toContain(milestone.status);
+      expect(milestone.note?.trim()).toBeTruthy();
+      expect(milestone.remaining?.trim()).toBeTruthy();
+      expect(milestone.evidence?.length).toBeGreaterThan(0);
+    }
+  });
+
   it('records every scope delta without relabelling existing scope as new', () => {
     // Deltas are an ordered list: a single entry could not represent a second increment,
     // because its current_* counts must equal the canonical backlog and only one delta
