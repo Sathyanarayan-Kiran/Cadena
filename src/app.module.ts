@@ -12,6 +12,7 @@ import { MetricsModule } from './modules/metrics/metrics.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AuditController } from './modules/audit/audit.controller';
 import { HealthModule } from './modules/health/health.module';
+import { ConnectorModule } from './modules/connectors/connector.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { HealthModule } from './modules/health/health.module';
     MetricsModule,
     AuthModule,
     HealthModule,
+    ConnectorModule,
   ],
   controllers: [WorkItemController, WorkflowController, LineageController, AuditController],
   providers: [],

@@ -610,12 +610,12 @@
     },
     "US17.1": {
       "name": "Native connectors, discovery and ingestion",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
       "expandedIn": "connector-led-2026-09-22",
-      "note": "Expanded by the connector-led product decision. Only normalized Git/CI and monitoring webhooks exist; there is no native Jira/ServiceNow discovery or ingestion that materializes an externally owned canonical twin."
+      "note": "Verified by <code>test/us17.1.spec.ts</code> — provider-neutral connector boundary, native Jira REST adapter, ServiceNow ITSM adapter boundary, secret reference resolution, schema discovery, watermarked ingestion into canonical twins, correlation node linking, and connector management workspace UI."
     },
     "US17.2": {
       "name": "Visual mappings with sandboxed scripts",

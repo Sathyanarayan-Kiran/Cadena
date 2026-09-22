@@ -2,6 +2,48 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex US17.1 native connectors, discovery and ingestion update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22.
+
+**Status:** Complete. US17.1 moved from not started to done. The delivery ledger is now **36 done / 5 partial / 32 not started** across **20 epics / 73 stories**.
+
+### Scope delivered by Codex
+
+- Added provider-neutral connector foundation and contract (`ConnectorAdapter`), supporting connector registration, credentials reference resolution (`SecretManagerResolver`), connection testing, schema discovery, watermarked ingestion, and outbound state change execution.
+- Added native Jira REST adapter (`JiraConnectorAdapter`), enumerating projects, issue types, standard fields (`summary`, `status`, `description`, `priority`, `assignee`) and custom fields (`customfield_*`), with JQL incremental ingestion (`updated >= cursor_timestamp`).
+- Added ServiceNow ITSM adapter boundary (`ServiceNowConnectorAdapter`) for Table API entities (`incident`, `change_request`).
+- Added database tables `integration_connectors`, `integration_connector_cursors`, and `integration_canonical_twins` with tenant isolation and cascade rules.
+- Materialized external records into `integration_canonical_twins` and linked them to `integration_correlation_nodes` (via `CorrelationService.upsertNode`).
+- Integrated with `StateMappingService` (US13.1) and `SyncGuardService` (US13.3) for echo-suppressed outbound work order execution.
+- Added REST API endpoints (`/integrations/connectors`) for connector CRUD, testing, discovery, watermarked polling, and twin queries.
+- Added a responsive **Native connectors & ingestion** management dialog to the primary UI workspace (`public/index.html`).
+
+### Verification added by Codex
+
+- `test/us17.1.spec.ts` verifies secret reference resolution, Jira/ServiceNow discovery, twin materialization, duplicate update handling, and API endpoints.
+- TypeScript production build: **PASS**
+- Full non-browser regression: **PASS — 148 tests across 42 files**
+- Tracker generation: **PASS — 20 epics / 73 stories, 36 done / 5 partial / 32 not started**
+
+### Primary files added / updated by Codex
+
+- `src/modules/connectors/connector.types.ts`
+- `src/modules/connectors/connector.interface.ts`
+- `src/modules/connectors/secret-manager-ref.ts`
+- `src/modules/connectors/jira-connector.adapter.ts`
+- `src/modules/connectors/servicenow-connector.adapter.ts`
+- `src/modules/connectors/connector.service.ts`
+- `src/modules/connectors/connector.controller.ts`
+- `src/modules/connectors/connector.module.ts`
+- `test/us17.1.spec.ts`
+- `src/database/database.service.ts`
+- `src/modules/integrations/correlation.service.ts`
+- `src/app.module.ts`
+- `public/index.html`
+- `implementation-status.json`
+- `public/status.html` (generated)
+
 ## Codex cloud-staging foundation update — 2026-09-22
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. It is a platform milestone separate from the product-story ledger and does not claim that a cloud account or managed service has been provisioned.

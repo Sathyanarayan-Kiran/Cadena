@@ -2,8 +2,23 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression and the provider-neutral US13.1 state-translation engine. The canonical backlog is **20 epics / 73 stories**, with **35 done / 5 partial / 33 not started**.
-**Verification:** 144 automated tests across 41 test files, plus 15 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, and US17.1 native connectors, discovery and ingestion. The canonical backlog is **20 epics / 73 stories**, with **36 done / 5 partial / 32 not started**.
+**Verification:** 148 automated tests across 42 test files, plus 15 browser smoke tests driving the real page.
+
+---
+
+## 2026-09-22 — US17.1 Native connectors, discovery and ingestion
+
+Codex delivered native connector discovery and ingestion for external systems of record:
+
+- Provider-neutral connector architecture (`ConnectorAdapter`) supporting connector registration, credentials reference resolution (`SecretManagerResolver`), connection testing, schema discovery, watermarked ingestion, and outbound state changes.
+- Native Jira REST adapter (`JiraConnectorAdapter`) enumerating projects, issue types, standard fields (`summary`, `status`, `description`, `priority`, `assignee`) and custom fields (`customfield_*`), with JQL watermarked ingestion (`updated >= cursor_timestamp`).
+- ServiceNow ITSM adapter boundary (`ServiceNowConnectorAdapter`) for Table API entities (`incident`, `change_request`).
+- Materialized canonical twins in `integration_canonical_twins` and immutable correlation nodes in `integration_correlation_nodes`.
+- Integrated with `StateMappingService` (US13.1) and `SyncGuardService` (US13.3) for echo-suppressed outbound work orders.
+- Responsive **Native connectors & ingestion** management UI in `public/index.html`.
+
+**Status:** Complete. The canonical backlog is now **20 epics / 73 stories**, with **36 done / 5 partial / 32 not started**. Verified by `test/us17.1.spec.ts` (4 tests) and 148 non-browser tests across 42 files.
 
 ---
 

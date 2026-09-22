@@ -192,6 +192,28 @@ export class CorrelationService {
     };
   }
 
+  public async upsertNode(
+    orgId: string,
+    entity: CorrelationEntityInput,
+    actorId: string = 'system',
+  ): Promise<CorrelationNode> {
+    await this.dbService.initialize();
+    const normalized = this.normalizeEntity(entity, 'node');
+    const result = await this.dbService.db.query<any>(
+      this.nodeUpsertSql(),
+      [
+        randomUUID(),
+        orgId,
+        normalized.system,
+        normalized.entity_type,
+        normalized.immutable_id,
+        normalized.display_key,
+        normalized.url,
+      ],
+    );
+    return this.mapNode(result.rows[0]);
+  }
+
   public async updateMetadata(
     orgId: string,
     nodeId: string,

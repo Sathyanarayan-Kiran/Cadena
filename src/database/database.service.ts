@@ -497,6 +497,50 @@ export class DatabaseService {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(org_id, item_type, state)
       );
+
+      CREATE TABLE IF NOT EXISTS integration_connectors (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        provider TEXT NOT NULL,
+        name TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'unconfigured',
+        config TEXT NOT NULL DEFAULT '{}',
+        discovery_metadata TEXT DEFAULT '{}',
+        last_synced_at TIMESTAMP WITH TIME ZONE,
+        last_success_at TIMESTAMP WITH TIME ZONE,
+        sync_lag_seconds INT NOT NULL DEFAULT 0,
+        error_message TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (org_id, provider, name)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_connector_cursors (
+        id UUID PRIMARY KEY,
+        connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        entity_type TEXT NOT NULL,
+        cursor_value TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (connector_id, entity_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_canonical_twins (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        provider TEXT NOT NULL,
+        artifact_type TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        native_key TEXT,
+        native_url TEXT,
+        sync_state TEXT NOT NULL DEFAULT 'synced',
+        field_authority TEXT DEFAULT '{}',
+        payload TEXT NOT NULL DEFAULT '{}',
+        correlation_node_id UUID REFERENCES integration_correlation_nodes(id),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (org_id, provider, artifact_type, external_id)
+      );
     `);
 
     // Safe migration for pilot databases created before stable work-item keys existed.
