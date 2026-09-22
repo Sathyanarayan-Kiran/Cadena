@@ -7,7 +7,7 @@
       "name": "Cloud staging foundation",
       "date": "2026-09-22",
       "status": "partial",
-      "note": "The repository now supports pooled managed PostgreSQL with verified TLS, staging configuration fail-closed rules, public liveness/readiness probes, graceful shutdown, structured request telemetry, a non-root immutable container, Kubernetes TLS/secret manifests, and CI publish/deploy workflows. kubectl v1.37.0 successfully rendered the staging Kustomize bundle locally; the Docker image build awaits the Windows restart required after enabling WSL and Virtual Machine Platform.",
+      "note": "The repository now supports pooled managed PostgreSQL with verified TLS, staging configuration fail-closed rules, public liveness/readiness probes, graceful shutdown, structured request telemetry, a non-root immutable container, Kubernetes TLS/secret manifests, and CI publish/deploy workflows. The staging Kustomize bundle rendered successfully, and Docker built and ran the production image as a healthy non-root container with a read-only root filesystem and passing liveness/readiness checks.",
       "evidence": [
         "test/cloud-staging.spec.ts",
         "Dockerfile",

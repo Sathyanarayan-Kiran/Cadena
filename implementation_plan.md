@@ -31,8 +31,8 @@ This document records the delivered pilot architecture and subsequent implementa
 - Full non-browser regression: **PASS — 144 tests across 41 files**
 - Built-page browser smoke suite: **PASS — 15 tests**
 - Tracker: **PASS — 20 epics / 73 stories, 35 done / 5 partial / 33 not started; cloud staging shown as a partial platform milestone**
-- Kubernetes manifest render: **PASS — kubectl v1.37.0 / Kustomize v5.8.1 rendered `deploy/staging` successfully on 2026-09-22**
-- Local container build: **pending restart — Docker Desktop 4.91.0 / Docker CLI 29.8.0 are installed; WSL and Virtual Machine Platform were enabled successfully, but Windows must restart before the Docker engine can start and build the image**
+- Kubernetes manifest render: **PASS — kubectl / Kustomize v5.8.1 rendered `deploy/staging` successfully on 2026-09-22**
+- Local container build and runtime smoke: **PASS — Docker Desktop 4.91.0 / engine 29.8.0 built `cadena:staging-validation`; the production layer reported 0 known dependency vulnerabilities, the image ran as the non-root `node` user with a read-only root filesystem, Docker reported it healthy, `/health/live` and `/health/ready` returned HTTP 200, and SIGTERM initiated graceful shutdown**
 
 ### Files added by Codex
 

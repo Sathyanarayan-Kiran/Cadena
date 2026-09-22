@@ -22,7 +22,7 @@ Codex added the repository-side staging boundary without pretending that a cloud
 - `deploy/staging/README.md` records provider prerequisites, secret binding, immutable rollback and the required database restore drill.
 - `status.html` now shows infrastructure work as a separate platform milestone, so it does not distort product-story completion.
 
-**Status:** implemented but not activated. No AWS/Azure/GCP account, managed PostgreSQL instance, cluster, DNS record, certificate or backup was created. kubectl v1.37.0 is installed and successfully rendered the staging Kustomize bundle. Docker Desktop 4.91.0 and Docker CLI 29.8.0 are installed; WSL and Virtual Machine Platform are enabled, with a Windows restart still required before the local engine and image build can run. The product ledger remains **35 done / 5 partial / 33 not started** across **20 epics / 73 stories**.
+**Status:** implemented and locally validated, but not cloud-activated. No AWS/Azure/GCP account, managed PostgreSQL instance, cluster, DNS record, certificate or backup was created. kubectl v1.36.1 / Kustomize v5.8.1 successfully rendered the staging bundle. Docker Desktop 4.91.0 / engine 29.8.0 built the production image, which ran healthy as the non-root `node` user with a read-only root filesystem; both health endpoints returned HTTP 200 and graceful SIGTERM shutdown was observed. The product ledger remains **35 done / 5 partial / 33 not started** across **20 epics / 73 stories**.
 
 **Next:** select the staging provider and region, activate this foundation, prove HTTPS/restore/rollback, then build the minimal US17.1 Jira/ServiceNow connector.
 
