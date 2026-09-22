@@ -10,12 +10,13 @@ import { ServiceRegistryModule } from './modules/services/service-registry.modul
 import { NotificationModule } from './modules/notifications/notification.module';
 import { MetricsModule } from './modules/metrics/metrics.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AuditController } from './modules/audit/audit.controller';
 
 @Module({
   imports: [
     ServeStaticModule.forRoot({
       rootPath: join(__dirname, '..', 'public'),
-      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*', '/services*', '/notifications*', '/metrics*', '/events*', '/dlq*', '/auth*'],
+      exclude: ['/workitems*', '/sla-policies*', '/aging*', '/workflows*', '/integrations*', '/services*', '/notifications*', '/metrics*', '/events*', '/dlq*', '/auth*', '/audit*'],
     }),
     SlaModule,
     IntegrationModule,
@@ -24,7 +25,7 @@ import { AuthModule } from './modules/auth/auth.module';
     MetricsModule,
     AuthModule,
   ],
-  controllers: [WorkItemController, WorkflowController, LineageController],
+  controllers: [WorkItemController, WorkflowController, LineageController, AuditController],
   providers: [],
 })
 export class AppModule {}

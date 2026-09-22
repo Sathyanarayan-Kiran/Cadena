@@ -8,6 +8,7 @@ import {
   WorkItemLink,
 } from './lineage.types';
 import { WorkItemService } from '../work-items/work-item.service';
+import { WorkItem } from '../work-items/work-item.types';
 
 export class InvalidEdgeTypeError extends Error {
   constructor(
@@ -51,6 +52,30 @@ export interface LineageResult {
   nodes: any[];
   edges: WorkItemLink[];
   chain: any[];
+}
+
+export interface LineageGraphNode extends WorkItem {
+  distance: number;
+  directions: Array<'root' | 'up' | 'down'>;
+}
+
+export interface LineageGraphResult {
+  root_id: string;
+  depth: number;
+  nodes: LineageGraphNode[];
+  edges: WorkItemLink[];
+  summary: {
+    node_count: number;
+    edge_count: number;
+    upstream_nodes: number;
+    downstream_nodes: number;
+  };
+}
+
+interface TraversalResult {
+  orderedNodeIds: string[];
+  distances: Map<string, number>;
+  edges: WorkItemLink[];
 }
 
 export class LineageService {
@@ -168,57 +193,10 @@ export class LineageService {
 
     const direction = params.direction || 'up';
     const maxDepth = params.depth || 10;
-    const filterEdgeTypes = params.edgeTypes && params.edgeTypes.length > 0 ? new Set(params.edgeTypes) : null;
+    const traversal = await this.traverseLineage(params, direction, maxDepth);
 
-    const visitedNodeIds = new Set<string>();
-    const visitedEdgeIds = new Set<string>();
-    const nodeQueue: { id: string; currentDepth: number }[] = [{ id: params.workItemId, currentDepth: 0 }];
-
-    visitedNodeIds.add(params.workItemId);
-    const resultEdges: WorkItemLink[] = [];
-    const orderedNodeIds: string[] = [params.workItemId];
-
-    while (nodeQueue.length > 0) {
-      const { id: currId, currentDepth } = nodeQueue.shift()!;
-      if (currentDepth >= maxDepth) continue;
-
-      // Query links for currId
-      const linksRes = params.orgId
-        ? await this.dbService.db.query<any>(
-            `SELECT link.* FROM work_item_links link
-             JOIN work_items source_item ON source_item.id = link.source_id
-             JOIN work_items target_item ON target_item.id = link.target_id
-             WHERE (link.source_id = $1 OR link.target_id = $1)
-               AND source_item.org_id = $2 AND target_item.org_id = $2`,
-            [currId, params.orgId],
-          )
-        : await this.dbService.db.query<any>(
-            `SELECT * FROM work_item_links WHERE source_id = $1 OR target_id = $1`,
-            [currId],
-          );
-
-      for (const row of linksRes.rows || []) {
-        const link = this.mapRowToLink(row);
-        if (filterEdgeTypes && !filterEdgeTypes.has(link.link_type)) continue;
-
-        const nextId = this.getNextNodeId(link, currId, direction);
-
-        if (nextId && !visitedNodeIds.has(nextId)) {
-          visitedNodeIds.add(nextId);
-          orderedNodeIds.push(nextId);
-          nodeQueue.push({ id: nextId, currentDepth: currentDepth + 1 });
-        }
-
-        if (!visitedEdgeIds.has(link.id)) {
-          visitedEdgeIds.add(link.id);
-          resultEdges.push(link);
-        }
-      }
-    }
-
-    // Fetch node details for orderedNodeIds
     const nodes: any[] = [];
-    for (const id of orderedNodeIds) {
+    for (const id of traversal.orderedNodeIds) {
       const item = await this.workItemService.getWorkItemById(id, params.orgId);
       if (item) nodes.push(item);
     }
@@ -227,8 +205,71 @@ export class LineageService {
       root_id: params.workItemId,
       direction,
       nodes,
-      edges: resultEdges,
+      edges: traversal.edges,
       chain: nodes,
+    };
+  }
+
+  /** Returns both semantic directions in one bounded graph for the interactive explorer. */
+  public async getLineageGraph(
+    workItemId: string,
+    orgId: string,
+    depth: number,
+  ): Promise<LineageGraphResult> {
+    await this.dbService.initialize();
+    const root = await this.workItemService.getWorkItemById(workItemId, orgId);
+    if (!root) throw new LineageWorkItemNotFoundError(workItemId);
+
+    const params: LineageQueryParams = { workItemId, orgId };
+    const upstream = await this.traverseLineage(params, 'up', depth);
+    const downstream = await this.traverseLineage(params, 'down', depth);
+    const nodeMeta = new Map<string, { distance: number; directions: Set<'up' | 'down'> }>();
+
+    const mergeTraversal = (result: TraversalResult, direction: 'up' | 'down') => {
+      for (const id of result.orderedNodeIds) {
+        if (id === workItemId) continue;
+        const distance = result.distances.get(id) || 0;
+        const current = nodeMeta.get(id) || { distance, directions: new Set<'up' | 'down'>() };
+        current.distance = Math.min(current.distance, distance);
+        current.directions.add(direction);
+        nodeMeta.set(id, current);
+      }
+    };
+    mergeTraversal(upstream, 'up');
+    mergeTraversal(downstream, 'down');
+
+    const nodes: LineageGraphNode[] = [{ ...root, distance: 0, directions: ['root'] }];
+    const orderedIds = [...nodeMeta.keys()].sort((left, right) => {
+      const a = nodeMeta.get(left)!;
+      const b = nodeMeta.get(right)!;
+      const aDirection = a.directions.has('up') ? 0 : 1;
+      const bDirection = b.directions.has('up') ? 0 : 1;
+      return aDirection - bDirection || a.distance - b.distance || left.localeCompare(right);
+    });
+    for (const id of orderedIds) {
+      const item = await this.workItemService.getWorkItemById(id, orgId);
+      if (!item) continue;
+      const meta = nodeMeta.get(id)!;
+      nodes.push({ ...item, distance: meta.distance, directions: [...meta.directions] });
+    }
+
+    const edgeMap = new Map<string, WorkItemLink>();
+    for (const edge of [...upstream.edges, ...downstream.edges]) edgeMap.set(edge.id, edge);
+    const edges = [...edgeMap.values()].sort(
+      (left, right) => left.created_at.localeCompare(right.created_at) || left.id.localeCompare(right.id),
+    );
+
+    return {
+      root_id: workItemId,
+      depth,
+      nodes,
+      edges,
+      summary: {
+        node_count: nodes.length,
+        edge_count: edges.length,
+        upstream_nodes: [...nodeMeta.values()].filter((meta) => meta.directions.has('up')).length,
+        downstream_nodes: [...nodeMeta.values()].filter((meta) => meta.directions.has('down')).length,
+      },
     };
   }
 
@@ -337,6 +378,64 @@ export class LineageService {
 
     const value = result.rows[0].report;
     return (typeof value === 'string' ? JSON.parse(value) : value) as LineageExportDocument;
+  }
+
+  private async traverseLineage(
+    params: LineageQueryParams,
+    direction: 'up' | 'down',
+    maxDepth: number,
+  ): Promise<TraversalResult> {
+    const filterEdgeTypes = params.edgeTypes?.length ? new Set(params.edgeTypes) : null;
+    const visitedNodeIds = new Set<string>([params.workItemId]);
+    const visitedEdgeIds = new Set<string>();
+    const nodeQueue: Array<{ id: string; currentDepth: number }> = [
+      { id: params.workItemId, currentDepth: 0 },
+    ];
+    const orderedNodeIds = [params.workItemId];
+    const distances = new Map<string, number>([[params.workItemId, 0]]);
+    const edges: WorkItemLink[] = [];
+
+    while (nodeQueue.length > 0) {
+      const { id: currentId, currentDepth } = nodeQueue.shift()!;
+      if (currentDepth >= maxDepth) continue;
+
+      const links = params.orgId
+        ? await this.dbService.db.query<any>(
+            `SELECT link.* FROM work_item_links link
+             JOIN work_items source_item ON source_item.id = link.source_id
+             JOIN work_items target_item ON target_item.id = link.target_id
+             WHERE (link.source_id = $1 OR link.target_id = $1)
+               AND source_item.org_id = $2 AND target_item.org_id = $2
+             ORDER BY link.created_at ASC, link.id ASC`,
+            [currentId, params.orgId],
+          )
+        : await this.dbService.db.query<any>(
+            `SELECT * FROM work_item_links
+             WHERE source_id = $1 OR target_id = $1
+             ORDER BY created_at ASC, id ASC`,
+            [currentId],
+          );
+
+      for (const row of links.rows || []) {
+        const link = this.mapRowToLink(row);
+        if (filterEdgeTypes && !filterEdgeTypes.has(link.link_type)) continue;
+        const nextId = this.getNextNodeId(link, currentId, direction);
+        if (!nextId) continue;
+
+        if (!visitedEdgeIds.has(link.id)) {
+          visitedEdgeIds.add(link.id);
+          edges.push(link);
+        }
+        if (!visitedNodeIds.has(nextId)) {
+          visitedNodeIds.add(nextId);
+          orderedNodeIds.push(nextId);
+          distances.set(nextId, currentDepth + 1);
+          nodeQueue.push({ id: nextId, currentDepth: currentDepth + 1 });
+        }
+      }
+    }
+
+    return { orderedNodeIds, distances, edges };
   }
 
   private getNextNodeId(link: WorkItemLink, currentId: string, direction: 'up' | 'down'): string | null {

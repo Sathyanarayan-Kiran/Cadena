@@ -54,3 +54,14 @@ export interface CreateWorkItemDto {
   custom_fields?: Record<string, any>;
   tags?: string[];
 }
+
+/** Fields that can be edited without bypassing the workflow state machine. */
+export interface UpdateWorkItemDto {
+  title?: string;
+  description?: string;
+  priority?: WorkItemPriority;
+  severity?: WorkItemSeverity | null;
+  owner_id?: string | null;
+  custom_fields?: Record<string, any>;
+  tags?: string[];
+}

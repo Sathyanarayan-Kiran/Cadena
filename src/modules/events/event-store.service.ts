@@ -2,6 +2,7 @@ import { Injectable, OnModuleInit } from '@nestjs/common';
 import { DatabaseService } from '../../database/database.service';
 import { DomainEventEnvelope, InProcessEventBus } from './event-bus';
 import { resolveEventOrgId } from './tenant-resolution';
+import { appendAuditIntegrityEntry } from '../audit/audit-integrity';
 
 export interface StoredEvent {
   event_id: string;
@@ -62,23 +63,38 @@ export class EventStoreService implements OnModuleInit {
   public async record(event: DomainEventEnvelope): Promise<void> {
     await this.dbService.initialize();
     const orgId = await resolveEventOrgId(event);
-    await this.dbService.db.query(
-      `INSERT INTO domain_events
-       (event_id, org_id, event_type, schema_version, work_item_id, actor_type, actor_id, payload, occurred_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       ON CONFLICT (event_id) DO NOTHING`,
-      [
-        event.event_id,
-        orgId,
-        event.event_type,
-        event.schema_version,
-        event.work_item_id || null,
-        event.actor.type,
-        event.actor.id,
-        JSON.stringify(event.payload || {}),
-        event.timestamp,
-      ],
-    );
+    await this.dbService.db.transaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO domain_events
+         (event_id, org_id, event_type, schema_version, work_item_id, actor_type, actor_id, payload, occurred_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (event_id) DO NOTHING`,
+        [
+          event.event_id,
+          orgId,
+          event.event_type,
+          event.schema_version,
+          event.work_item_id || null,
+          event.actor.type,
+          event.actor.id,
+          JSON.stringify(event.payload || {}),
+          event.timestamp,
+        ],
+      );
+      if (orgId) {
+        await appendAuditIntegrityEntry(tx, {
+          source: 'domain_events',
+          event_id: event.event_id,
+          org_id: orgId,
+          work_item_id: event.work_item_id || null,
+          event_type: event.event_type,
+          actor_type: event.actor.type,
+          actor_id: event.actor.id,
+          payload: event.payload || {},
+          occurred_at: event.timestamp,
+        });
+      }
+    });
   }
 
   public async query(filter: EventQuery): Promise<StoredEvent[]> {

@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite';
+import { appendAuditIntegrityEntry, AuditEventSource } from '../modules/audit/audit-integrity';
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { vector } = require('@electric-sql/pglite/vector');
 
@@ -151,9 +152,26 @@ export class DatabaseService {
         id UUID PRIMARY KEY,
         event_type TEXT NOT NULL,
         work_item_id UUID NOT NULL,
+        actor_type TEXT NOT NULL DEFAULT 'user',
         actor_id TEXT NOT NULL,
         payload JSONB NOT NULL,
         timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE TABLE IF NOT EXISTS audit_integrity_entries (
+        sequence BIGSERIAL PRIMARY KEY,
+        org_id UUID NOT NULL,
+        source TEXT NOT NULL,
+        event_id UUID NOT NULL,
+        work_item_id TEXT,
+        event_type TEXT NOT NULL,
+        occurred_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        previous_hash TEXT,
+        event_hash TEXT NOT NULL,
+        canonical_event JSONB NOT NULL,
+        proof_version INT NOT NULL DEFAULT 1,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(source, event_id)
       );
 
       CREATE TABLE IF NOT EXISTS external_artifacts (
@@ -178,6 +196,49 @@ export class DatabaseService {
         link_type TEXT NOT NULL,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(artifact_id, work_item_id, link_type)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_correlation_nodes (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        system TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        immutable_id TEXT NOT NULL,
+        display_key TEXT,
+        url TEXT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(org_id, system, entity_type, immutable_id),
+        UNIQUE(org_id, id)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_correlation_links (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        source_node_id UUID NOT NULL,
+        target_node_id UUID NOT NULL,
+        relationship TEXT NOT NULL,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(org_id, source_node_id, target_node_id, relationship),
+        FOREIGN KEY (org_id, source_node_id)
+          REFERENCES integration_correlation_nodes(org_id, id) ON DELETE RESTRICT,
+        FOREIGN KEY (org_id, target_node_id)
+          REFERENCES integration_correlation_nodes(org_id, id) ON DELETE RESTRICT,
+        CHECK (source_node_id <> target_node_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_sync_snapshots (
+        org_id UUID NOT NULL,
+        node_id UUID NOT NULL,
+        payload_hash TEXT NOT NULL,
+        canonical_payload JSONB NOT NULL,
+        observed_actor_id TEXT NOT NULL,
+        observation_source TEXT NOT NULL,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (org_id, node_id),
+        FOREIGN KEY (org_id, node_id)
+          REFERENCES integration_correlation_nodes(org_id, id) ON DELETE RESTRICT
       );
 
       CREATE TABLE IF NOT EXISTS integration_deliveries (
@@ -374,8 +435,15 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS integration_kind TEXT NOT NULL DEFAULT 'git';`);
     await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;`);
     await this.db.exec(`ALTER TABLE integration_deliveries ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP WITH TIME ZONE;`);
+    await this.db.exec(`ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS actor_type TEXT NOT NULL DEFAULT 'user';`);
+    await this.db.exec(`
+      UPDATE audit_events SET actor_type = 'integration'
+      WHERE actor_type = 'user'
+        AND (actor_id LIKE 'integration:%' OR actor_id LIKE 'monitoring:%');
+    `);
     await this.db.exec(`
       CREATE INDEX IF NOT EXISTS domain_events_org_time ON domain_events (org_id, occurred_at);
+      CREATE INDEX IF NOT EXISTS domain_events_work_item_time ON domain_events (work_item_id, occurred_at);
       CREATE INDEX IF NOT EXISTS domain_events_type_time ON domain_events (event_type, occurred_at);
       CREATE INDEX IF NOT EXISTS event_outbox_pending ON event_outbox (status, created_at);
       CREATE INDEX IF NOT EXISTS integration_deliveries_queue ON integration_deliveries (status, created_at);
@@ -383,6 +451,18 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS api_credentials_hash ON api_credentials (token_hash);
       CREATE INDEX IF NOT EXISTS lineage_exports_root_time
         ON lineage_exports (org_id, root_work_item_id, created_at);
+      CREATE INDEX IF NOT EXISTS audit_integrity_org_sequence
+        ON audit_integrity_entries (org_id, sequence);
+      CREATE UNIQUE INDEX IF NOT EXISTS audit_integrity_hash_unique
+        ON audit_integrity_entries (org_id, event_hash);
+      CREATE INDEX IF NOT EXISTS integration_correlation_nodes_lookup
+        ON integration_correlation_nodes (org_id, system, entity_type, immutable_id);
+      CREATE INDEX IF NOT EXISTS integration_correlation_links_source
+        ON integration_correlation_links (org_id, source_node_id);
+      CREATE INDEX IF NOT EXISTS integration_correlation_links_target
+        ON integration_correlation_links (org_id, target_node_id);
+      CREATE INDEX IF NOT EXISTS integration_sync_snapshots_hash
+        ON integration_sync_snapshots (org_id, node_id, payload_hash);
     `);
     await this.db.exec(`
       UPDATE work_items
@@ -399,6 +479,43 @@ export class DatabaseService {
         ON work_items (org_id, item_key);
     `);
 
+    // Existing pilot databases pre-date US10.7. Bring their immutable rows into the chain
+    // once, in deterministic timestamp/id order; subsequent writes append transactionally.
+    await this.backfillAuditIntegrity();
+
     this.initialized = true;
+  }
+
+  private async backfillAuditIntegrity(): Promise<void> {
+    const result = await this.db.query<any>(
+      `SELECT 'domain_events' AS source, event.event_id, event.org_id,
+              event.work_item_id, event.event_type, event.actor_type, event.actor_id,
+              event.payload, event.occurred_at
+       FROM domain_events event
+       WHERE event.org_id IS NOT NULL
+       UNION ALL
+       SELECT 'audit_events' AS source, audit.id AS event_id, item.org_id,
+              audit.work_item_id::text, audit.event_type,
+              audit.actor_type,
+              audit.actor_id, audit.payload, audit.timestamp AS occurred_at
+       FROM audit_events audit
+       JOIN work_items item ON item.id = audit.work_item_id
+       ORDER BY occurred_at ASC, event_id ASC`,
+    );
+    for (const row of result.rows || []) {
+      await appendAuditIntegrityEntry(this.db, {
+        source: row.source as AuditEventSource,
+        event_id: row.event_id,
+        org_id: row.org_id,
+        work_item_id: row.work_item_id || null,
+        event_type: row.event_type,
+        actor_type: row.actor_type,
+        actor_id: row.actor_id,
+        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : (row.payload || {}),
+        occurred_at: typeof row.occurred_at === 'string'
+          ? new Date(row.occurred_at).toISOString()
+          : new Date(row.occurred_at).toISOString(),
+      });
+    }
   }
 }

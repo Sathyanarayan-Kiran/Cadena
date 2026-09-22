@@ -19,6 +19,8 @@ import {
 } from './lineage.service';
 import { CreateLinkDto } from './lineage.types';
 
+const MAX_LINEAGE_GRAPH_DEPTH = 10;
+
 @Controller('workitems')
 export class LineageController {
   private service = new LineageService();
@@ -94,6 +96,38 @@ export class LineageController {
       depth: d,
       edgeTypes: edges,
     });
+  }
+
+  @Get(':id/lineage-graph')
+  async getLineageGraph(
+    @Param('id') id: string,
+    @Query('depth') requestedDepth?: string,
+    @Headers('x-org-id') headerOrgId?: string,
+  ) {
+    const depth = requestedDepth === undefined ? 3 : Number(requestedDepth);
+    if (!Number.isInteger(depth) || depth < 1 || depth > MAX_LINEAGE_GRAPH_DEPTH) {
+      throw new HttpException(
+        {
+          statusCode: 422,
+          error: 'invalid_lineage_depth',
+          message: `depth must be an integer from 1 to ${MAX_LINEAGE_GRAPH_DEPTH}`,
+        },
+        HttpStatus.UNPROCESSABLE_ENTITY,
+      );
+    }
+
+    try {
+      return await this.service.getLineageGraph(
+        id,
+        headerOrgId || '00000000-0000-0000-0000-000000000099',
+        depth,
+      );
+    } catch (err: any) {
+      if (err instanceof LineageWorkItemNotFoundError) {
+        throw new HttpException(err.message, HttpStatus.NOT_FOUND);
+      }
+      throw new HttpException(err.message || 'Failed to load lineage graph', HttpStatus.BAD_REQUEST);
+    }
   }
 
   @Post(':id/lineage-exports')

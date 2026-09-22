@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { Transaction } from '@electric-sql/pglite';
 import { DatabaseService } from '../../database/database.service';
 import { DomainEventEnvelope, InProcessEventBus } from './event-bus';
+import { appendAuditIntegrityEntry } from '../audit/audit-integrity';
 
 export interface OutboxEventInput {
   event_type: string;
@@ -59,6 +60,17 @@ export class EventOutboxService implements OnApplicationBootstrap {
         event.timestamp,
       ],
     );
+    await appendAuditIntegrityEntry(tx, {
+      source: 'domain_events',
+      event_id: event.event_id,
+      org_id: input.org_id,
+      work_item_id: event.work_item_id,
+      event_type: event.event_type,
+      actor_type: event.actor.type,
+      actor_id: event.actor.id,
+      payload: event.payload || {},
+      occurred_at: event.timestamp,
+    });
     await tx.query(
       `INSERT INTO event_outbox (event_id, status, attempts, created_at)
        VALUES ($1, 'pending', 0, $2)`,

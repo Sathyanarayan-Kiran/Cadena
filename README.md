@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's core thesis: **one canonical work-item model** and **one state-machine engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them.
 
-> **Current status (Codex update, 2026-09-21):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 team heatmap and cross-team executive rollup, US9.4 DORA/ITIL metrics, and the integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog contains **20 epics and 72 stories**, with **29 done / 5 partial / 38 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger.
+> **Current status (Codex update, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 team heatmap and cross-team executive rollup, US9.3 interactive explorer, US9.4 DORA/ITIL metrics, US10.4 audit export, US10.7 SHA-256 audit verification, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, and the integration slices (US2.3, Epic 6 Git/CI, and Epic 7 monitoring/APM) are implemented. The canonical backlog contains **20 epics and 72 stories**, with **35 done / 4 partial / 33 not started**. See `implementation_plan.md` for clearly attributed Codex delivery records and `status.html` for the generated ledger.
 
 ---
 
@@ -13,16 +13,18 @@ The pilot proves the platform's core thesis: **one canonical work-item model** a
 - **Runtime & Framework**: TypeScript throughout, NestJS backend API.
 - **Datastore**: PostgreSQL with `pgvector` enabled via the `@electric-sql/pglite` in-process WASM engine, persisting to `CADENA_DATA_DIR` and in-memory when that is unset.
 - **Workflow Engine**: Hand-rolled state-machine engine implementing Spec §4, supporting versioned definitions, role guards, required fields, and reachability validation.
-- **Traceability Graph**: Typed edge table (`work_item_links`) supporting upstream/downstream traversal, Service impact analysis, and immutable point-in-time JSON lineage reports.
+- **Traceability Graph**: Typed edge table (`work_item_links`) supporting semantic upstream/downstream traversal, an interactive depth-bounded explorer, Service impact analysis, and immutable point-in-time JSON lineage reports.
 - **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, warning/breach events, and durable pause/resume semantics for configured hold states.
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
+- **Cross-system Synchronization Safety**: Tenant-scoped immutable provider identities, typed one-to-many/many-to-one dependency links, exact-id graph resolution, metadata-only rename/move updates, a dedicated counterpart write-back contract, and actor-plus-hash echo suppression with durable content fallback after restart.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
 - **Transactional Event Backbone**: Canonical work-item creation, transitions and typed links commit their immutable event and outbox marker atomically; inbound webhooks persist before returning HTTP 202 and process from a queryable queue; pending envelopes recover on bootstrap with the same event id, and every consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
 - **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
+- **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
-- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, executive overview, item details, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs.
-- **Testing**: Vitest + NestJS Testing + Supertest running 120 automated tests across 33 test files, plus an 11-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs.
+- **Testing**: Vitest + NestJS Testing + Supertest running 134 automated tests across 39 test files, plus a 14-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -62,6 +64,7 @@ Expected output:
  ✓ test/us8.2.spec.ts (4 tests)
  ✓ test/us8.3.spec.ts (5 tests)
  ✓ test/us9.2.spec.ts (3 tests)
+ ✓ test/us9.3.spec.ts (5 tests)
  ✓ test/us9.4.spec.ts (7 tests)
  ✓ test/tracker.spec.ts (6 tests)
  ✓ test/persistence.spec.ts (5 tests)
@@ -70,11 +73,15 @@ Expected output:
  ✓ test/us5.spec.ts (10 tests)
  ✓ test/review-regressions.spec.ts (7 tests)
  ✓ test/us10.3.spec.ts (1 test)
+ ✓ test/us10.4.spec.ts (2 tests)
+ ✓ test/us10.7.spec.ts (2 tests)
+ ✓ test/us13.2.spec.ts (2 tests)
+ ✓ test/us13.3.spec.ts (2 tests)
  ✓ test/us10.9.spec.ts (13 tests)
  ✓ test/backlog-fixture.spec.ts (1 test)
 
- Test Files  34 passed (34)
-      Tests  121 passed (121)
+ Test Files  39 passed (39)
+      Tests  134 passed (134)
 ```
 
 ### 2. Run the Server
@@ -106,7 +113,7 @@ Drives the real page in headless Chrome against the built server. Uses a browser
 npm run test:ui
 ```
 
-It covers board rendering, the Incident monitoring-evidence drawer, Service impact edge chains, the notification delivery log including Slack-to-email fallback, workflow-permitted transitions, the escalated filter, console errors, and phone-width layout.
+It covers board rendering, the Incident monitoring-evidence drawer, item audit history/export, the interactive traceability graph and report export, Service impact edge chains, the notification delivery log including Slack-to-email fallback, workflow-permitted transitions, the escalated filter, console errors, and phone-width layout.
 
 
 ---
@@ -229,6 +236,96 @@ Alert evidence is available at `GET /workitems/:id/monitoring-alerts` (and throu
 
 ---
 
+## Immutable Correlation References (US13.2)
+
+Cross-system pairs resolve only by provider-owned immutable identifiers. `display_key` and `url` are retained for people and may change after a rename, re-index or project move without creating a new node.
+
+```http
+POST /integrations/correlations
+x-org-id: 00000000-0000-0000-0000-000000000099
+x-actor-id: integration:jira-sync
+Content-Type: application/json
+
+{
+  "source": {
+    "system": "servicenow",
+    "entity_type": "incident",
+    "immutable_id": "8b31-sys-id",
+    "display_key": "INC0010042"
+  },
+  "target": {
+    "system": "jira",
+    "entity_type": "issue",
+    "immutable_id": "1004821",
+    "display_key": "ENG-4821"
+  },
+  "relationship": "counterpart"
+}
+```
+
+The response includes the stable node/link ids and two write-back instructions: each side receives `field: "cadena_counterpart_id"` with the other side's immutable id. Replaying the same counterpart in either direction returns the existing link. Replaying it with a new display key or URL updates only that metadata.
+
+Resolve a pair or dependency tree from either immutable side:
+
+```http
+GET /integrations/correlations/resolve?system=jira&entity_type=issue&immutable_id=1004821&depth=3
+x-org-id: 00000000-0000-0000-0000-000000000099
+```
+
+The 1–10 hop response includes every reachable node, typed link, distance and a summary. `PATCH /integrations/correlations/nodes/:id` accepts only `display_key` and `url`; immutable identity changes return HTTP 422. Tenant-qualified foreign keys and restrictive deletion prevent cross-tenant and orphan links.
+
+**Boundary:** this is the provider-neutral persistence and connector write-back contract. It does not make live ServiceNow or Jira calls; native connector credentials, discovery and outbound field writes remain US17.1.
+
+### Echo-loop suppression (US13.3)
+
+Before a connector writes normalized fields to a correlated target, it records the intended content and the provider service account:
+
+```http
+POST /integrations/sync-guard/writes
+x-org-id: 00000000-0000-0000-0000-000000000099
+Content-Type: application/json
+
+{
+  "identity": {
+    "system": "jira",
+    "entity_type": "issue",
+    "immutable_id": "1004821"
+  },
+  "service_account_id": "svc-cadena-jira",
+  "payload": {
+    "status": "In Progress",
+    "priority": "High"
+  }
+}
+```
+
+The subsequent normalized webhook is checked before synchronization:
+
+```http
+POST /integrations/sync-guard/evaluate
+x-org-id: 00000000-0000-0000-0000-000000000099
+Content-Type: application/json
+
+{
+  "identity": {
+    "system": "jira",
+    "entity_type": "issue",
+    "immutable_id": "1004821"
+  },
+  "actor_id": "svc-cadena-jira",
+  "payload": {
+    "priority": "High",
+    "status": "In Progress"
+  }
+}
+```
+
+Object-key order does not affect the canonical SHA-256 hash. An exact service-account and hash match returns `self_originated_hash` with `action: "ignore"`. If the process-local marker has expired or disappeared after restart, the durable snapshot performs a full canonical-content comparison and returns `content_noop`. Changed content always returns `external_change` with `action: "process"`, even when the actor is the integration service account.
+
+Payloads must contain the normalized mapped fields, not volatile webhook envelope fields such as delivery ids or receipt timestamps. Provider signature verification and binding `actor_id` to a configured installation remain connector hardening; this API does not treat an unverified caller-supplied name as authentication.
+
+---
+
 ## Service/Asset Registry
 
 Spec §3.3 lists **Service/Asset** as a *supporting entity* — "lightweight internal CMDB entry (name, owner team, environment)" — and §3.5 draws `SERVICES ||--o{ WORK_ITEMS : affected_by`. The pilot follows that: Services live in their own tenant-scoped `services` table and join to WorkItems through `work_item_service_links`, carrying the §3.2 `affects` edge. **A Service is not a WorkItem**, so infrastructure inventory never lands on the delivery board or acquires a delivery workflow and SLA bucket.
@@ -316,6 +413,29 @@ GET /workitems/:id/lineage-exports/:exportId
 ```
 
 Downloads never recalculate the graph. Links and states added later therefore do not rewrite evidence already captured. Cross-tenant retrieval returns 404. The same action is available as **Trace lineage → Export full report** in the pilot UI.
+
+---
+
+## Verifiable Work-item Audit Trail (US10.4, US10.7)
+
+Read the live, tenant-scoped history or download the same `cadena.audit-trail.v1` document:
+
+```http
+GET /audit/workitems/:id
+GET /audit/export?work_item_id=:id
+x-org-id: 00000000-0000-0000-0000-000000000099
+x-actor-id: compliance-reviewer
+```
+
+The export combines canonical domain events with workflow audit rows without duplicating state transitions. Work-item creation, editable field changes, incoming or outgoing typed links, transitions and integration transactions carry actor, timestamp, and normalized `before`/`after` values. Cross-tenant requests return 404, and the download is marked `private, no-store`.
+
+Fields are edited through `PATCH /workitems/:id`; lifecycle status is deliberately rejected there and remains guarded by `POST /workitems/:id/transitions`. In the UI, **Audit history** appears directly in item details with expandable before/after evidence and **Export JSON**.
+
+Every new domain or workflow audit event is canonicalized with stable key ordering and appended transactionally to its tenant's SHA-256 chain. Existing durable stores are backfilled in timestamp/id order on upgrade. Each exported event includes its sequence, previous hash, hash, algorithm, proof version and verification result; the document also reports the tenant chain head, length, chain continuity and overall verification result. The item-details UI displays the verification state and includes the same proof beside expandable before/after evidence.
+
+Changing or deleting a source event after it was recorded makes the overall export fail verification. The persisted chain itself is checked for missing source rows, broken previous-hash links and altered canonical snapshots. The chain is tenant-scoped, so no proof value crosses an organization boundary.
+
+**Security boundary:** this is a SHA-256 hash chain, not a signature anchored outside the database. It makes accidental or partial unauthorized changes detectable. Defending against an administrator rewriting the entire chain and its head requires an externally signed/notarized checkpoint or WORM storage.
 
 ---
 
@@ -556,8 +676,8 @@ The specification's Phase 1 operational-visibility scope is now complete: SLA cl
 3. **CMDB Federation (Epic 11)**:
    - Replace pilot-discovered Service stubs with a federated read from the authoritative CMDB, including staleness flagging and owning-team resolution.
 
-4. **Remaining Analytics UI and Scale Boundary (Epic 9)**:
-   - US9.2 executive rollup and US9.4 flow metrics are implemented. Still open: the interactive graph explorer (US9.3) and analytics materialized views so reporting load never contends with the workflow engine at production volume.
+4. **Analytics Scale Boundary (Epic 9)**:
+   - US9.2 executive rollup, US9.3 interactive traceability and US9.4 flow metrics are implemented. Still open: analytics materialized views so reporting load never contends with the workflow engine at production volume.
 
 ---
 
@@ -590,6 +710,8 @@ The specification's Phase 1 operational-visibility scope is now complete: SLA cl
 | **US4.3** | Reflects incident resolution in the impact summary | `test/us4.3.spec.ts` | **PASS** |
 | **US4.4** | Exports the complete connected lineage graph with node/edge timestamps | `test/us4.4.spec.ts` | **PASS** |
 | **US4.4** | Preserves the original snapshot after live graph changes and rejects cross-tenant retrieval | `test/us4.4.spec.ts` | **PASS** |
+| **US9.3** | Renders semantic upstream and downstream lineage together and expands to configured depth | `test/us9.3.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **US9.3** | Supports typed edges, node inspection, graph re-rooting and report export | `test/ui-smoke.spec.ts` | **PASS** |
 | **US5.1** | Commits work-item creation, state transitions and typed links with their immutable outbox event | `test/us5.1.spec.ts` | **PASS** |
 | **US5.1** | Rolls back state and audit writes on outbox failure and recovers pending envelopes with the original event id | `test/us5.1.spec.ts` | **PASS** |
 | **US5.4** | Persists valid webhooks and returns HTTP 202 before downstream work-item mutation | `test/us5.4.spec.ts` | **PASS** |
@@ -633,4 +755,12 @@ The specification's Phase 1 operational-visibility scope is now complete: SLA cl
 | **US9.4** | Reports ITIL operational counts and honours the requested window | `test/us9.4.spec.ts` | **PASS** |
 | **US9.4** | Keeps a durable, queryable domain-event history | `test/us9.4.spec.ts` | **PASS** |
 | **US10.3** | Enforces RBAC role permissions on workflow state transitions | `test/us10.3.spec.ts` | **PASS** |
+| **US10.4** | Exports creation, field changes, links and transitions with actor, timestamp and before/after values | `test/us10.4.spec.ts` | **PASS** |
+| **US10.4** | Keeps audit history tenant-scoped and exposes it from item details as a JSON download | `test/us10.4.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **US10.7** | Appends field changes, transitions and integration transactions to a tenant-wide SHA-256 chain | `test/us10.7.spec.ts` | **PASS** |
+| **US10.7** | Detects source tampering, backfills existing event stores and exposes verification metadata in export/UI | `test/us10.7.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
+| **US13.2** | Persists dedicated immutable references on both sides and survives key/URL changes without re-pairing | `test/us13.2.spec.ts` | **PASS** |
+| **US13.2** | Resolves one-to-many and many-to-one dependency trees without cross-tenant or orphan links | `test/us13.2.spec.ts` | **PASS** |
+| **US13.3** | Suppresses an exact returning write by service-account identity plus canonical SHA-256 payload hash | `test/us13.3.spec.ts` | **PASS** |
+| **US13.3** | Detects the unchanged no-op from durable content after volatile suppression state is lost | `test/us13.3.spec.ts` | **PASS** |
 | **Backlog fixture** | Imports every epic and story from the backlog with its parent-child hierarchy | `test/backlog-fixture.spec.ts` | **PASS** |

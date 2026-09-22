@@ -2,6 +2,327 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex-authored delivery records are kept above the original Gemini Epic 3 plan so ownership and current status are explicit.
 
+## Codex US13.3 echo-loop suppression update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. The Gemini-authored baseline did not contain this sync guard, normalized snapshot, API contract, audit evidence or acceptance test.
+
+**Status:** Complete. US13.3 moved from not started to done. The delivery ledger is now **35 done / 4 partial / 33 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+US13.2 established immutable synchronized-record identities. The next safety prerequisite is stopping an outbound write from returning as a webhook and bouncing indefinitely between systems. This slice implements that protection over the correlation node rather than attaching it to one vendor connector, so every future connector inherits the same decision contract.
+
+### Scope delivered by Codex
+
+- Added `integration_sync_snapshots`, a tenant-qualified, one-row-per-correlation-node record of the last normalized payload, its SHA-256 hash, actor, source and observation time.
+- Reused stable JSON canonicalization so semantically identical objects hash the same regardless of key insertion order.
+- Added a 15-minute volatile marker keyed by tenant, correlation node, service-account identity and payload hash. Only the exact actor-plus-content combination takes the fast `self_originated_hash` suppression path.
+- Added durable `content_noop` comparison against both the stored hash and canonical content. A process restart or cache eviction therefore changes the explanation but not the safe `ignore` decision.
+- Allowed the same service account through when content actually changes, returning `external_change` and `process` rather than suppressing by identity alone.
+- Added `POST /integrations/sync-guard/writes` for recording an outbound target write and `POST /integrations/sync-guard/evaluate` for deciding whether an inbound normalized webhook should be ignored or processed.
+- Persisted `IntegrationWriteRecorded`, `IntegrationEchoSuppressed` and `IntegrationChangeAccepted` through the transactional outbox and tenant-wide SHA-256 audit chain.
+- Updated the canonical delivery overlay, generated status page, README, walkthrough and this implementation record.
+
+### Acceptance criteria proved
+
+| Acceptance criterion | Evidence |
+| --- | --- |
+| A returning integration write is identified by service-account identity plus payload hash and suppressed | `test/us13.3.spec.ts` records an outbound write, reorders the JSON keys, and proves the return is ignored as `self_originated_hash` with the same 64-character hash. |
+| Identity alone never hides a real change | The same test sends different content from the same service account and proves the decision is `external_change` / `process`. |
+| Loss of suppression state cannot re-open the loop | The test clears every volatile marker, submits the unchanged payload with no service-account metadata, and proves the durable content snapshot returns `content_noop` / `ignore`. |
+| Tenant and input boundaries remain enforced | A second tenant cannot evaluate the first tenant's correlated identity, and a non-object normalized payload receives HTTP 422. |
+| Decisions remain auditable | The acceptance test asserts the ordered durable events, integration actor and recorded reason/decision. |
+
+### Files added by Codex
+
+- `src/modules/integrations/sync-guard.types.ts`
+- `src/modules/integrations/sync-guard.service.ts`
+- `src/modules/integrations/sync-guard.controller.ts`
+- `test/us13.3.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/integrations/integration.module.ts`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- TypeScript build: **PASS**
+- Focused US13.3 acceptance suite: **PASS — 2 tests**
+- Full non-browser regression: **PASS — 39 test files, 134 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 35 done / 4 partial / 33 not started**
+- Browser smoke suite against the built production server: **PASS — 14 tests**
+
+### Deliberate boundaries
+
+- Callers must supply the normalized mapped fields, excluding volatile delivery ids and timestamps. Connector-specific projection and transformation remain US13.1/US17.2.
+- The service-account id is part of the normalized webhook contract; provider signature validation and binding that external identity to a configured connector credential remain production hardening.
+- Volatile markers are process-local by design, but correctness does not depend on them: every process can fall back to the durable snapshot. A distributed cache would improve fast-path hit rate, not safety.
+- The guard returns `ignore` or `process`; it does not itself perform the subsequent cross-system write. Native connector execution remains US17.1.
+
+## Codex US13.2 immutable correlation-reference update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. The Gemini-authored baseline did not contain these tables, API routes, tests or delivery claims.
+
+**Status:** Complete. US13.2 moved from not started to done. The delivery ledger is now **34 done / 4 partial / 34 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+The remaining partial notification and CMDB stories need real external transports. Immutable correlation is the first self-contained foundation for the new ServiceNow/Jira synchronization epic, and it is a dependency for lifecycle mapping, echo suppression, comment governance, resolution write-back and per-twin queues. It can be proved against the platform contract without pretending a live vendor connector exists.
+
+### Scope delivered by Codex
+
+- Added tenant-scoped `integration_correlation_nodes` keyed by `(org, system, entity type, immutable id)`. Human-facing keys and URLs are explicitly mutable metadata, never resolution keys.
+- Added `integration_correlation_links` with tenant-qualified foreign keys, restrictive deletion and typed relationships. The same source may link to many targets and many sources may converge on one target without creating unattached dependency rows.
+- Added `POST /integrations/correlations` to upsert both immutable sides and idempotently create or resolve a pair. A symmetric counterpart sent in reverse returns the existing link instead of a duplicate.
+- Returned a dedicated `cadena_counterpart_id` write-back value for each side of every link, while persisting both source and target identities centrally.
+- Added `GET /integrations/correlations/resolve` for exact immutable-identity lookup and breadth-first graph expansion from 1–10 hops. Summary-text and display-key matching do not exist in this path.
+- Added `PATCH /integrations/correlations/nodes/:id` for rename/move metadata only; attempts to change `system`, `entity_type` or `immutable_id` receive an actionable HTTP 422.
+- Recorded pair creation, idempotent resolution and metadata changes through the transactional outbox and tenant-wide verifiable audit chain.
+- Updated the canonical delivery overlay, generated status page, README, walkthrough and this implementation record.
+
+### Acceptance criteria proved
+
+| Acceptance criterion | Evidence |
+| --- | --- |
+| Each pair stores both immutable references in dedicated correlation metadata | `test/us13.2.spec.ts` asserts the source and target `cadena_counterpart_id` values and the persisted normalized node identities. |
+| Renames and moves do not break the pair | The test reverses the incoming pair, changes the Jira key and both deep links, receives the original node/link ids, then resolves by the unchanged immutable id. |
+| One-to-many and many-to-one trees resolve without orphans | The test builds a branched ServiceNow/Jira/Azure DevOps graph, verifies depth-1 and depth-2 expansion, and proves a referenced node cannot be deleted. |
+| Tenant and mutation boundaries are enforced | A second tenant receives 404 for the same identity; an attempted immutable-id patch receives 422; correlation events retain the integration actor. |
+
+### Files added by Codex
+
+- `src/modules/integrations/correlation.types.ts`
+- `src/modules/integrations/correlation.service.ts`
+- `src/modules/integrations/correlation.controller.ts`
+- `test/us13.2.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/integrations/integration.module.ts`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- TypeScript build: **PASS**
+- Focused US13.2 acceptance suite: **PASS — 2 tests**
+- Full non-browser regression: **PASS — 38 test files, 132 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 34 done / 4 partial / 34 not started**
+- Browser smoke suite against the built production server: **PASS — 14 tests**
+
+### Deliberate boundaries
+
+- This is the provider-neutral correlation and write-back contract. The API returns the dedicated field/value each connector must write, but live ServiceNow/Jira credentials, schema discovery and outbound calls remain US17.1; those are not simulated here.
+- Nodes are protected from API identity mutation and linked nodes cannot be deleted. A database administrator can still rewrite rows directly; production database roles should make identity columns and links append-only.
+- Graph resolution is depth-bounded and indexed, but per-twin ordering, isolation and retry remain US16.4–US16.5.
+
+## Codex US10.7 cryptographically verifiable audit update — 2026-09-22
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-22. It supersedes the US10.4 boundary below that correctly deferred cryptographic verification at that time; the earlier section remains unchanged as delivery history.
+
+**Status:** Complete. US10.7 moved from not started to done. The delivery ledger is now **33 done / 4 partial / 35 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+US10.4 made the full work-item history portable, but durability alone could not reveal a source row changed after the fact. US10.7 was the direct next increment: preserve the existing export contract while adding a proof created when each audit fact enters the store, including integration transactions that bypass the canonical work-item command path.
+
+### Scope delivered by Codex
+
+- Added `audit_integrity_entries`, an append-only proof projection with a monotonic sequence, tenant, source/event identity, previous hash, SHA-256 hash, canonical event snapshot and proof version.
+- Added stable JSON canonicalization so object-key insertion order cannot change a proof, and domain separation through source, event id, tenant, work item, type, actor, timestamp and payload.
+- Appended domain-event proof inside the existing transactional outbox write, so a canonical business mutation, immutable event, outbox marker and integrity link succeed or roll back together.
+- Made the wildcard event-store path transactional and hash-chained, covering integration transactions, SLA signals and other durable bus events. Idempotent event redelivery cannot create a second proof row.
+- Appended workflow-transition and monitoring-severity audit rows to the same tenant chain in their mutation transaction, and persisted actor type so integration attribution verifies exactly rather than being inferred later.
+- Added deterministic initialization backfill for durable databases created before US10.7; already chained rows remain unchanged and only missing source rows append.
+- Extended `cadena.audit-trail.v1` with per-event algorithm, proof version, sequence, previous hash, hash and source-verification result plus tenant chain head, length, continuity and overall export verification.
+- Added current-source verification: changing a domain/audit payload after recording makes that event and the export fail verification even when the stored chain snapshot remains internally continuous.
+- Added a visible verification summary and proof evidence to the item-details audit timeline.
+- Updated the canonical delivery overlay, generated status page, README, walkthrough and this plan.
+
+### Acceptance criteria proved
+
+| Acceptance criterion | Evidence |
+| --- | --- |
+| Field changes, transitions and integration transactions participate in SHA-256 integrity proof | `test/us10.7.spec.ts` records all three paths and asserts every exported event carries a verified 64-character SHA-256 hash. |
+| Export returns actor, timestamp, before/after values and verification metadata | The acceptance test asserts the integration actor, normalized values, event proof fields and document-level tenant chain summary. |
+| Unauthorized history changes are detectable | The test rewrites and then deletes the stored integration event after proof creation, proving both modification and removal make the overall export fail verification. |
+| Existing installations gain proof coverage | A persistent pre-chain database is reopened; initialization backfills its historical event and the reconstructed chain verifies. |
+| Tenant scope remains enforced and visible in the UI | Cross-tenant export returns 404; the browser suite requires the **SHA-256 chain verified** indicator in item details. |
+
+### Files added by Codex
+
+- `src/modules/audit/audit-integrity.ts`
+- `test/us10.7.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/database/database.service.ts`
+- `src/modules/events/event-outbox.service.ts`
+- `src/modules/events/event-store.service.ts`
+- `src/modules/workflow/workflow.service.ts`
+- `src/modules/integrations/monitoring.service.ts`
+- `src/modules/audit/audit.service.ts`
+- `public/index.html`
+- `test/ui-smoke.spec.ts`
+- `implementation-status.json`
+- `scripts/build-tracker.mjs`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- TypeScript build and inline browser-script parse: **PASS**
+- Focused US10.7 acceptance suite: **PASS — 2 tests**
+- Full non-browser regression: **PASS — 37 test files, 130 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 33 done / 4 partial / 35 not started**
+- Browser smoke suite against the built production server: **PASS — 14 tests**
+
+### Deliberate boundaries
+
+- SHA-256 chaining is tamper-evident, not an externally authenticated signature. A privileged operator who can rewrite the complete source history, proof chain and head is outside this pilot's trust boundary; production hardening should periodically sign/notarize the head outside the database or place checkpoints in WORM storage.
+- The embedded single-writer store serializes appends. A horizontally scaled managed-Postgres deployment must take a per-tenant advisory lock or route each tenant to one ordered audit partition before selecting and advancing the head.
+- Backfill appends previously unchained rows after the current head if it discovers a partial legacy migration. It never renumbers or rewrites existing proof entries.
+
+## Codex US10.4 full audit-trail export update — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older notes below that correctly recorded US10.4 as partial because transitions were stored but no complete export existed; those notes remain unchanged as delivery history.
+
+**Status:** Complete. US10.4 moved from partial to done. The delivery ledger is now **32 done / 4 partial / 36 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+The platform already had immutable domain events and workflow audit rows, but compliance reviewers could neither retrieve them as one tenant-safe history nor prove field and relationship changes without reconstructing logs. This was the next build-ready gap after the interactive traceability UI because it reused durable facts already emitted by the core and completed the technical specification's exact audit-export route.
+
+### Scope delivered by Codex
+
+- Added `GET /audit/workitems/:id` for the item-details timeline and the specification's `GET /audit/export?work_item_id=…` endpoint for a portable `cadena.audit-trail.v1` JSON attachment.
+- Built a tenant-qualified projection across `domain_events` and `audit_events`, deduplicating the workflow event written to both stores and including typed links when the selected item is either the source or target.
+- Normalized creation, field-edit, relationship, transition and monitoring-severity evidence into actor, timestamp, `before` and `after` values.
+- Enriched new state-transition and severity-escalation audit payloads with explicit before/after snapshots while retaining their established payload fields for compatibility.
+- Added `PATCH /workitems/:id` for title, description, priority, severity, owner, custom-field and tag changes. The business update and `WorkItemFieldsChanged` event commit atomically through the existing outbox; schema validation remains active, no-op edits emit nothing, and status cannot bypass the workflow engine.
+- Added a work-item/time event index for audit lookup.
+- Added an **Audit history** timeline to item details, with event summaries, actor/time metadata, expandable before/after JSON and an **Export JSON** action.
+- Updated the canonical delivery overlay, generated status page, README and walkthrough.
+
+### Acceptance criteria proved
+
+| Acceptance criterion | Evidence |
+| --- | --- |
+| Every event affecting an item is exported | `test/us10.4.spec.ts` creates an item, edits fields, adds a link and changes state, then asserts the ordered four-event export with no duplicate transition. |
+| Actor, timestamp and before/after values are present | The same test verifies creator/editor identity, ISO timestamps and normalized values for creation, field edits, links and state changes. |
+| Relationship changes affect both endpoints | The test reads the target Epic's history and proves its incoming `LinkCreated` event is present. |
+| Compliance reads are tenant-safe and portable | Cross-tenant history/export returns 404; the export carries the JSON attachment filename and `private, no-store` headers. |
+| The audit history is usable from the product UI | `test/ui-smoke.spec.ts` opens item details, reads state history, expands the real API path and captures the named JSON download. |
+
+### Files added by Codex
+
+- `src/modules/audit/audit.service.ts`
+- `src/modules/audit/audit.controller.ts`
+- `test/us10.4.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/app.module.ts`
+- `src/database/database.service.ts`
+- `src/modules/work-items/work-item.types.ts`
+- `src/modules/work-items/work-item.service.ts`
+- `src/modules/work-items/work-item.controller.ts`
+- `src/modules/workflow/workflow.service.ts`
+- `src/modules/integrations/monitoring.service.ts`
+- `public/index.html`
+- `test/ui-smoke.spec.ts`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- TypeScript build and inline browser-script parse: **PASS**
+- Focused US10.4 acceptance suite: **PASS — 2 tests**
+- Full non-browser regression: **PASS — 36 test files, 128 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 32 done / 4 partial / 36 not started**
+- Browser smoke suite against the built production server: **PASS — 14 tests**
+
+### Deliberate boundaries
+
+- The export is a live projection over immutable events, not a separately persisted snapshot. Its evidence rows cannot be updated through the API, while snapshotting or retention packaging can be added without changing the document schema.
+- Cryptographic hash chaining, signing and verification metadata are not claimed here; they remain the explicit scope of US10.7.
+- The current audit projection uses the embedded Postgres-compatible store. Cold object storage and an independently scaled audit service remain the production architecture described by the specification.
+
+## Codex US9.3 interactive traceability explorer update — 2026-09-21
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older dated notes below that correctly recorded US9.3 as not started and lineage as a linear chain; those sections remain unchanged as delivery history.
+
+**Status:** Complete. US9.3 moved from not started to done. The delivery ledger is now **31 done / 5 partial / 36 not started** across **20 epics / 72 stories**.
+
+### Why this slice came next
+
+US4.1–US4.4 had already established typed links, semantic traversal, impact analysis and immutable report export. The remaining user experience flattened one direction into a list, which hid branches and forced the reader to switch direction manually. US9.3 was therefore the most complete UI story that could be delivered over real platform data without inventing placeholder connector, twin or configuration services.
+
+### Scope delivered by Codex
+
+- Added `GET /workitems/:id/lineage-graph?depth=N`, returning a tenant-scoped union of semantic upstream and downstream traversal with node distance/direction metadata, typed edges and summary counts.
+- Extracted a shared semantic traversal routine from the existing lineage query. Edges are now included only when their relationship semantics are actually followed in the requested direction.
+- Enforced a configured depth of 1–10 hops, returning a specific HTTP 422 contract for non-integer or out-of-range values and HTTP 404 when the root is outside the authenticated tenant.
+- Replaced the linear Traceability list with a responsive SVG/DOM graph: upstream nodes sit left of the selected root, downstream nodes sit right, typed directed edges remain visible, and dense columns scroll inside the dialog rather than overflowing the page.
+- Added one-click graph expansion, an explicit depth selector, graph totals, direction legend, keyboard-focusable nodes and an accessible scrollable graph region.
+- Added a node inspector showing type, state, direction, distance and in-view relationships. Any connected node can become the new root without closing the explorer.
+- Retained **Export full report** in the graph toolbar so interactive investigation and immutable evidence remain one continuous workflow.
+- Updated the delivery ledger, generated status page, README and walkthrough to describe the completed explorer rather than the former linear-chain limitation.
+
+### Acceptance criteria proved
+
+| Acceptance criterion | Evidence |
+| --- | --- |
+| A work item renders with upstream and downstream branches together | `test/us9.3.spec.ts` constructs an Epic ← Story → child Story graph and verifies both semantic directions and their typed edges in one response. |
+| The graph expands to the configured depth | The API test proves the grandchild is absent at depth 1 and present at depth 2; the browser suite changes the selector and uses **Expand one level**, observing the rendered node count grow. |
+| The explorer is interactive | `test/ui-smoke.spec.ts` selects a node, verifies its relationship inspector and re-roots the graph from that node against the built production server. |
+| Tenant and input boundaries remain explicit | `test/us9.3.spec.ts` proves cross-tenant roots return 404 and depths 0, 11, fractional and non-numeric return 422. |
+
+### Files added by Codex
+
+- `test/us9.3.spec.ts`
+
+### Primary files updated by Codex
+
+- `src/modules/lineage/lineage.service.ts`
+- `src/modules/lineage/lineage.controller.ts`
+- `public/index.html`
+- `test/ui-smoke.spec.ts`
+- `implementation-status.json`
+- `public/status.html` (generated)
+- `README.md`
+- `walkthrough.md`
+- `implementation_plan.md`
+
+### Verification result
+
+- TypeScript build and inline browser-script parse: **PASS**
+- Focused lineage graph and regression suite: **PASS — 3 test files, 7 tests**
+- Full non-browser regression: **PASS — 35 test files, 126 tests**
+- Tracker generation and consistency checks: **PASS — 20 epics / 72 stories, 31 done / 5 partial / 36 not started**
+- Browser smoke suite against the built production server: **PASS — 13 tests**
+
+### Deliberate boundaries
+
+- The explorer uses a lightweight first-party SVG/DOM layout rather than adding a graph-visualization dependency. It supports the pilot graph volume, keyboard focus and horizontal scrolling; large-scale force layout, clustering and minimaps belong with the graph-database scale boundary.
+- Traversal remains request-time recursive SQL over the embedded Postgres-compatible store and is capped at 10 hops. Neo4j/Neptune and materialized graph projections remain the technical specification's later-volume option.
+- The graph visualizes canonical WorkItem links. Service-to-Incident impact remains in the Service impact view because Services are registry entities rather than WorkItems.
+
 ## Codex US4.4 lineage-report export update — 2026-09-21
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-21. It supersedes the older dated notes below that correctly recorded US4.4 as not started at the time they were written; those sections remain unchanged as delivery history.

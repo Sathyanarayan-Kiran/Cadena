@@ -302,7 +302,7 @@ function page(model, meta) {
     <p><em>Cadena Research.docx</em> &sect;7 records a backlog execution status that does not match what the code and tests show. The repository is authoritative here; the divergences are listed rather than silently reconciled.</p>
     <ul>
       <li><b>Epic 2 is understated.</b> The playbook marks US2.1&ndash;US2.3 <em>In Progress</em>. All three are implemented and covered by <code>us2.1</code>&ndash;<code>us2.3</code>.</li>
-      <li><b>Epic 10 is overstated, and it matters.</b> The playbook marks US10.1&ndash;US10.2 (SSO and SCIM provisioning) <em>Completed</em>. Neither exists: identity is a header-based stub. The stories that <em>are</em> complete in that epic are US10.3 (role-gated transitions) and US10.9 (authenticated tenant and actor identity).</li>
+      <li><b>Epic 10 is overstated, and it matters.</b> The playbook marks US10.1&ndash;US10.2 (SSO and SCIM provisioning) <em>Completed</em>. Neither exists. The stories that <em>are</em> complete in that epic are US10.3 (role-gated transitions), US10.4 (full audit-trail export), US10.7 (SHA-256-verifiable audit evidence) and US10.9 (authenticated tenant and actor identity).</li>
       <li><b>Epic 4 is now complete.</b> The playbook described it as in progress; US4.1&ndash;US4.4 are implemented and acceptance-tested, including immutable lineage report export.</li>
     </ul>
     <p>Treating the playbook's table as a delivery signal would credit the platform with an enterprise identity posture it does not have.</p>

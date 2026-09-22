@@ -260,6 +260,62 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await page.select('#typeFilter', '');
   });
 
+  it('shows and exports the immutable audit history from item details', async () => {
+    await closeAnyDialog();
+    const stories = await api('/workitems?type=story');
+    const target = stories.find((item: any) => item.title === 'Story awaiting review');
+    expect(target).toBeTruthy();
+
+    await page.select('#typeFilter', 'story');
+    await page.waitForFunction(() => document.querySelectorAll('.work-card').length > 0, { timeout: 10000 });
+    await openCardByKey(target.key);
+    await page.waitForSelector('#itemDialog[open] .audit-timeline', { timeout: 10000 });
+
+    const history = await lowerTextOf('#detailBody');
+    expect(history).toContain('audit history');
+    expect(history).toContain('work item created');
+    expect(history).toContain('work item state changed');
+    expect(history).toContain('proposed → planned');
+    expect(history).toContain('sha-256 chain verified');
+
+    await page.evaluate(() => {
+      const originalClick = HTMLAnchorElement.prototype.click;
+      (window as any).__restoreAuditDownloadClick = () => {
+        HTMLAnchorElement.prototype.click = originalClick;
+      };
+      HTMLAnchorElement.prototype.click = function captureDownload() {
+        if (this.download) {
+          (window as any).__capturedAuditDownloadName = this.download;
+          return;
+        }
+        originalClick.call(this);
+      };
+    });
+    const responsePromise = page.waitForResponse(
+      (response) => response.request().method() === 'GET'
+        && response.url().includes(`/audit/export?work_item_id=${target.id}`),
+    );
+    await page.click('#itemDialog .audit-head button');
+    const response = await responsePromise;
+    expect(response.status()).toBe(200);
+    const report = await response.json() as any;
+    expect(report.schema).toBe('cadena.audit-trail.v1');
+    expect(report.event_count).toBeGreaterThanOrEqual(4);
+    expect(report.events.every((event: any) => event.actor?.id && event.timestamp)).toBe(true);
+    await page.waitForFunction(
+      () => document.querySelector('#toastRegion')?.textContent?.includes('audit event') ?? false,
+    );
+    const downloadName = await page.evaluate(() => {
+      const name = (window as any).__capturedAuditDownloadName;
+      (window as any).__restoreAuditDownloadClick?.();
+      return name;
+    });
+    expect(downloadName).toBe(`${target.key}-audit-trail.json`);
+
+    await closeAnyDialog();
+    await page.select('#typeFilter', '');
+  });
+
   it('renders Service impact with the edge chain that implicates each item', async () => {
     await closeAnyDialog();
     await page.click('#openServicesFromNav');
@@ -298,6 +354,68 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     expect(await textOf('#impactContent')).toContain('INC-');
 
     await closeAnyDialog();
+  });
+
+  it('renders an interactive upstream and downstream graph that expands by depth', async () => {
+    await closeAnyDialog();
+    const stories = await api('/workitems?type=story');
+    const target = stories.find((item: any) => item.title === 'Story: State Machine Transition Engine');
+    expect(target).toBeTruthy();
+
+    await page.select('#typeFilter', 'story');
+    await page.waitForFunction(() => document.querySelectorAll('.work-card').length > 0, { timeout: 10000 });
+    await openCardByKey(target.key);
+    await page.waitForSelector('#itemDialog[open]', { timeout: 10000 });
+    await page.evaluate(() => {
+      const button = Array.from(document.querySelectorAll<HTMLButtonElement>('#detailBody button'))
+        .find((candidate) => candidate.textContent?.trim() === 'Trace lineage');
+      button?.click();
+    });
+    await page.waitForSelector('#lineageDialog[open] #lineageGraph', { timeout: 10000 });
+    await page.waitForFunction(
+      () => document.querySelectorAll('#lineageGraph .trace-node').length === 4,
+      { timeout: 10000 },
+    );
+
+    expect((await page.$$('#lineageGraph .trace-node')).length).toBe(4);
+    expect((await page.$$('#lineageGraph .trace-edge')).length).toBe(3);
+    const graphText = await lowerTextOf('#lineageContent');
+    expect(graphText).toContain('upstream');
+    expect(graphText).toContain('downstream');
+    expect(graphText).toContain('fixed by');
+    expect(await textOf('#lineageSummary')).toContain('4 nodes');
+
+    await page.select('#lineageDepth', '1');
+    await page.waitForFunction(
+      () => document.querySelectorAll('#lineageGraph .trace-node').length === 3,
+      { timeout: 10000 },
+    );
+    expect(await textOf('#lineageSummary')).toContain('1 hop');
+
+    await page.click('#expandLineageButton');
+    await page.waitForFunction(
+      () => (document.querySelector('#lineageDepth') as HTMLSelectElement)?.value === '2'
+        && document.querySelectorAll('#lineageGraph .trace-node').length === 4,
+      { timeout: 10000 },
+    );
+
+    await page.click('#lineageGraph .trace-node:not(.root)');
+    const inspector = await textOf('#lineageInspector');
+    expect(inspector).toContain('Explore from this node');
+    expect(inspector).toMatch(/Upstream|Downstream/);
+
+    const selectedKey = await textOf('#lineageGraph .trace-node.selected .trace-node-key');
+    await page.click('#lineageInspector .button');
+    await page.waitForFunction(
+      (key) => document.querySelector('#lineageDialogTitle')?.textContent?.includes(String(key)),
+      { timeout: 10000 },
+      selectedKey,
+    );
+    expect(await textOf('#lineageDialogTitle')).toContain(selectedKey);
+
+    await closeAnyDialog();
+    await page.select('#typeFilter', '');
+    await page.select('#lineageDepth', '3');
   });
 
   it('exports a full lineage snapshot from the Traceability dialog', async () => {

@@ -2,8 +2,76 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.4 flow metrics and US10.9 authenticated tenant identity. The canonical backlog is **20 epics / 72 stories**, with **29 done / 5 partial / 38 not started**.
-**Verification:** 120 automated tests across 33 test files, plus 11 browser smoke tests driving the real page.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation and US13.3 echo-loop suppression. The canonical backlog is **20 epics / 72 stories**, with **35 done / 4 partial / 33 not started**.
+**Verification:** 134 automated tests across 39 test files, plus 14 browser smoke tests driving the real page.
+
+---
+
+## 2026-09-22 — Bidirectional echo-loop suppression (US13.3)
+
+Codex added the guard that prevents a connector from synchronizing its own write back to the origin:
+
+- Outbound writes record a volatile `(tenant, node, service account, canonical payload hash)` marker and a durable normalized content snapshot.
+- Returning webhooks with the exact service-account identity and SHA-256 payload hash receive `self_originated_hash` / `ignore`.
+- The same actor with changed content receives `external_change` / `process`, so actor identity alone never hides a real change.
+- After every volatile marker is cleared, identical normalized content still receives `content_noop` / `ignore` from the durable snapshot.
+- All write records and decisions use the transactional outbox and verifiable tenant audit chain.
+- `test/us13.3.spec.ts` proves canonical key-order independence, changed-content pass-through, restart/cache fallback, tenant isolation, validation and audit evidence.
+
+US13.3 moves from not started to **done**, taking the canonical ledger to **35 done / 4 partial / 33 not started**.
+
+**Boundary:** connectors must pass their normalized mapped fields and verified provider actor. Vendor-specific transformations, signature checks and actual outbound execution remain later connector work.
+
+---
+
+## 2026-09-22 — Immutable cross-system correlation (US13.2)
+
+Codex added the identity graph that later bidirectional connectors will use:
+
+- `integration_correlation_nodes` stores exact provider identities separately from mutable display keys and URLs.
+- `integration_correlation_links` stores typed pair and dependency edges with tenant-qualified restrictive foreign keys, so a branch cannot reference a missing or cross-tenant node.
+- `POST /integrations/correlations` creates or idempotently resolves a pair and returns the dedicated `cadena_counterpart_id` value for both systems.
+- `GET /integrations/correlations/resolve` starts from an immutable identity and expands one-to-many or many-to-one dependencies to a requested depth without title matching.
+- Re-posting a pair after a record rename or project move refreshes display metadata while preserving node and link identity; the metadata-only PATCH route refuses changes to immutable fields.
+- Every correlation transaction is recorded through the transactional outbox and existing SHA-256 audit chain.
+- `test/us13.2.spec.ts` proves reverse-pair deduplication, rename/move survival, tenant isolation, immutable-field rejection, branched traversal and orphan prevention.
+
+US13.2 moves from not started to **done**, taking the canonical ledger to **34 done / 4 partial / 34 not started**.
+
+**Boundary:** the contract returns the provider-field write-back values but does not claim live ServiceNow/Jira transport. Native credentials, discovery and outbound field writes remain US17.1.
+
+---
+
+## 2026-09-22 — Cryptographically verifiable audit export (US10.7)
+
+Codex extended the US10.4 audit surface with tamper-evident evidence:
+
+- `audit_integrity_entries` maintains an independent tenant-wide SHA-256 chain over canonical event envelopes, with stable JSON key ordering, sequence, previous hash, proof version and chain head.
+- Canonical outbox writes append their proof in the business transaction; event-bus records append in the event-store transaction; workflow and severity audit rows append beside their mutation.
+- Integration transactions are covered through the same durable domain-event route, not a special export-only calculation.
+- Existing databases backfill missing proof rows deterministically on initialization without rewriting source history.
+- `GET /audit/export` and the item-history route verify each current source event against its recorded proof and verify the stored tenant chain's continuity. A changed or deleted source row fails the overall export result.
+- Item details show **SHA-256 chain verified** or a visible failure, with per-event proof metadata beside before/after evidence.
+- `test/us10.7.spec.ts` proves field/transition/integration coverage, chain metadata, tenant isolation, source-tamper detection and upgrade backfill.
+
+US10.7 moves from not started to **done**, taking the canonical ledger to **33 done / 4 partial / 35 not started**.
+
+**Boundary:** the chain is not externally signed. It detects partial source or chain modification, but a database administrator capable of rewriting the entire chain and head remains outside the pilot trust boundary; external notarization or WORM anchoring is the production hardening step.
+
+---
+
+## 2026-09-21 — Full work-item audit export and history UI (US10.4)
+
+Codex completed the compliance export promised by the technical specification rather than exposing transition rows alone:
+
+- `GET /audit/workitems/:id` supplies the item-details timeline; `GET /audit/export?work_item_id=…` downloads the `cadena.audit-trail.v1` JSON document.
+- The tenant-qualified projection combines canonical domain events and workflow audit rows, removes duplicate transition records, and includes links where the selected item is either endpoint.
+- Creation, field edits, typed links, transitions and severity escalation expose actor, timestamp and normalized before/after values.
+- `PATCH /workitems/:id` updates only mutable fields and atomically records `WorkItemFieldsChanged`; status edits are rejected so workflow guards cannot be bypassed.
+- Item details now show a compact timeline with expandable evidence and an **Export JSON** action.
+- `test/us10.4.spec.ts` proves event coverage, incoming links, actor/value evidence, the attachment contract, tenant isolation and edit boundaries; the browser suite drives the visible history and download.
+
+US10.4 moves from partial to **done**, taking the canonical ledger to **32 done / 4 partial / 36 not started**. Cryptographic integrity metadata remains explicitly in US10.7.
 
 ---
 
@@ -407,7 +475,7 @@ Pick `SVC-CHECKOUT-API`, set depth to 3–4, and the view lists every implicated
 
 ### 4. Import the real backlog and trace lineage
 
-**Pilot actions → Import 12-epic backlog** creates 12 epics, 38 stories and 38 parent-child relationships. Filter by **Epics**, open any story, and **Trace lineage → Upstream** walks the `child_of` edge to its parent epic. Choose **Export full report** to download a timestamped JSON snapshot of the complete connected graph; that stored report remains unchanged if the live graph is edited later.
+**Pilot actions → Import 12-epic backlog** creates 12 epics, 38 stories and 38 parent-child relationships. Filter by **Stories**, open one and choose **Trace lineage**. The explorer renders upstream and downstream branches together with typed arrows; select 1–10 hops, use **Expand one level**, select a node to inspect its relationships, or make that node the new graph root. **Export full report** downloads a timestamped JSON snapshot of the complete connected graph; that stored report remains unchanged if the live graph is edited later.
 
 ### 5. Watch SLA aging bite, and see who gets told
 
@@ -429,8 +497,8 @@ Note that SLA badges read green on a fresh boot because nothing has aged yet, so
 ## Verification status
 
 ```
- Test Files  34 passed (34)
-      Tests  121 passed (121)
+ Test Files  35 passed (35)
+      Tests  126 passed (126)
 ```
 
 Plus the browser smoke suite, run separately because it builds and takes ~140 seconds:
@@ -438,7 +506,7 @@ Plus the browser smoke suite, run separately because it builds and takes ~140 se
 ```
 npm run test:ui
  Test Files  1 passed (1)
-      Tests  12 passed (12)
+      Tests  13 passed (13)
 ```
 
 | Area | Tests |
@@ -446,7 +514,7 @@ npm run test:ui
 | Canonical model, custom fields, tenant isolation | `us1.1`, `us1.2`, `us1.3` |
 | Versioned workflows, guards, external automation | `us2.1`, `us2.2`, `us2.3` |
 | Aging & SLA across both calendars, including durable hold-state suspension | `us3.1`, `us3.2`, `us3.3`, **`us3.4`** |
-| Typed links, lineage, **service impact and immutable report export** | `us4.1`, `us4.2`, **`us4.3`, `us4.4`** |
+| Typed links, lineage, **interactive explorer, service impact and immutable report export** | `us4.1`, `us4.2`, **`us4.3`, `us4.4`, `us9.3`** |
 | Git/CI integration | `us6.1`, `us6.2`, `us6.3` |
 | **Executive rollup, DORA & ITIL flow metrics** | **`us9.2`, `us9.4`** |
 | **Datastore persistence** | **`persistence`** |
@@ -454,7 +522,7 @@ npm run test:ui
 | **Notification & escalation routing** | **`us8.1`, `us8.2`, `us8.3`** |
 | Monitoring/APM integration | `us7.1`, `us7.2`, `us7.3` |
 | Authenticated tenant identity, RBAC, backlog fixture | **`us10.9`**, `us10.3`, `backlog-fixture` |
-| **Rendered heatmap ordering, lineage export and executive overview** | **`ui-smoke`** |
+| **Rendered heatmap ordering, interactive lineage, report export and executive overview** | **`ui-smoke`** |
 
 **QA coverage:** UI work is now verified in headless Chrome against the built server, including console-error and responsive checks. Not covered: visual regression (no screenshot baselines), cross-browser behaviour (Chrome only), and accessibility auditing beyond the keyboard and ARIA attributes already in the markup.
 
@@ -469,4 +537,4 @@ Named plainly so nobody mistakes the pilot for a product:
 - **Identity hardening** — bearer credentials now prove tenant and principal in production mode, but SSO/OIDC/SAML, SCIM, a login UI and provider-specific integration credentials are not built. Dev mode still permits explicit header identity for the pilot UI.
 - **Epic 11** — no CMDB federation. Alert-discovered Services are lightweight stubs flagged `monitoring_discovery`.
 - **Webhook signature verification** — both gateways trust the normalized body even though production requests now require an authenticated API principal. See README *Production Boundaries*.
-- **Epic 9 scale and exploration** — US9.1, US9.2 and US9.4 are built, but there are no analytics materialized views and no interactive graph explorer (US9.3). Metrics are computed per request and should move to reporting projections before production-scale load.
+- **Epic 9 scale boundary** — US9.1–US9.4 are built, including the interactive graph explorer, but there are no analytics materialized views. Metrics are computed per request and should move to reporting projections before production-scale load.

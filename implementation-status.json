@@ -349,9 +349,9 @@
     },
     "US9.3": {
       "name": "Interactive traceability explorer",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
-      "note": "Lineage renders as a linear chain, not an expandable graph."
+      "note": "Verified by <code>test/us9.3.spec.ts</code> and the browser smoke suite — a tenant-scoped graph combines semantic upstream and downstream traversal, expands from 1 to 10 hops, labels typed edges, supports node inspection and re-rooting, and retains lineage report export."
     },
     "US9.4": {
       "name": "DORA and ITIL metrics",
@@ -379,9 +379,9 @@
     },
     "US10.4": {
       "name": "Audit-trail export",
-      "status": "partial",
+      "status": "done",
       "phase": 3,
-      "note": "Every transition writes an immutable <code>audit_events</code> row, but no export endpoint exposes them."
+      "note": "Verified by <code>test/us10.4.spec.ts</code> and the browser smoke suite — tenant-scoped history/export combines immutable domain and workflow events, includes incoming links, actor/time and normalized before/after values, and is visible from item details."
     },
     "US10.5": {
       "name": "Identity by immutable account id",
@@ -437,18 +437,18 @@
     },
     "US13.2": {
       "name": "Immutable correlation references",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "expandedIn": "master-2026-09-21",
-      "note": "Expanded by the master backlog: immutable pair ids now cover one-to-many and many-to-one parent trees without orphaned dependencies."
+      "note": "Verified by <code>test/us13.2.spec.ts</code> — tenant-scoped immutable identities survive key/URL changes, expose a dedicated reference for both sides, resolve depth-bounded one-to-many and many-to-one graphs, and cannot be orphaned through deletion."
     },
     "US13.3": {
       "name": "Echo-loop suppression",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
-      "note": "Self-originated webhooks identified by service-account identity plus payload hash, with content comparison as the fallback after a restart."
+      "note": "Verified by <code>test/us13.3.spec.ts</code> — exact service-account plus canonical SHA-256 payload matches are suppressed, changed content continues, and a durable normalized snapshot still detects the no-op after volatile state is cleared."
     },
     "US13.4": {
       "name": "Work-note privacy in comment sync",
@@ -537,11 +537,11 @@
     },
     "US10.7": {
       "name": "Cryptographically verifiable audit export",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
-      "note": "New from the master backlog. Event rows are durable but are not hash-chained or exposed through an integrity-verifiable audit export."
+      "note": "Verified by <code>test/us10.7.spec.ts</code> and the browser smoke suite — domain, workflow and integration events append to a tenant-wide SHA-256 chain, existing stores backfill deterministically, source tampering is detected, and exports/UI carry event and chain verification metadata."
     },
     "US10.8": {
       "name": "Data residency and tenant key controls",

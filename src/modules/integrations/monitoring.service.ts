@@ -13,6 +13,7 @@ import {
 } from '../work-items/work-item.types';
 import { IntegrationSupport, IntegrationWorkItemRef } from './integration-support';
 import { InvalidIntegrationPayloadError } from './integration.service';
+import { appendAuditIntegrityEntry } from '../audit/audit-integrity';
 import { ExternalArtifact, IntegrationTransitionResult } from './integration.types';
 import {
   ALERT_LINK_TYPE,
@@ -799,7 +800,7 @@ export class MonitoringIntegrationService {
     provider: string,
   ): Promise<WorkItemSeverity | null> {
     const current = await this.dbService.db.query<any>(
-      `SELECT severity, item_key FROM work_items WHERE id = $1 AND org_id = $2`,
+      `SELECT severity, priority, item_key FROM work_items WHERE id = $1 AND org_id = $2`,
       [incidentId, orgId],
     );
     if (current.rows.length === 0) return null;
@@ -808,21 +809,38 @@ export class MonitoringIntegrationService {
     if (existing && severityRank(severity.mapped) >= severityRank(existing)) return null;
 
     const now = new Date().toISOString();
-    await this.dbService.db.query(
-      `UPDATE work_items SET severity = $1, priority = $2, updated_at = $3 WHERE id = $4 AND org_id = $5`,
-      [severity.mapped, severity.priority, now, incidentId, orgId],
-    );
-    await this.dbService.db.query(
-      `INSERT INTO audit_events (id, event_type, work_item_id, actor_id, payload, timestamp)
-       VALUES ($1, 'IncidentSeverityEscalated', $2, $3, $4, $5)`,
-      [
-        randomUUID(),
-        incidentId,
-        `monitoring:${provider}`,
-        JSON.stringify({ from_severity: existing, to_severity: severity.mapped, priority: severity.priority }),
-        now,
-      ],
-    );
+    const auditId = randomUUID();
+    const actorId = `monitoring:${provider}`;
+    const auditPayload = {
+      from_severity: existing,
+      to_severity: severity.mapped,
+      from_priority: current.rows[0].priority,
+      to_priority: severity.priority,
+      before: { severity: existing, priority: current.rows[0].priority },
+      after: { severity: severity.mapped, priority: severity.priority },
+    };
+    await this.dbService.db.transaction(async (tx) => {
+      await tx.query(
+        `UPDATE work_items SET severity = $1, priority = $2, updated_at = $3 WHERE id = $4 AND org_id = $5`,
+        [severity.mapped, severity.priority, now, incidentId, orgId],
+      );
+      await tx.query(
+        `INSERT INTO audit_events (id, event_type, work_item_id, actor_type, actor_id, payload, timestamp)
+         VALUES ($1, 'IncidentSeverityEscalated', $2, 'integration', $3, $4, $5)`,
+        [auditId, incidentId, actorId, JSON.stringify(auditPayload), now],
+      );
+      await appendAuditIntegrityEntry(tx, {
+        source: 'audit_events',
+        event_id: auditId,
+        org_id: orgId,
+        work_item_id: incidentId,
+        event_type: 'IncidentSeverityEscalated',
+        actor_type: 'integration',
+        actor_id: actorId,
+        payload: auditPayload,
+        occurred_at: now,
+      });
+    });
     return severity.mapped;
   }
 

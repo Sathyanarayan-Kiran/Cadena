@@ -6,7 +6,10 @@ import { WorkflowService } from '../workflow/workflow.service';
 import {
   CreateWorkItemDto,
   DEFAULT_STATUS,
+  UpdateWorkItemDto,
   VALID_WORK_ITEM_TYPES,
+  VALID_PRIORITIES,
+  VALID_SEVERITIES,
   WorkItem,
   WorkItemType,
 } from './work-item.types';
@@ -23,6 +26,13 @@ export class InvalidCustomFieldsError extends Error {
   constructor(public readonly errors: string[]) {
     super(`Custom fields validation failed: ${errors.join(', ')}`);
     this.name = 'InvalidCustomFieldsError';
+  }
+}
+
+export class InvalidWorkItemUpdateError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InvalidWorkItemUpdateError';
   }
 }
 
@@ -156,6 +166,97 @@ export class WorkItemService {
         );
     if (!res.rows || res.rows.length === 0) return null;
     return this.mapRowToWorkItem(res.rows[0]);
+  }
+
+  /**
+   * Updates the mutable WorkItem fields and commits a before/after event atomically.
+   * Status is deliberately absent: lifecycle changes must continue through WorkflowService.
+   */
+  public async updateWorkItem(
+    id: string,
+    orgId: string,
+    dto: UpdateWorkItemDto,
+    actorId: string = 'system',
+  ): Promise<WorkItem | null> {
+    await this.dbService.initialize();
+    const current = await this.getWorkItemById(id, orgId);
+    if (!current) return null;
+
+    const allowed = new Set(['title', 'description', 'priority', 'severity', 'owner_id', 'custom_fields', 'tags']);
+    const unknown = Object.keys(dto as Record<string, unknown>).filter((field) => !allowed.has(field));
+    if (unknown.length) {
+      throw new InvalidWorkItemUpdateError(`Fields cannot be edited through this endpoint: ${unknown.join(', ')}`);
+    }
+    if (dto.title !== undefined && (!dto.title.trim() || dto.title.length > 500)) {
+      throw new InvalidWorkItemUpdateError('title must contain 1 to 500 characters');
+    }
+    if (dto.priority !== undefined && !VALID_PRIORITIES.includes(dto.priority)) {
+      throw new InvalidWorkItemUpdateError(`priority must be one of ${VALID_PRIORITIES.join(', ')}`);
+    }
+    if (dto.severity !== undefined && dto.severity !== null && !VALID_SEVERITIES.includes(dto.severity)) {
+      throw new InvalidWorkItemUpdateError(`severity must be one of ${VALID_SEVERITIES.join(', ')} or null`);
+    }
+    if (dto.tags !== undefined && (!Array.isArray(dto.tags) || dto.tags.some((tag) => typeof tag !== 'string'))) {
+      throw new InvalidWorkItemUpdateError('tags must be an array of strings');
+    }
+    if (dto.custom_fields !== undefined && (dto.custom_fields === null || Array.isArray(dto.custom_fields) || typeof dto.custom_fields !== 'object')) {
+      throw new InvalidWorkItemUpdateError('custom_fields must be an object');
+    }
+
+    const nextCustomFields = dto.custom_fields === undefined
+      ? current.custom_fields
+      : { ...current.custom_fields, ...dto.custom_fields };
+    if (dto.custom_fields !== undefined) {
+      const schemaDef = await this.schemaService.getLatestSchema(current.type);
+      if (schemaDef) {
+        const validation = this.schemaService.validateCustomFields(schemaDef.schema, nextCustomFields);
+        if (!validation.valid) throw new InvalidCustomFieldsError(validation.errors || []);
+      }
+    }
+
+    const next = {
+      title: dto.title === undefined ? current.title : dto.title.trim(),
+      description: dto.description === undefined ? current.description : dto.description,
+      priority: dto.priority === undefined ? current.priority : dto.priority,
+      severity: dto.severity === undefined ? current.severity ?? null : dto.severity,
+      owner_id: dto.owner_id === undefined ? current.owner_id ?? null : dto.owner_id,
+      custom_fields: nextCustomFields,
+      tags: dto.tags === undefined ? current.tags : dto.tags,
+    };
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+    for (const field of allowed) {
+      if ((dto as Record<string, unknown>)[field] === undefined) continue;
+      const oldValue = (current as unknown as Record<string, unknown>)[field];
+      const newValue = (next as Record<string, unknown>)[field];
+      if (JSON.stringify(oldValue) !== JSON.stringify(newValue)) {
+        before[field] = oldValue;
+        after[field] = newValue;
+      }
+    }
+    if (!Object.keys(after).length) return current;
+
+    const now = new Date().toISOString();
+    const event = await this.dbService.db.transaction(async (tx) => {
+      await tx.query(
+        `UPDATE work_items
+         SET title = $1, description = $2, priority = $3, severity = $4, owner_id = $5,
+             custom_fields = $6, tags = $7, updated_at = $8
+         WHERE id = $9 AND org_id = $10`,
+        [next.title, next.description, next.priority, next.severity, next.owner_id,
+          JSON.stringify(next.custom_fields), next.tags, now, id, orgId],
+      );
+      return this.outbox.enqueue(tx, {
+        event_type: 'WorkItemFieldsChanged',
+        work_item_id: id,
+        org_id: orgId,
+        actor: { type: 'user', id: actorId },
+        payload: { before, after },
+        timestamp: now,
+      });
+    });
+    await this.outbox.dispatch(event);
+    return this.getWorkItemById(id, orgId);
   }
 
   public async listWorkItems(filter: ListWorkItemsFilter, orgId: string): Promise<WorkItem[]> {

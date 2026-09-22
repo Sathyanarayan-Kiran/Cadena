@@ -5,12 +5,13 @@ import {
   HttpException,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   Headers,
 } from '@nestjs/common';
-import { WorkItemService, UnrecognizedTypeError, InvalidCustomFieldsError, ListWorkItemsFilter } from './work-item.service';
-import { CreateWorkItemDto } from './work-item.types';
+import { WorkItemService, UnrecognizedTypeError, InvalidCustomFieldsError, InvalidWorkItemUpdateError, ListWorkItemsFilter } from './work-item.service';
+import { CreateWorkItemDto, UpdateWorkItemDto } from './work-item.types';
 import { CustomFieldSchemaService, RegisterCustomFieldSchemaDto } from './custom-field-schema.service';
 import { WorkflowService, GuardFailedError, MissingRequiredFieldsError, InvalidTransitionError } from '../workflow/workflow.service';
 import { RbacService } from '../rbac/rbac.service';
@@ -69,6 +70,38 @@ export class WorkItemController {
             error: 'Unprocessable Entity',
             message: err.message,
             errors: err.errors,
+          },
+          HttpStatus.UNPROCESSABLE_ENTITY,
+        );
+      }
+      throw err;
+    }
+  }
+
+  @Patch(':id')
+  async updateWorkItem(
+    @Param('id') id: string,
+    @Body() dto: UpdateWorkItemDto,
+    @Headers('x-actor-id') actorId?: string,
+    @Headers('x-org-id') headerOrgId?: string,
+  ) {
+    try {
+      const item = await this.service.updateWorkItem(
+        id,
+        headerOrgId || '00000000-0000-0000-0000-000000000099',
+        dto,
+        actorId || 'user-1',
+      );
+      if (!item) throw new HttpException('WorkItem not found', HttpStatus.NOT_FOUND);
+      return item;
+    } catch (err) {
+      if (err instanceof InvalidWorkItemUpdateError || err instanceof InvalidCustomFieldsError) {
+        throw new HttpException(
+          {
+            statusCode: 422,
+            error: 'invalid_work_item_update',
+            message: err.message,
+            ...(err instanceof InvalidCustomFieldsError ? { errors: err.errors } : {}),
           },
           HttpStatus.UNPROCESSABLE_ENTITY,
         );

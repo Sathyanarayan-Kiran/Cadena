@@ -3,6 +3,7 @@ import { DatabaseService } from '../../database/database.service';
 import { EventOutboxService } from '../events/event-outbox.service';
 import { SlaCalculatorService, SlaCalendar } from '../sla/sla-calculator.service';
 import { PublishedWorkflowRecord, WorkflowDefinition } from './workflow.types';
+import { appendAuditIntegrityEntry } from '../audit/audit-integrity';
 
 const BUILT_IN_WORKFLOWS: Record<string, WorkflowDefinition> = {
   epic: {
@@ -379,10 +380,23 @@ export class WorkflowService {
 
     // 6. Record Audit Event
     const auditId = randomUUID();
+    const changedCustomFields = Object.keys(suppliedFields);
     const auditPayload = {
       from_state: fromState,
       to_state: ctx.toState,
       fields: suppliedFields,
+      before: {
+        status: fromState,
+        ...(changedCustomFields.length
+          ? { custom_fields: Object.fromEntries(changedCustomFields.map((field) => [field, currentCustomFields[field] ?? null])) }
+          : {}),
+      },
+      after: {
+        status: ctx.toState,
+        ...(changedCustomFields.length
+          ? { custom_fields: Object.fromEntries(changedCustomFields.map((field) => [field, mergedFields[field]])) }
+          : {}),
+      },
     };
     // Additive per US5.1: consumers need the tenant to route or aggregate a transition,
     // and the spec §8.2 envelope has no org field, so it travels in the payload.
@@ -410,10 +424,21 @@ export class WorkflowService {
       }
 
       await tx.query(
-        `INSERT INTO audit_events (id, event_type, work_item_id, actor_id, payload, timestamp)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [auditId, 'WorkItemStateChanged', ctx.workItemId, ctx.actorId, JSON.stringify(auditPayload), now],
+        `INSERT INTO audit_events (id, event_type, work_item_id, actor_type, actor_id, payload, timestamp)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [auditId, 'WorkItemStateChanged', ctx.workItemId, ctx.actorType || 'user', ctx.actorId, JSON.stringify(auditPayload), now],
       );
+      await appendAuditIntegrityEntry(tx, {
+        source: 'audit_events',
+        event_id: auditId,
+        org_id: ctx.orgId,
+        work_item_id: ctx.workItemId,
+        event_type: 'WorkItemStateChanged',
+        actor_type: ctx.actorType || 'user',
+        actor_id: ctx.actorId,
+        payload: auditPayload,
+        occurred_at: now,
+      });
 
       return this.outbox.enqueue(tx, {
         event_type: 'WorkItemStateChanged',
