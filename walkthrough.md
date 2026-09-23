@@ -15,6 +15,8 @@ Three of the four items the twin-backed projection left open are now closed:
 - **Owners are matched automatically.** A connector with no `ownerMap` at all now still gets correct ownership when the source's assignee email matches someone in the tenant directory. An explicit map still wins when both are present.
 - **A paused projection says so.** A work item whose connector projection was disabled now reports itself as frozen/stale (in the API and in the item drawer's ownership banner) instead of silently looking current. Its governed state write-back is unaffected, since that always targets the twin directly.
 
+- **The dev toolchain is clean too.** vitest 2 → 5 and vite 5 → 6 (esbuild rides along to 0.25.12). `npm audit` now reports 0 vulnerabilities, no dev/prod split needed — it was 5 (3 moderate, 1 high, 1 critical), all build/test-only and never in the production dependency tree.
+
 Left open, and why: field-level write-back is its own story (US17.2, which needs a proper sandboxed-scripting design, not a bolt-on); live-tenant validation and cloud activation both need credentials and authorization only the user can provide.
 
 **Verified by** `test/audit-chain-concurrency.spec.ts` (new, 4 tests) and updates to `test/twin-projection.spec.ts` and `test/cloud-staging.spec.ts`; 179 non-browser tests across 46 files and 21 browser tests, all passing.
