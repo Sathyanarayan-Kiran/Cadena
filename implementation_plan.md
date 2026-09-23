@@ -2,6 +2,34 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — closing the projection increment's open items — 2026-09-23
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-23, closing three of the four items the twin-backed WorkItem projection increment above left open.
+
+**Status:** Architecture/quality increment. No story changes status; the ledger remains **38 done / 6 partial / 29 not started**.
+
+### What closed
+
+- **Horizontal scaling.** The audit-integrity chain's single-writer assumption is gone. `audit_integrity_entries` now carries `UNIQUE (org_id, previous_hash) WHERE previous_hash IS NOT NULL` and `UNIQUE (org_id) WHERE previous_hash IS NULL` — a forked chain (two entries citing the same prior link, or two genesis entries) is a constraint violation, not just an unlikely race. `appendAuditIntegrityEntry` catches that specific violation and retries against whichever entry actually committed, up to a bounded number of attempts. This needed no connection-scoped locking, so it also covers the ad hoc, non-transactional legacy backfill path in `database.service.ts` — not just calls made inside a request transaction. `deploy/staging/deployment.yaml` moves from 1 replica/`Recreate` to 2 replicas/`RollingUpdate` (`maxUnavailable: 0`), now that this and the earlier Codex connector-sync-lease fix have removed every process-local coordination assumption. Verified in `test/audit-chain-concurrency.spec.ts`: the constraints make a fork physically impossible (direct SQL), a simulated lost race relinks correctly to the real winner, an unrecoverable race fails loudly rather than looping or corrupting the chain, and a burst of interleaved appends across several tenants stays independently valid. **Caveat:** the embedded test database (PGlite) fully serializes its own `transaction()` calls — confirmed empirically — so true multi-connection concurrency cannot be reproduced there; the race is instead forced deterministically by intercepting one query. PGlite raises the same `23505`/`constraint` shape as `pg`, so the mechanism is unchanged against pooled managed Postgres.
+- **Owner directory matching.** `resolveOwner` now falls back to matching the source's assignee email against `people.email` (case-insensitive) when no `projection.ownerMap` entry applies, so a connector needs no map at all to get correct ownership when the tenant's directory already has matching emails. An explicit `ownerMap` entry — now also matchable by email, not only account id/display name — still wins over the automatic match, since it is the operator's stated intent. Both adapters were extended to surface it: Jira's `assignee.emailAddress` (present in `STANDARD_FIELDS`'s `assignee` object when Atlassian's privacy settings expose it) and ServiceNow's dot-walked `assigned_to.email` (added to `SYNC_FIELDS`, since the base reference field carries no email). An email that matches no one leaves the item unowned rather than guessing. `configureProjection` also changed from replacing the whole `projection` config to merging onto it, so toggling just `enabled` no longer silently drops a previously configured `teamId`/`typeMap`/`ownerMap`. Verified in `test/twin-projection.spec.ts`.
+- **Frozen/stale visibility.** Disabling a connector's projection (`POST /integrations/connectors/:id/projection` with `enabled: false`) already left existing projected items in place — the design was intentional, since a synchronized record's history must not disappear — but nothing told an operator the item had stopped updating. Every work-item read now joins its twin's live `projection_status` and reports `source.frozen` when it is not `'projected'`. `GET /workitems/:id/available-transitions` surfaces the same as `stale` plus a note appended to its message. State write-back is unaffected either way: it targets the twin directly, which keeps synchronizing regardless of whether the *item* projection is paused. Verified in `test/twin-projection.spec.ts`.
+
+### What was evaluated and intentionally left open
+
+- **Field-level write-back** (only state has an outbound mapping) is its own backlog story, US17.2 (visual field mappings with a sandboxed scripting escape hatch, a 500ms-timeout/memory-capped/no-ambient-network sandbox). It deserves that dedicated design, not a bolt-on here.
+- **Live-tenant validation** of the Jira/ServiceNow connectors and **cloud activation** both require credentials and account-level authorization only the user can give; see README's Cloud Activation Status.
+- **Dev-toolchain advisories** (vitest/vite/esbuild, dev-only, 0 in the production dependency tree) are addressed separately below rather than folded into this section, since the outcome of that attempt determines its own status.
+
+### Primary files added / updated by Claude
+
+- `src/modules/audit/audit-integrity.ts`, `src/database/database.service.ts` (chain-link constraints)
+- `src/modules/connectors/connector.service.ts` (projection config merge), `jira-connector.adapter.ts`, `servicenow-connector.adapter.ts`, `sandbox/provider-sandbox.ts` (assignee email)
+- `src/modules/connectors/twin-projection.service.ts` (email directory match)
+- `src/modules/work-items/work-item.service.ts`, `work-item.types.ts` (frozen), `work-item.controller.ts` (stale transitions)
+- `public/index.html` (frozen ownership-banner note)
+- `deploy/staging/deployment.yaml`, `deploy/staging/README.md`
+- `test/audit-chain-concurrency.spec.ts` (new), `test/twin-projection.spec.ts`, `test/cloud-staging.spec.ts`
+
 ## Claude twin-backed WorkItem projection — 2026-09-22
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Code, Opus 5)** on 2026-09-22. It builds on the Codex US16.4/US16.5 record above; nothing there is superseded.
@@ -59,9 +87,9 @@ This document records the delivered pilot architecture and subsequent implementa
 ### Remaining boundary
 
 - Only state has an outbound mapping. Field write-back remains US17.2.
-- Owner resolution depends on an explicit `ownerMap`. There is no directory-based identity matching yet.
-- Disabling projection leaves previously projected items in place, read-only and no longer updated.
-- Horizontal scaling stays disabled: the audit-integrity append path still assumes a single writer. The projection adds audit writes on that same path.
+- ~~Owner resolution depends on an explicit `ownerMap`.~~ Closed 2026-09-23: falls back to matching the assignee's email against the tenant directory when no map entry applies.
+- ~~Disabling projection leaves previously projected items in place, read-only and no longer updated.~~ That behaviour is intentional (history must not disappear); closed 2026-09-23 by surfacing it as `source.frozen` / `stale` instead.
+- ~~Horizontal scaling stays disabled: the audit-integrity append path still assumes a single writer.~~ Closed 2026-09-23: a per-tenant chain-link constraint plus retry-on-conflict removed that assumption; `deploy/staging` now runs 2 replicas.
 
 ### Primary files added / updated by Claude
 
@@ -108,7 +136,7 @@ This document records the delivered pilot architecture and subsequent implementa
 ### Remaining boundary
 
 - Sync remains operator/API-triggered; US17.1 still needs scheduled, webhook and explicit-import triggers, five provider adapters and live-tenant validation.
-- The queue/lease path is database-safe across replicas, but the audit-integrity append path still assumes one writer. `deploy/staging` therefore remains one replica with `Recreate`; horizontal scaling is not enabled by this increment.
+- The queue/lease path is database-safe across replicas. ~~The audit-integrity append path still assumes one writer, so `deploy/staging` remains one replica.~~ Closed 2026-09-23: see the audit-chain constraint fix above; `deploy/staging` now runs 2 replicas with `RollingUpdate`.
 - Connector twins still do not feed the SLA, traceability, notification or metrics engines. The next architecture increment should define a twin-backed WorkItem projection without making Cadena authoritative for externally owned fields.
 
 ### Primary files added / updated by Codex
@@ -155,7 +183,7 @@ This document records the delivered pilot architecture and subsequent implementa
 - Connector twins live in `integration_canonical_twins`. They are not yet merged into the work-item SLA, traceability, notification and metrics engines, which still operate on local `work_items`.
 - Only state has an outbound mapping. Field-level write-back needs US17.2 visual field mappings.
 - The target-specific required fields that a mapped transition needs are not yet prompted for in the drawer (US13.1 boundary).
-- Per-twin durable queues and failure isolation (US16.4/US16.5) and a database sync lease are prerequisites for multi-replica synchronization.
+- ~~Per-twin durable queues and failure isolation (US16.4/US16.5) and a database sync lease are prerequisites for multi-replica synchronization.~~ Both landed (Codex US16.4/US16.5 above; the audit-chain fix 2026-09-23); `deploy/staging` now runs 2 replicas.
 
 ### Primary files added / updated by Claude
 

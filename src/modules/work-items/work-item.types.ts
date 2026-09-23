@@ -53,6 +53,8 @@ export interface WorkItemSource {
   native_key: string;
   native_url: string | null;
   source_updated_at: string | null;
+  /** True once the connector's projection is no longer 'projected'; this item has stopped updating. */
+  frozen: boolean;
 }
 
 export interface CreateWorkItemDto {

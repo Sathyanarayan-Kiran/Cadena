@@ -44,14 +44,18 @@ describe('Cloud staging foundation', () => {
     })).toThrow('must not include sslmode');
   });
 
-  it('ships a single-writer deployment with public probes, TLS ingress, and external secrets', () => {
+  it('ships a rolling multi-replica deployment with public probes, TLS ingress, and external secrets', () => {
     const root = join(__dirname, '..', 'deploy', 'staging');
     const deployment = readFileSync(join(root, 'deployment.yaml'), 'utf8');
     const ingress = readFileSync(join(root, 'ingress.yaml'), 'utf8');
     const kustomization = readFileSync(join(root, 'kustomization.yaml'), 'utf8');
 
-    expect(deployment).toContain('replicas: 1');
-    expect(deployment).toContain('type: Recreate');
+    // Safe since the connector sync lease and the audit-chain (org_id, previous_hash)
+    // constraint moved cross-process coordination into the database; see deploy/staging/README.md
+    // and test/audit-chain-concurrency.spec.ts.
+    expect(deployment).toContain('replicas: 2');
+    expect(deployment).toContain('type: RollingUpdate');
+    expect(deployment).toContain('maxUnavailable: 0');
     expect(deployment).toContain('path: /health/live');
     expect(deployment).toContain('path: /health/ready');
     expect(deployment).toContain('name: cadena-staging-secrets');

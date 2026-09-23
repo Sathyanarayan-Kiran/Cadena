@@ -207,6 +207,7 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
         priority: f.priority?.name ?? null,
         assignee: f.assignee?.displayName ?? null,
         assigneeAccountId: f.assignee?.accountId ?? null,
+        assigneeEmail: f.assignee?.emailAddress ?? null,
         issueType: f.issuetype?.name ?? null,
         createdAt: f.created ? normalizeJiraTimestamp(f.created) : null,
         projectKey: f.project?.key ?? key.split('-')[0],

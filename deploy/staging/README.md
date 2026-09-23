@@ -52,9 +52,15 @@ kubectl -n cadena-staging set image deployment/cadena-api api=ghcr.io/OWNER/REPO
 kubectl -n cadena-staging rollout status deployment/cadena-api --timeout=5m
 ```
 
-The deployment intentionally uses one replica and the `Recreate` strategy. The current
-audit-chain append relies on a single writer; horizontal scaling remains blocked until a
-per-tenant PostgreSQL advisory lock or ordered audit partition is implemented.
+The deployment runs two replicas with a rolling update (`maxUnavailable: 0`, `maxSurge: 1`), so
+a deploy never drops below full capacity. This became safe once two formerly process-local
+assumptions moved into the database: overlapping connector synchronization is now excluded by an
+expiring, heartbeated `integration_connector_sync_leases` row rather than an in-process lock, and
+the audit-integrity chain now enforces `UNIQUE (org_id, previous_hash)` (and one genesis per
+tenant), so two replicas racing to extend the same tenant's chain cannot both commit — the loser's
+insert fails and `appendAuditIntegrityEntry` retries against whichever entry actually won, instead
+of silently forking the chain. Scale further by raising `replicas`; nothing else in the deployment
+assumes a fixed instance count.
 
 ## Operational evidence before connector activation
 

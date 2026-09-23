@@ -249,13 +249,20 @@ export class WorkItemController {
         // Offer only what the source permits Cadena to write back; otherwise explain ownership.
         const twin = await this.connectors.getTwinDetail(orgId, item.source.twin_id);
         const state = twin.fields.find((field) => field.field === 'state');
+        // Projection can be disabled (or a twin held) independently of write-back: the item's
+        // OTHER fields stop updating from the source, but a state change still routes to the
+        // twin correctly, so this only changes what is said, not what is offered.
+        const staleNote = item.source.frozen
+          ? ` This item's projection is currently ${twin.projection.status}; its title, priority and other fields may be stale.`
+          : '';
         return {
           current_state: item.status,
           governed_by: 'connector',
           authority: item.source.system,
           twin_id: item.source.twin_id,
+          stale: item.source.frozen,
           editable: Boolean(state?.editable),
-          message: state?.message,
+          message: `${state?.message || ''}${staleNote}`.trim(),
           transitions: state?.editable
             ? (state.allowedValues || [])
               .filter((value) => value.toLowerCase() !== item.status.toLowerCase())

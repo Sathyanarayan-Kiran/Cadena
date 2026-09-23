@@ -298,6 +298,62 @@ describe('Twin-backed WorkItem projection', () => {
     expect((await byKey('CAD-42')).status).toBe('In Progress');
   });
 
+  it('matches an owner by assignee email without any ownerMap, and lets an explicit map override it', async () => {
+    const { orgId, jira, story, jiraId, ownerId, leadId, byKey } = await scenario();
+    jira.editIssue(story.id, { assigneeEmail: 'priya@acme.test' });
+    await sync(orgId, jiraId);
+    // No projection.ownerMap was configured at all; the directory match is by email alone.
+    expect((await byKey('CAD-42')).owner_id).toBe(ownerId);
+
+    // An operator's explicit ownerMap for this same assignee identifier still wins over the
+    // email match, since it is the stated, deliberate intent.
+    await http().post(`/integrations/connectors/${jiraId}/projection`).set(headers(orgId))
+      .send({ teamId: (await byKey('CAD-42')).team_id, ownerMap: { 'priya@acme.test': leadId } }).expect(201);
+    jira.editIssue(story.id, { summary: 'Force a re-sync' });
+    await sync(orgId, jiraId);
+    expect((await byKey('CAD-42')).owner_id).toBe(leadId);
+
+    // An email that matches no one in the tenant leaves the item unowned, not guessed.
+    jira.editIssue(story.id, { assigneeEmail: 'nobody@elsewhere.test' });
+    await http().post(`/integrations/connectors/${jiraId}/projection`).set(headers(orgId))
+      .send({ teamId: (await byKey('CAD-42')).team_id }).expect(201);
+    await sync(orgId, jiraId);
+    expect((await byKey('CAD-42')).owner_id).toBeNull();
+  });
+
+  it('marks a projected item frozen when its connector projection is disabled, without touching write-back', async () => {
+    const { orgId, jira, story, jiraId, byKey, leadId } = await scenario({ writeBack: true });
+    const before = await byKey('CAD-42');
+    expect(before.source.frozen).toBe(false);
+    const openBefore = await http().get(`/workitems/${before.id}/available-transitions`).set(headers(orgId)).expect(200);
+    expect(openBefore.body).toMatchObject({ governed_by: 'connector', stale: false });
+
+    await http().post(`/integrations/connectors/${jiraId}/projection`).set(headers(orgId)).send({ enabled: false }).expect(201);
+    const frozen = await byKey('CAD-42');
+    expect(frozen).toMatchObject({ id: before.id, source: { frozen: true } }); // same item, now flagged stale
+
+    // A source change no longer updates the frozen mirror...
+    jira.editIssue(story.id, { summary: 'Renamed while frozen' });
+    await sync(orgId, jiraId);
+    expect((await byKey('CAD-42')).title).toBe('Checkout latency fix');
+
+    // ...but the state field is still owned by the twin, not the (now stale) projection, so a
+    // governed write-back keeps working exactly as before.
+    const options = await http().get(`/workitems/${before.id}/available-transitions`).set(headers(orgId)).expect(200);
+    expect(options.body).toMatchObject({ governed_by: 'connector', stale: true, editable: true });
+    expect(options.body.message).toMatch(/projection is currently disabled/);
+    const routed = await http().post(`/workitems/${before.id}/transitions`).set(headers(orgId, leadId)).send({ to_state: 'Done' }).expect(201);
+    expect(routed.body).toMatchObject({ governed_by: 'connector', decision: 'routed', workOrder: { status: 'executed' } });
+    expect(jira.issues.get(story.id)!.status).toBe('Done');
+
+    // Re-enabling picks the projection back up on the next sync.
+    await http().post(`/integrations/connectors/${jiraId}/projection`).set(headers(orgId)).send({ enabled: true }).expect(201);
+    expect((await byKey('CAD-42')).source.frozen).toBe(false);
+    await sync(orgId, jiraId);
+    expect((await byKey('CAD-42')).title).toBe('Renamed while frozen');
+    expect((await byKey('CAD-42')).status).toBe('Done');
+  });
+
   it('holds projection with a visible reason until an owning team is configured, and isolates tenants', async () => {
     const jira = new FakeJiraApi();
     connectors.registerAdapter(new JiraConnectorAdapter(jira.fetch));

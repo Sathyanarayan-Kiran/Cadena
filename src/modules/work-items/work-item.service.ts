@@ -46,6 +46,17 @@ export interface ListWorkItemsFilter {
   aging_bucket?: 'green' | 'amber' | 'red';
 }
 
+/**
+ * Every read joins the owning twin's live projection status, so a projected item can report
+ * `source.frozen` when its connector's projection has been disabled (or the twin is held) and it
+ * has therefore stopped receiving updates, rather than silently looking current.
+ */
+const PROJECTED_ITEM_SELECT = `
+  SELECT wi.*, t.projection_status AS twin_projection_status
+  FROM work_items wi
+  LEFT JOIN integration_canonical_twins t ON t.id = wi.source_twin_id AND t.org_id = wi.org_id
+`;
+
 export class WorkItemService {
   private dbService = DatabaseService.getInstance();
   private schemaService = new CustomFieldSchemaService();
@@ -158,11 +169,11 @@ export class WorkItemService {
     await this.dbService.initialize();
     const res = orgId
       ? await this.dbService.db.query<any>(
-          `SELECT * FROM work_items WHERE id = $1 AND org_id = $2`,
+          `${PROJECTED_ITEM_SELECT} WHERE wi.id = $1 AND wi.org_id = $2`,
           [id, orgId],
         )
       : await this.dbService.db.query<any>(
-          `SELECT * FROM work_items WHERE id = $1`,
+          `${PROJECTED_ITEM_SELECT} WHERE wi.id = $1`,
           [id],
         );
     if (!res.rows || res.rows.length === 0) return null;
@@ -275,31 +286,31 @@ export class WorkItemService {
   public async listWorkItems(filter: ListWorkItemsFilter, orgId: string): Promise<WorkItem[]> {
     await this.dbService.initialize();
 
-    let query = `SELECT * FROM work_items WHERE org_id = $1`;
+    let query = `${PROJECTED_ITEM_SELECT} WHERE wi.org_id = $1`;
     const params: any[] = [orgId];
 
     if (filter.type) {
       params.push(filter.type);
-      query += ` AND type = $${params.length}`;
+      query += ` AND wi.type = $${params.length}`;
     }
 
     const targetState = filter.state || filter.status;
     if (targetState) {
       params.push(targetState);
-      query += ` AND status = $${params.length}`;
+      query += ` AND wi.status = $${params.length}`;
     }
 
     if (filter.owner_id) {
       params.push(filter.owner_id);
-      query += ` AND owner_id = $${params.length}`;
+      query += ` AND wi.owner_id = $${params.length}`;
     }
 
     if (filter.team_id) {
       params.push(filter.team_id);
-      query += ` AND team_id = $${params.length}`;
+      query += ` AND wi.team_id = $${params.length}`;
     }
 
-    query += ` ORDER BY created_at DESC`;
+    query += ` ORDER BY wi.created_at DESC`;
 
     const res = await this.dbService.db.query<any>(query, params);
     const mapped = await Promise.all((res.rows || []).map((row) => this.mapRowToWorkItem(row)));
@@ -360,6 +371,11 @@ export class WorkItemService {
           native_key: row.item_key,
           native_url: row.native_url || null,
           source_updated_at: row.source_updated_at ? new Date(row.source_updated_at).toISOString() : null,
+          // True once the connector's projection stops being 'projected' (disabled, or held after
+          // a configuration change) — this item still reflects the last successful sync and no
+          // longer updates. Unknown (no twin row at all, which should not happen) is treated as
+          // frozen too, since an operator should never be told stale data is current by default.
+          frozen: row.twin_projection_status !== 'projected',
         }
         : null,
     };

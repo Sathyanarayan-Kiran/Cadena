@@ -415,12 +415,30 @@ export class TwinProjectionService {
     return teams.rows.length === 1 ? teams.rows[0].id : null;
   }
 
+  /**
+   * An explicit `projection.ownerMap` entry always wins, since it is the operator's stated
+   * intent. Without one for this assignee, falls back to directory matching: the source's
+   * assignee email (Jira's `assignee.emailAddress`, ServiceNow's dot-walked `assigned_to.email`)
+   * against `people.email`, case-insensitively. Neither provider guarantees an email is present
+   * or visible — Jira Cloud can redact it under its privacy settings, and ServiceNow only returns
+   * it when the reference field is dot-walked into the request — so an unresolved assignee leaves
+   * the item unowned rather than guessing.
+   */
   private async resolveOwner(orgId: string, fields: Record<string, unknown>, config: TwinProjectionConfig): Promise<string | null> {
-    if (!config.ownerMap) return null;
-    const candidates = stringList([fields.assigneeAccountId, fields.assignee, fields.assigned_to]);
-    const personId = candidates.map((candidate) => config.ownerMap![candidate]).find(Boolean);
-    if (!personId) return null;
-    const person = await this.dbService.db.query<any>(`SELECT id FROM people WHERE id = $1 AND org_id = $2`, [personId, orgId]);
+    if (config.ownerMap) {
+      const candidates = stringList([fields.assigneeAccountId, fields.assignee, fields.assigned_to, fields.assigneeEmail, fields.assignedToEmail]);
+      const mappedId = candidates.map((candidate) => config.ownerMap![candidate]).find(Boolean);
+      if (mappedId) {
+        const person = await this.dbService.db.query<any>(`SELECT id FROM people WHERE id = $1 AND org_id = $2`, [mappedId, orgId]);
+        if (person.rows[0]?.id) return person.rows[0].id;
+      }
+    }
+    const email = stringList([fields.assigneeEmail, fields.assignedToEmail])[0];
+    if (!email) return null;
+    const person = await this.dbService.db.query<any>(
+      `SELECT id FROM people WHERE org_id = $1 AND lower(email) = lower($2) LIMIT 1`,
+      [orgId, email],
+    );
     return person.rows[0]?.id || null;
   }
 }

@@ -25,7 +25,7 @@ import { optionNumber, optionString, stringList } from './connector-config';
 const TABLE_NAME = /^[a-z][a-z0-9_]{0,79}$/;
 /** Core ITSM tables extend `task`, whose dictionary rows hold the shared columns such as `state`. */
 const TASK_TABLES = new Set(['incident', 'change_request', 'problem', 'sc_req_item', 'sc_task']);
-const SYNC_FIELDS = ['sys_id', 'number', 'short_description', 'state', 'priority', 'assigned_to', 'sys_created_on', 'sys_updated_on', 'sys_updated_by'];
+const SYNC_FIELDS = ['sys_id', 'number', 'short_description', 'state', 'priority', 'assigned_to', 'assigned_to.email', 'sys_created_on', 'sys_updated_on', 'sys_updated_by'];
 const PAGE_SIZE = 100;
 
 /**
@@ -235,6 +235,8 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
         createdAt: value('sys_created_on') ? parseServiceNowUtc(value('sys_created_on')) : null,
         priority: display('priority') || null,
         assigned_to: display('assigned_to') || null,
+        // Dot-walked reference field; ServiceNow does not expose email on the base `assigned_to` value.
+        assignedToEmail: value('assigned_to.email') || null,
       },
       fieldAuthority: { short_description: 'servicenow', state: 'servicenow', priority: 'servicenow', assigned_to: 'servicenow' },
       // With sysparm_display_value=all, `value` is the UTC system value; `display_value` is user-local.

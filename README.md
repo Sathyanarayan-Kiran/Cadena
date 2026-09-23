@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex and Claude updates, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, US16.4/US16.5 durable per-twin queues and failure isolation, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked durable ingestion into canonical twins, and outbox-driven execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. The US20.2 connector-led management workspace is implemented: connector-led mode is the staging/production default, local creation is refused there, and externally owned fields are read-only except for governed, audited state write-back. The canonical backlog contains **20 epics and 73 stories**, with **38 done / 6 partial / 29 not started**. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
+> **Current status (Codex and Claude updates, 2026-09-22):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, US16.4/US16.5 durable per-twin queues and failure isolation, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked durable ingestion into canonical twins, and outbox-driven execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. The US20.2 connector-led management workspace is implemented: connector-led mode is the staging/production default, local creation is refused there, and externally owned fields are read-only except for governed, audited state write-back. A 2026-09-23 increment closed three items the projection work had left open (directory-based owner matching by assignee email, a frozen/stale indicator for a paused projection, and the audit-chain single-writer constraint, which let `deploy/staging` move to 2 replicas); it did not change any story's status. The canonical backlog contains **20 epics and 73 stories**, with **38 done / 6 partial / 29 not started**. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
 
 ## Product Interaction Model
 
@@ -39,7 +39,7 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 - **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, source-connector onboarding and health, a connector-led landing view and synchronized-twin workspace with governed write-back, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. Local creation appears only in pilot (under Pilot actions) and standalone modes.
-- **Testing**: Vitest + NestJS Testing + Supertest running 166 automated tests across 44 test files, plus a 21-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 179 automated tests across 46 test files, plus a 21-test headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -403,7 +403,7 @@ Work orders have a durable global queue position but execute FIFO within the tar
 ### Current limits
 
 - Sync is triggered by an operator or the API. There is no scheduler or webhook trigger yet.
-- Overlapping syncs of one connector are prevented by an expiring, heartbeated database lease. The staging manifest intentionally remains at one replica because the audit-chain append path still has a separate single-writer constraint; this increment does not authorize horizontal scaling.
+- Overlapping syncs of one connector are prevented by an expiring, heartbeated database lease. The staging manifest now runs 2 replicas with a rolling update: a 2026-09-23 constraint on `audit_integrity_entries` (`UNIQUE (org_id, previous_hash)`, one genesis per tenant) removed the audit-chain's remaining single-writer assumption, with retry-on-conflict in `appendAuditIntegrityEntry` when two replicas race to extend the same tenant's chain.
 - Two same-provider connectors in one tenant cannot own the same external record.
 - Azure DevOps, Zendesk, Salesforce, GitHub and Asana are not implemented.
 
@@ -459,7 +459,7 @@ Source authority is enforced in the services, not only the UI:
 - `POST /workitems/:id/transitions` is routed through the governed twin edit: it is either executed at the source or refused with the ownership reason.
 - The workflow engine refuses to transition projected items. Monitoring and Git/CI automation skip them.
 
-Configure projection per connector:
+Configure projection per connector — this merges onto the connector's existing projection config, so `{ "enabled": false }` alone pauses it without dropping a previously set `teamId`/`typeMap`/`ownerMap`:
 
 ```http
 POST /integrations/connectors/:id/projection
@@ -467,6 +467,10 @@ POST /integrations/connectors/:id/projection
 ```
 
 Defaults: Jira Epic → epic and other issues → story; ServiceNow incident/problem → incident and change_request → release. Native priority maps to P0–P4. Without a configured or unambiguous team, projection is held, and the twin shows the reason.
+
+**Owner matching.** An explicit `ownerMap` entry (keyed by account id, display name or email) always wins. Without one, the assignee's email — Jira's `assignee.emailAddress` where Atlassian's privacy settings expose it, or ServiceNow's dot-walked `assigned_to.email` — is matched case-insensitively against `people.email` in the tenant, so most connectors need no map at all. An assignee that matches no one is left unowned rather than guessed.
+
+**A paused projection says so.** Disabling projection (`enabled: false`) intentionally leaves existing projected items in place — their history must not disappear — but they stop receiving updates. Every read of a projected item reports this as `source.frozen`, and `GET /workitems/:id/available-transitions` reports it as `stale` with a note in its message. State write-back is unaffected either way, since it always targets the twin directly rather than the (possibly stale) projected item.
 
 ---
 
@@ -907,8 +911,8 @@ The next delivery sequence follows the connector-led product decision:
 2. **US17.1 live validation and completion**:
    - With credentials and explicit authorisation, enable `CADENA_CONNECTOR_LIVE_HTTP` against a Jira Cloud and ServiceNow sandbox, then add scheduled/webhook-triggered polling and the remaining provider adapters.
 
-3. **Audit-chain multi-writer safety**:
-   - Connector twins now participate in SLA, traceability, notification and metrics through the twin-backed WorkItem projection. Resolve the audit-integrity single-writer constraint (for example a per-tenant chain lock or sequence-then-hash append) before enabling multiple replicas.
+3. **Field-level write-back (US17.2)**:
+   - Visual field mappings with a sandboxed, timeout- and memory-bounded scripting escape hatch, so more than a record's state can be written back to its source.
 
 4. **US13.4 and US13.5 — safe content and closure sync**:
    - Keep private work notes out of public streams and write complete resolution metadata back to the ITSM record.
@@ -1015,4 +1019,7 @@ Multi-worker dispatch, a managed broker, real notification transports, CMDB fede
 | **US20.2** | Blocks edits without an outbound mapping and routes permitted state changes through an audited connector work order | `test/us20.2.spec.ts`, `test/ui-smoke.spec.ts` | **PASS** |
 | **Projection** | Projects twins as governed work items with native state history, SLA breach notifications, restore metrics and correlation links | `test/twin-projection.spec.ts` | **PASS** |
 | **Projection** | Refuses local edits to source-owned fields and routes projected transitions through governed write-back | `test/twin-projection.spec.ts` | **PASS** |
+| **Projection** | Matches an owner by assignee email with no `ownerMap` configured, and lets an explicit map override it | `test/twin-projection.spec.ts` | **PASS** |
+| **Projection** | Marks a projected item frozen/stale when its connector's projection is disabled, without affecting write-back | `test/twin-projection.spec.ts` | **PASS** |
+| **Platform** | Makes a forked audit-integrity chain physically impossible and recovers when two writers race for the same tenant's head | `test/audit-chain-concurrency.spec.ts` | **PASS** |
 | **Backlog fixture** | Imports every epic and story from the backlog with its parent-child hierarchy | `test/backlog-fixture.spec.ts` | **PASS** |

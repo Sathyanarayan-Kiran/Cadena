@@ -109,6 +109,7 @@ export interface FakeJiraIssue {
   updated: number;
   created?: number;
   issueType?: string;
+  assigneeEmail?: string;
   custom?: Record<string, unknown>;
 }
 
@@ -213,7 +214,7 @@ export class FakeJiraApi extends FakeProviderApi {
           summary: issue.summary,
           status: { name: issue.status },
           priority: issue.priority ? { name: issue.priority } : null,
-          assignee: null,
+          assignee: issue.assigneeEmail ? { displayName: null, accountId: null, emailAddress: issue.assigneeEmail } : null,
           issuetype: { name: issue.issueType || 'Story' },
           project: { key: issue.key.split('-')[0] },
           description: null,
@@ -238,6 +239,7 @@ export interface FakeServiceNowRecord {
   sys_updated_on: number;
   sys_created_on?: number;
   assigned_to?: string;
+  assigned_to_email?: string;
   sys_updated_by: string;
 }
 
@@ -346,6 +348,7 @@ export class FakeServiceNowApi extends FakeProviderApi {
           state: pair(record.state, this.stateLabel(record.state)),
           priority: pair(record.priority || '3', record.priority ? `${record.priority} - Custom` : '3 - Moderate'),
           assigned_to: pair(record.assigned_to || '', record.assigned_to || ''),
+          'assigned_to.email': pair(record.assigned_to_email || '', record.assigned_to_email || ''),
           sys_created_on: pair(new Date(record.sys_created_on ?? record.sys_updated_on).toISOString().slice(0, 19).replace('T', ' ')),
           sys_updated_on: pair(new Date(record.sys_updated_on).toISOString().slice(0, 19).replace('T', ' ')),
           sys_updated_by: pair(record.sys_updated_by),

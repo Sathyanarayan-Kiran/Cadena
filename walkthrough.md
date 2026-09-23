@@ -3,7 +3,21 @@
 A running record of what is built, how to try it, and what changed when.
 
 **Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), and the US20.2 connector-led management workspace. The canonical backlog is **20 epics / 73 stories**, with **38 done / 6 partial / 29 not started**.
-**Verification:** 173 automated tests across 45 test files, plus 21 browser smoke tests driving the real page in pilot and connector-led modes.
+**Verification:** 179 automated tests across 46 test files, plus 21 browser smoke tests driving the real page in pilot and connector-led modes.
+
+---
+
+## 2026-09-23 — Closing the projection increment's open items (Claude)
+
+Three of the four items the twin-backed projection left open are now closed:
+
+- **Horizontal scaling is enabled.** The audit-integrity chain can no longer fork: a database constraint (`UNIQUE (org_id, previous_hash)`, plus one genesis per tenant) makes two entries citing the same prior link mutually exclusive, and a losing writer retries against whoever actually won instead of corrupting the chain. `deploy/staging` now runs 2 replicas with a rolling update.
+- **Owners are matched automatically.** A connector with no `ownerMap` at all now still gets correct ownership when the source's assignee email matches someone in the tenant directory. An explicit map still wins when both are present.
+- **A paused projection says so.** A work item whose connector projection was disabled now reports itself as frozen/stale (in the API and in the item drawer's ownership banner) instead of silently looking current. Its governed state write-back is unaffected, since that always targets the twin directly.
+
+Left open, and why: field-level write-back is its own story (US17.2, which needs a proper sandboxed-scripting design, not a bolt-on); live-tenant validation and cloud activation both need credentials and authorization only the user can provide.
+
+**Verified by** `test/audit-chain-concurrency.spec.ts` (new, 4 tests) and updates to `test/twin-projection.spec.ts` and `test/cloud-staging.spec.ts`; 179 non-browser tests across 46 files and 21 browser tests, all passing.
 
 ---
 

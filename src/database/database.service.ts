@@ -678,6 +678,15 @@ export class DatabaseService {
         ON audit_integrity_entries (org_id, sequence);
       CREATE UNIQUE INDEX IF NOT EXISTS audit_integrity_hash_unique
         ON audit_integrity_entries (org_id, event_hash);
+      -- Makes a forked chain physically impossible: at most one entry per tenant may point at
+      -- a given previous link, and at most one genesis (previous_hash IS NULL) per tenant. Two
+      -- writers racing to extend the same head collide on this index; appendAuditIntegrityEntry
+      -- catches that and retries against the entry that actually won, closing the single-writer
+      -- assumption without any process-level or connection-scoped locking.
+      CREATE UNIQUE INDEX IF NOT EXISTS audit_integrity_chain_link
+        ON audit_integrity_entries (org_id, previous_hash) WHERE previous_hash IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS audit_integrity_chain_genesis
+        ON audit_integrity_entries (org_id) WHERE previous_hash IS NULL;
       CREATE INDEX IF NOT EXISTS integration_correlation_nodes_lookup
         ON integration_correlation_nodes (org_id, system, entity_type, immutable_id);
       CREATE INDEX IF NOT EXISTS integration_correlation_links_source

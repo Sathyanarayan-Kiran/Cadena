@@ -377,7 +377,11 @@ export class ConnectorService implements OnApplicationBootstrap {
     actorId = 'system',
   ): Promise<{ connector: ConnectorRecord; projection: TwinProjectionConfig; twins: Record<string, number> }> {
     const connector = await this.getConnector(orgId, connectorId);
-    const projection = TwinProjectionService.validateConfig(input);
+    // A partial update (e.g. only { enabled: false } to pause projection) must not silently drop
+    // a previously configured teamId/typeMap/ownerMap; merge onto the connector's current
+    // (already-validated) projection config before re-validating the result.
+    const merged = { ...(connector.config.projection as Record<string, unknown> | undefined || {}), ...(input && typeof input === 'object' ? input as Record<string, unknown> : {}) };
+    const projection = TwinProjectionService.validateConfig(merged);
     if (projection.teamId) {
       const team = await this.dbService.db.query<any>(`SELECT id FROM teams WHERE id = $1 AND org_id = $2`, [projection.teamId, orgId]);
       if (!team.rows.length) throw new BadRequestException('projection.teamId is not a team in this tenant');

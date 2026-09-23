@@ -7,9 +7,16 @@ metadata:
     app.kubernetes.io/name: cadena-api
     app.kubernetes.io/part-of: cadena
 spec:
-  replicas: 1
+  # Two replicas: the connector sync lease (integration_connector_sync_leases) and the
+  # per-tenant audit-chain constraint (audit_integrity_chain_link/_genesis) both moved
+  # cross-process coordination into the database, so no in-process or single-connection
+  # state is required for correctness. See deploy/staging/README.md.
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: cadena-api

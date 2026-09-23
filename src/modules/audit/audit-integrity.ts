@@ -60,7 +60,22 @@ export function calculateAuditHash(previousHash: string | null, canonicalEvent: 
     .digest('hex');
 }
 
-/** Appends one idempotent link to the tenant chain using the caller's transaction/queryable. */
+const MAX_APPEND_ATTEMPTS = 8;
+
+/**
+ * Appends one idempotent link to the tenant chain using the caller's transaction/queryable.
+ *
+ * Multiple processes (horizontally scaled API replicas) can call this for the same tenant at
+ * the same time. Rather than requiring a single shared connection to hold a lock — which the
+ * one-time legacy backfill in `database.service.ts` cannot offer, since it runs ad hoc queries
+ * outside a transaction — correctness comes from a database constraint: `audit_integrity_entries`
+ * allows at most one entry per `(org_id, previous_hash)`, so two writers racing to extend the
+ * same head cannot both commit. The loser's insert fails with a unique-violation on that
+ * constraint (Postgres blocks the second inserter until the first's transaction resolves, then
+ * either fails it or lets it through), and this function re-reads the now-current head and
+ * retries. A genuine attacker forging a fork is still caught by verification; this only stops an
+ * honest race from silently splitting the chain.
+ */
 export async function appendAuditIntegrityEntry(queryable: any, input: IntegrityEventInput): Promise<void> {
   const existing = await queryable.query(
     `SELECT sequence FROM audit_integrity_entries WHERE source = $1 AND event_id = $2`,
@@ -68,23 +83,33 @@ export async function appendAuditIntegrityEntry(queryable: any, input: Integrity
   );
   if (existing.rows?.length) return;
 
-  const previous = await queryable.query(
-    `SELECT event_hash FROM audit_integrity_entries
-     WHERE org_id = $1 ORDER BY sequence DESC LIMIT 1`,
-    [input.org_id],
-  );
-  const previousHash = previous.rows?.[0]?.event_hash || null;
   const canonical = canonicalAuditEvent(input);
-  const eventHash = calculateAuditHash(previousHash, canonical);
-  await queryable.query(
-    `INSERT INTO audit_integrity_entries
-     (org_id, source, event_id, work_item_id, event_type, occurred_at,
-      previous_hash, event_hash, canonical_event, proof_version)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     ON CONFLICT (source, event_id) DO NOTHING`,
-    [input.org_id, input.source, input.event_id, input.work_item_id, input.event_type,
-      input.occurred_at, previousHash, eventHash, JSON.stringify(canonical), AUDIT_PROOF_VERSION],
-  );
+  for (let attempt = 1; attempt <= MAX_APPEND_ATTEMPTS; attempt += 1) {
+    const previous = await queryable.query(
+      `SELECT event_hash FROM audit_integrity_entries
+       WHERE org_id = $1 ORDER BY sequence DESC LIMIT 1`,
+      [input.org_id],
+    );
+    const previousHash = previous.rows?.[0]?.event_hash || null;
+    const eventHash = calculateAuditHash(previousHash, canonical);
+    try {
+      await queryable.query(
+        `INSERT INTO audit_integrity_entries
+         (org_id, source, event_id, work_item_id, event_type, occurred_at,
+          previous_hash, event_hash, canonical_event, proof_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (source, event_id) DO NOTHING`,
+        [input.org_id, input.source, input.event_id, input.work_item_id, input.event_type,
+          input.occurred_at, previousHash, eventHash, JSON.stringify(canonical), AUDIT_PROOF_VERSION],
+      );
+      return;
+    } catch (error: any) {
+      const lostChainRace = error?.code === '23505'
+        && String(error.constraint || '').startsWith('audit_integrity_chain_');
+      if (!lostChainRace || attempt === MAX_APPEND_ATTEMPTS) throw error;
+      // Another writer committed the same previous_hash first; retry against its new head.
+    }
+  }
 }
 
 export function verifyAuditEntry(row: any, current: IntegrityEventInput): AuditIntegrityMetadata {
