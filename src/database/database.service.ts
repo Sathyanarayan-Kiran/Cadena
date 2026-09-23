@@ -316,6 +316,28 @@ export class DatabaseService {
         CHECK (source_node_id <> target_node_id)
       );
 
+      CREATE TABLE IF NOT EXISTS integration_field_mapping_definitions (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        name TEXT NOT NULL,
+        source_system TEXT NOT NULL,
+        source_entity_type TEXT NOT NULL,
+        target_system TEXT NOT NULL,
+        target_entity_type TEXT NOT NULL,
+        version INT NOT NULL,
+        status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'superseded')),
+        definition JSONB NOT NULL,
+        source_schema_fingerprint TEXT,
+        target_schema_fingerprint TEXT,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        published_by TEXT,
+        published_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE(org_id, source_system, source_entity_type, target_system, target_entity_type, version),
+        UNIQUE(org_id, id),
+        CHECK (source_system <> target_system OR source_entity_type <> target_entity_type)
+      );
+
       CREATE TABLE IF NOT EXISTS integration_deliveries (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,
@@ -643,6 +665,8 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS attempt_history TEXT NOT NULL DEFAULT '[]';`);
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS claimed_by TEXT;`);
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMP WITH TIME ZONE;`);
+    // US17.2: a field-only propagation (no state change) has no target state to record.
+    await this.db.exec(`ALTER TABLE integration_connector_work_orders ALTER COLUMN target_state DROP NOT NULL;`);
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claimed_by TEXT;`);
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`CREATE INDEX IF NOT EXISTS integration_connector_work_orders_twin ON integration_connector_work_orders (org_id, target_twin_id, status);`);
@@ -697,6 +721,9 @@ export class DatabaseService {
         ON integration_sync_snapshots (org_id, node_id, payload_hash);
       CREATE INDEX IF NOT EXISTS integration_state_mappings_lookup
         ON integration_state_mapping_definitions
+        (org_id, source_system, source_entity_type, target_system, target_entity_type, status, version);
+      CREATE INDEX IF NOT EXISTS integration_field_mappings_lookup
+        ON integration_field_mapping_definitions
         (org_id, source_system, source_entity_type, target_system, target_entity_type, status, version);
       CREATE INDEX IF NOT EXISTS integration_state_sync_transactions_time
         ON integration_state_sync_transactions (org_id, created_at);

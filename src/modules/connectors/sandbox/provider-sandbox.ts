@@ -297,6 +297,7 @@ export class FakeServiceNowApi extends FakeProviderApi {
           { name: 'task', element: 'state', column_label: 'State', internal_type: 'integer', mandatory: 'false' },
           { name: 'task', element: 'priority', column_label: 'Priority', internal_type: 'integer', mandatory: 'false' },
           { name: 'task', element: 'assigned_to', column_label: 'Assigned to', internal_type: 'reference', mandatory: 'false' },
+          { name: 'task', element: 'assignment_group', column_label: 'Assignment group', internal_type: 'reference', mandatory: 'false' },
           { name: 'task', element: 'sys_updated_on', column_label: 'Updated', internal_type: 'glide_date_time', mandatory: 'false' },
         );
       }
