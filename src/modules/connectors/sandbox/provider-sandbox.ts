@@ -216,15 +216,28 @@ export class FakeJiraApi extends FakeProviderApi {
 
   private search(body: any): ConnectorHttpResponse {
     const jql = String(body?.jql || '');
-    const projectMatch = /project in \(([^)]*)\)/.exec(jql);
-    const projects = projectMatch ? projectMatch[1].split(',').map((key) => key.trim().replace(/"/g, '')) : [];
+    // Every project clause must hold, as in Jira: a scheduled query's own `project` condition is
+    // ANDed with the connector's configured scope, so it can narrow that scope but never widen it.
+    const projectSets = Array.from(jql.matchAll(/project\s*in\s*\(([^)]*)\)|project\s*=\s*"?([A-Za-z0-9_-]+)"?/gi))
+      .map((match) => (match[1] !== undefined ? match[1].split(',').map((key) => key.trim().replace(/"/g, '')) : [match[2]]));
+    const inProjects = (issue: FakeJiraIssue) => projectSets.length > 0
+      && projectSets.every((keys) => keys.includes(issue.key.split('-')[0]));
+    // Scheduled queries (US17.3) also carry the operator's own equality conditions.
+    const equalities = Array.from(jql.matchAll(/\b(status|issuetype|priority)\s*=\s*(?:"([^"]*)"|([^\s")]+))/gi));
+    const satisfiesQuery = (issue: FakeJiraIssue) => equalities.every(([, field, quoted, bare]) => {
+      const wanted = (quoted ?? bare).toLowerCase();
+      const actual = field.toLowerCase() === 'status' ? issue.status
+        : field.toLowerCase() === 'issuetype' ? issue.issueType || 'Story'
+          : issue.priority || '';
+      return actual.toLowerCase() === wanted;
+    });
     const sinceMatch = /updated >= "(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2})"/.exec(jql);
     // The fake integration account's profile time zone is UTC.
     const since = sinceMatch
       ? Date.UTC(+sinceMatch[1], +sinceMatch[2] - 1, +sinceMatch[3], +sinceMatch[4], +sinceMatch[5])
       : -Infinity;
     const matching = Array.from(this.issues.values())
-      .filter((issue) => projects.includes(issue.key.split('-')[0]) && issue.updated >= since)
+      .filter((issue) => inProjects(issue) && issue.updated >= since && satisfiesQuery(issue))
       .sort((a, b) => a.updated - b.updated || a.key.localeCompare(b.key));
     const offset = Number(body?.nextPageToken || 0);
     const size = Number(body?.maxResults || 50);
@@ -311,6 +324,32 @@ export class FakeServiceNowApi extends FakeProviderApi {
     return INCIDENT_STATES.find(([value]) => value === code)?.[1] || code;
   }
 
+  /**
+   * Evaluates the equality and IN conditions of an encoded query, with `^OR` and `^NQ`. Ordering
+   * and the watermark are handled elsewhere; any other operator is ignored, so this fake never
+   * hides a record the real instance would return.
+   */
+  private matchesEncodedQuery(record: FakeServiceNowRecord, query: string): boolean {
+    const groups = query.split('^NQ').map((group) => group.split('^').filter((term) => {
+      const body = term.replace(/^OR/, '');
+      return /^[a-z_.]+(=|IN)/.test(body);
+    }).filter((term) => !/^(OR)?sys_updated_on/.test(term)));
+    if (groups.every((group) => group.length === 0)) return true;
+    const holds = (term: string) => {
+      const [, field, operator, value] = /^(?:OR)?([a-z_.]+)(=|IN)(.*)$/.exec(term)!;
+      const actual = String(record[field] ?? '');
+      return operator === '=' ? actual === value : value.split(',').includes(actual);
+    };
+    return groups.some((group) => {
+      const clauses: string[][] = [];
+      for (const term of group) {
+        if (term.startsWith('OR') && clauses.length) clauses[clauses.length - 1].push(term);
+        else clauses.push([term]);
+      }
+      return clauses.every((clause) => clause.some(holds));
+    });
+  }
+
   protected route(method: string, url: URL, body: any): ConnectorHttpResponse {
     const match = /^\/api\/now\/table\/([a-z_]+)(?:\/([^/]+))?$/.exec(url.pathname);
     if (!match) return respond(404, { error: { message: 'No route' } });
@@ -372,7 +411,7 @@ export class FakeServiceNowApi extends FakeProviderApi {
       const limit = Number(url.searchParams.get('sysparm_limit') || 100);
       const offset = Number(url.searchParams.get('sysparm_offset') || 0);
       const matching = Array.from(rows.values())
-        .filter((record) => Math.floor(record.sys_updated_on / 1000) * 1000 >= since)
+        .filter((record) => Math.floor(record.sys_updated_on / 1000) * 1000 >= since && this.matchesEncodedQuery(record, query))
         .sort((a, b) => a.sys_updated_on - b.sys_updated_on || a.sys_id.localeCompare(b.sys_id))
         .slice(offset, offset + limit);
       const pair = (value: string, display = value) => ({ value, display_value: display });

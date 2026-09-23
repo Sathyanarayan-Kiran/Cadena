@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { DatabaseService } from '../../../database/database.service';
 import { EventOutboxService } from '../../events/event-outbox.service';
 import { ConnectorService } from '../connector.service';
-import { ConnectorProviderType } from '../connector.types';
+import { ConnectorProviderType, ConnectorRecord } from '../connector.types';
 import { validateNativeQuery } from './native-query-validator';
 import {
   CreateNativeQueryDto,
@@ -12,6 +12,7 @@ import {
   NativeQueryDefinition,
   NativeQueryLanguage,
   NativeQueryNotFoundError,
+  NativeQueryRunResult,
   NativeQueryValidation,
   UpdateNativeQueryDto,
 } from './native-query.types';
@@ -28,6 +29,15 @@ const PROVIDER_LANGUAGE: Partial<Record<ConnectorProviderType, NativeQueryLangua
   servicenow: 'encoded',
 };
 
+/** A claimed run holds its query for this long; a crashed worker's claim simply expires. */
+const RUN_LEASE_MS = 5 * 60_000;
+const MAX_BACKOFF_SECONDS = 6 * 3600;
+
+class LeaseLostError extends Error {}
+
+/** A definition together with the lease token proving this worker may run it. */
+type ClaimedQuery = NativeQueryDefinition & { leaseOwner: string };
+
 const iso = (value: unknown): string | null => (value ? new Date(value as string).toISOString() : null);
 
 /**
@@ -41,6 +51,7 @@ const iso = (value: unknown): string | null => (value ? new Date(value as string
 export class NativeQueryService {
   private dbService = DatabaseService.getInstance();
   private outbox = new EventOutboxService();
+  private readonly workerId = randomUUID();
 
   constructor(@Inject(ConnectorService) private readonly connectors: ConnectorService) {}
 
@@ -206,6 +217,173 @@ export class NativeQueryService {
     );
     if (!result.rows.length) throw new NativeQueryNotFoundError('Native query not found');
     return this.map(result.rows[0]);
+  }
+
+  // ─── Runs ────────────────────────────────────────────────────────────────
+
+  /** Operator action: runs one published query immediately, outside its schedule. */
+  public async runNow(orgId: string, id: string, actorId: string): Promise<NativeQueryRunResult> {
+    const current = await this.get(orgId, id);
+    if (current.status !== 'published') throw new NativeQueryConflictError('Only a published query can run; publish it first');
+    const claimed = await this.claim('org_id = $2 AND id = $3', [orgId, id], 1);
+    if (!claimed.length) throw new NativeQueryConflictError('This query is already running');
+    return this.execute(claimed[0], actorId, true);
+  }
+
+  /** Scheduler entry point: runs every published query whose next run has come due, oldest first. */
+  public async runDue(limit = 10): Promise<NativeQueryRunResult[]> {
+    await this.dbService.initialize();
+    const claimed = await this.claim('next_run_at <= CURRENT_TIMESTAMP', [], limit);
+    const results: NativeQueryRunResult[] = [];
+    for (const definition of claimed) results.push(await this.execute(definition, 'native-query-scheduler', false));
+    return results;
+  }
+
+  /**
+   * Atomically takes the run lease on published, unleased queries, so two schedulers (or a
+   * scheduler and an operator) can never run the same query at once. Parameters are: $1 the lease
+   * owner, then `params`, then the row limit and the lease expiry.
+   */
+  private async claim(condition: string, params: unknown[], limit: number): Promise<ClaimedQuery[]> {
+    const leaseOwner = `${this.workerId}:${randomUUID()}`;
+    const expires = new Date(Date.now() + RUN_LEASE_MS).toISOString();
+    const result = await this.dbService.db.query<any>(
+      `UPDATE integration_native_queries SET lease_owner = $1, lease_expires_at = $${params.length + 3}
+       WHERE id IN (
+         SELECT id FROM integration_native_queries
+         WHERE status = 'published' AND (lease_expires_at IS NULL OR lease_expires_at <= CURRENT_TIMESTAMP)
+           AND ${condition}
+         ORDER BY next_run_at ASC NULLS LAST LIMIT $${params.length + 2}
+       ) RETURNING *`,
+      [leaseOwner, ...params, limit, expires],
+    );
+    return result.rows.map((row: any) => ({ ...this.map(row), leaseOwner }));
+  }
+
+  private async execute(definition: ClaimedQuery, actorId: string, manual: boolean): Promise<NativeQueryRunResult> {
+    const { leaseOwner } = definition;
+    const base = { query_id: definition.id, fetched: 0, enqueued: 0, watermark: definition.watermark, has_more: false };
+
+    let connector: ConnectorRecord;
+    try {
+      connector = await this.connectors.getConnector(definition.org_id, definition.connector_id);
+    } catch (error) {
+      return this.fail(definition, `Connector unavailable: ${this.message(error)}`, base);
+    }
+    if (!connector.activatedAt || connector.status === 'paused') {
+      const reason = connector.status === 'paused' ? 'The connector is paused' : 'The connector is not activated';
+      await this.dbService.db.query(
+        `UPDATE integration_native_queries
+         SET next_run_at = $3, last_error = $4, lease_owner = NULL, lease_expires_at = NULL
+         WHERE org_id = $1 AND id = $2 AND lease_owner = $5`,
+        [definition.org_id, definition.id, new Date(Date.now() + definition.interval_seconds * 1000).toISOString(), `Skipped: ${reason}`, leaseOwner],
+      );
+      return { ...base, status: 'skipped', message: reason };
+    }
+
+    // Re-validated on every run so a query saved under older rules, or edited at rest, still cannot scan unbounded.
+    const validation = validateNativeQuery(definition.language, definition.query);
+    if (!validation.valid) {
+      return this.fail(definition, `Query no longer passes validation: ${validation.errors[0].message} ${validation.errors[0].hint}`, base);
+    }
+    if (!definition.watermark) return this.fail(definition, 'The query has no watermark; publish it again', base);
+    const priorWatermark = definition.watermark;
+
+    let page;
+    try {
+      page = await this.connectors.fetchNativeQueryPage(connector, definition.entity_type, definition.query, {
+        entityType: definition.entity_type,
+        cursorValue: priorWatermark,
+      });
+    } catch (error) {
+      return this.fail(definition, this.message(error), base);
+    }
+
+    let event: Awaited<ReturnType<EventOutboxService['enqueue']>> | null = null;
+    let watermark = priorWatermark;
+    try {
+      const accepted = await this.connectors.enqueueNativeQueryRecords(
+        definition.org_id, connector, definition.entity_type, page.records,
+        async (tx, inserted) => {
+          // Never move backwards: a run reads from a minute of overlap before the watermark.
+          watermark = new Date(Math.max(Date.parse(priorWatermark), Date.parse(page.nextCursor.cursorValue))).toISOString();
+          const nextRun = page.hasMore ? new Date() : new Date(Date.now() + definition.interval_seconds * 1000);
+          const updated = await tx.query<any>(
+            `UPDATE integration_native_queries
+             SET watermark = $3, last_run_at = CURRENT_TIMESTAMP, last_run_status = 'succeeded', last_error = NULL,
+                 last_enqueued = $4, total_enqueued = total_enqueued + $4, consecutive_failures = 0,
+                 next_run_at = $5, lease_owner = NULL, lease_expires_at = NULL
+             WHERE org_id = $1 AND id = $2 AND lease_owner = $6 AND status = 'published'
+             RETURNING id`,
+            [definition.org_id, definition.id, watermark, inserted, nextRun.toISOString(), leaseOwner],
+          );
+          // Disabled or re-leased mid-run: abandon the whole transaction, records included.
+          if (!updated.rows.length) throw new LeaseLostError();
+          if (manual || inserted > 0) {
+            event = await this.outbox.enqueue(tx, {
+              event_type: 'NativeQueryRunCompleted',
+              work_item_id: definition.id,
+              org_id: definition.org_id,
+              actor: { type: manual ? 'user' : 'system', id: actorId },
+              payload: {
+                ...this.eventPayload(definition),
+                fetched: page.records.length,
+                enqueued: inserted,
+                watermark,
+                has_more: page.hasMore,
+                trigger: manual ? 'manual' : 'schedule',
+              },
+            });
+          }
+        },
+      );
+      if (event) await this.outbox.dispatch(event);
+      // Best effort: the records are durable, and the next sync drains them if a sync holds the lease.
+      if (accepted.inserted > 0) await this.connectors.drainIngestionQueue(definition.org_id, definition.connector_id).catch(() => false);
+      return { ...base, status: 'succeeded', fetched: page.records.length, enqueued: accepted.inserted, watermark, has_more: page.hasMore };
+    } catch (error) {
+      if (error instanceof LeaseLostError) {
+        return { ...base, status: 'skipped', message: 'The query was disabled or taken over while it ran; nothing was enqueued' };
+      }
+      return this.fail(definition, this.message(error), base);
+    }
+  }
+
+  /** Records a failed run, keeps the watermark where it was, and backs off exponentially up to six hours. */
+  private async fail(
+    definition: ClaimedQuery,
+    message: string,
+    base: Omit<NativeQueryRunResult, 'status'>,
+  ): Promise<NativeQueryRunResult> {
+    const failures = definition.consecutive_failures + 1;
+    const backoff = Math.min(definition.interval_seconds * 2 ** (failures - 1), Math.max(definition.interval_seconds, MAX_BACKOFF_SECONDS));
+    let event: Awaited<ReturnType<EventOutboxService['enqueue']>> | null = null;
+    await this.dbService.db.transaction(async (tx) => {
+      const updated = await tx.query<any>(
+        `UPDATE integration_native_queries
+         SET last_run_at = CURRENT_TIMESTAMP, last_run_status = 'failed', last_error = $3,
+             consecutive_failures = $4, next_run_at = $5, lease_owner = NULL, lease_expires_at = NULL
+         WHERE org_id = $1 AND id = $2 AND lease_owner = $6
+         RETURNING id`,
+        [definition.org_id, definition.id, message.slice(0, 500), failures, new Date(Date.now() + backoff * 1000).toISOString(), definition.leaseOwner],
+      );
+      if (!updated.rows.length) return;
+      event = await this.outbox.enqueue(tx, {
+        event_type: 'NativeQueryRunFailed',
+        work_item_id: definition.id,
+        org_id: definition.org_id,
+        actor: { type: 'system', id: 'native-query-scheduler' },
+        payload: { ...this.eventPayload(definition), error: message.slice(0, 500), consecutive_failures: failures },
+      });
+    });
+    if (event) await this.outbox.dispatch(event);
+    return { ...base, status: 'failed', message };
+  }
+
+  private message(error: unknown): string {
+    const response = (error as any)?.getResponse?.();
+    if (response) return typeof response === 'string' ? response : String(response?.message || (error as Error).message);
+    return (error as Error)?.message || 'Query run failed';
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────

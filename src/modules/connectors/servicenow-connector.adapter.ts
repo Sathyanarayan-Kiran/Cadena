@@ -148,13 +148,30 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
   }
 
   public async fetchChanges(ctx: ConnectorContext, entityType: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {
+    const since = cursor?.cursorValue ? formatInTimeZone(new Date(cursor.cursorValue), this.timeZone(ctx.connector.config)) : null;
+    return this.queryPages(ctx, entityType, `${since ? `sys_updated_on>=${since}^` : ''}ORDERBYsys_updated_on^ORDERBYsys_id`, cursor);
+  }
+
+  /**
+   * A scheduled encoded query (US17.3). The watermark is appended to *every* `^NQ` part, since a
+   * bare trailing condition would only bound the last one, and ordering is applied once at the end.
+   * The table in the request path already confines the query to one configured table.
+   */
+  public async fetchNativeQuery(ctx: ConnectorContext, entityType: string, query: string, cursor: WatermarkCursor): Promise<ConnectorFetchPage> {
+    if (!cursor?.cursorValue || Number.isNaN(Date.parse(cursor.cursorValue))) {
+      throw new ConnectorConfigurationError('A scheduled query needs a watermark; refusing to run it unbounded');
+    }
+    const since = formatInTimeZone(new Date(cursor.cursorValue), this.timeZone(ctx.connector.config));
+    const bounded = query.split('^NQ').map((part) => `${part}^sys_updated_on>=${since}`).join('^NQ');
+    return this.queryPages(ctx, entityType, `${bounded}^ORDERBYsys_updated_on^ORDERBYsys_id`, cursor);
+  }
+
+  private async queryPages(ctx: ConnectorContext, entityType: string, query: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {
     const config = ctx.connector.config;
     if (!this.entityTypes(config).includes(entityType)) {
       throw new ConnectorConfigurationError(`Table '${entityType}' is not configured on this connector`);
     }
     const maxPages = optionNumber(config.options, 'maxPagesPerPoll', 10, 1, 100);
-    const since = cursor?.cursorValue ? formatInTimeZone(new Date(cursor.cursorValue), this.timeZone(config)) : null;
-    const query = `${since ? `sys_updated_on>=${since}^` : ''}ORDERBYsys_updated_on^ORDERBYsys_id`;
 
     const records: ExternalRecordPayload[] = [];
     const priorWatermark = cursor?.cursorValue ? Date.parse(cursor.cursorValue) : -Infinity;

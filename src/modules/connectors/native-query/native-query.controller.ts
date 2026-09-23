@@ -84,6 +84,16 @@ export class NativeQueryController {
     }
   }
 
+  /** Runs a published query immediately, outside its schedule. */
+  @Post(':id/run')
+  async run(@Param('id') id: string, @Headers('x-org-id') orgId?: string, @Headers('x-actor-id') actorId?: string) {
+    try {
+      return await this.service.runNow(requireOrg(orgId), id, actorId || 'integration-operator');
+    } catch (error) {
+      this.rethrow(error);
+    }
+  }
+
   @Post(':id/disable')
   async disable(@Param('id') id: string, @Headers('x-org-id') orgId?: string, @Headers('x-actor-id') actorId?: string) {
     try {

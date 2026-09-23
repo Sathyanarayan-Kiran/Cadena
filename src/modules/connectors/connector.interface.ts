@@ -65,6 +65,14 @@ export interface ConnectorAdapter {
   fetchChanges(ctx: ConnectorContext, entityType: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage>;
 
   /**
+   * Runs a validated native query (JQL or an encoded query, US17.3) for records changed at or
+   * after `cursor`, oldest first. Optional: only providers with a query language implement it. The
+   * cursor is required, so a scheduled query can never read history before its saved watermark, and
+   * the adapter confines the query to the connector's configured scope.
+   */
+  fetchNativeQuery?(ctx: ConnectorContext, entityType: string, query: string, cursor: WatermarkCursor): Promise<ConnectorFetchPage>;
+
+  /**
    * Writes a state, a set of fields, or both to one native record. Throws ConnectorRemoteError on
    * failure, and ConnectorConfigurationError if neither `targetState` nor `fields` is given.
    */

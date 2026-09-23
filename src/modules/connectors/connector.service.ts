@@ -19,7 +19,7 @@ import { CorrelationService } from '../integrations/correlation.service';
 import { StateMappingService } from '../integrations/state-mapping.service';
 import { SyncGuardService } from '../integrations/sync-guard.service';
 import { SyncIdentity } from '../integrations/sync-guard.types';
-import { ConnectorAdapter, ConnectorContext } from './connector.interface';
+import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage } from './connector.interface';
 import {
   ConnectorConfigurationError,
   ConnectorCredentialError,
@@ -543,6 +543,41 @@ export class ConnectorService implements OnApplicationBootstrap {
     }
   }
 
+  /** Runs one page of a scheduled native query through the provider adapter (US17.3). */
+  public async fetchNativeQueryPage(
+    connector: ConnectorRecord,
+    entityType: string,
+    query: string,
+    cursor: WatermarkCursor,
+  ): Promise<ConnectorFetchPage> {
+    const adapter = this.getAdapter(connector.provider);
+    if (!adapter.fetchNativeQuery) {
+      throw new ConflictException(`The ${connector.provider} adapter does not support native queries`);
+    }
+    return adapter.fetchNativeQuery(this.context(connector), entityType, query, cursor);
+  }
+
+  /**
+   * Processes whatever is due in a connector's ingestion queue without polling the provider, under
+   * the same lease as `syncConnector`. Returns false when a sync already holds the lease: that
+   * sync drains the queue itself, and the records stay durably enqueued either way.
+   */
+  public async drainIngestionQueue(orgId: string, connectorId: string): Promise<boolean> {
+    const connector = await this.getConnector(orgId, connectorId);
+    const leaseOwner = `${this.workerId}:${randomUUID()}`;
+    if (!await this.acquireSyncLease(orgId, connectorId, leaseOwner)) return false;
+    try {
+      const counters: PollCounters = {
+        twinsCreated: 0, twinsUpdated: 0, twinsUnchanged: 0, echoesSuppressed: 0,
+        workOrdersPrepared: 0, workOrdersHeld: 0, workOrdersExecuted: 0, workOrdersFailed: 0,
+      };
+      await this.processDueIngestionRecords(orgId, connector, counters, []);
+      return true;
+    } finally {
+      await this.releaseSyncLease(connectorId, leaseOwner);
+    }
+  }
+
   private async acceptIngestionPage(
     orgId: string,
     connector: ConnectorRecord,
@@ -550,8 +585,45 @@ export class ConnectorService implements OnApplicationBootstrap {
     records: ExternalRecordPayload[],
     cursorValue: string,
   ): Promise<number> {
+    const { duplicateDeliveries } = await this.acceptRecords(orgId, connector, entityType, records, async (tx) => {
+      await tx.query(
+        `INSERT INTO integration_connector_cursors (id, connector_id, entity_type, cursor_value, updated_at)
+         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+         ON CONFLICT (connector_id, entity_type)
+         DO UPDATE SET cursor_value = EXCLUDED.cursor_value, updated_at = CURRENT_TIMESTAMP`,
+        [randomUUID(), connector.id, entityType, cursorValue],
+      );
+    });
+    return duplicateDeliveries;
+  }
+
+  /**
+   * Durably enqueues the records of a scheduled native query (US17.3) through the same queue and
+   * dedupe key as ordinary polling. `advance` runs in the same transaction as the inserts, so the
+   * query's watermark moves if and only if its records were accepted.
+   */
+  public async enqueueNativeQueryRecords(
+    orgId: string,
+    connector: ConnectorRecord,
+    entityType: string,
+    records: ExternalRecordPayload[],
+    advance: (tx: DatabaseQueryable, inserted: number) => Promise<void>,
+  ): Promise<{ inserted: number; duplicateDeliveries: number }> {
+    return this.acceptRecords(orgId, connector, entityType, records, advance);
+  }
+
+  private async acceptRecords(
+    orgId: string,
+    connector: ConnectorRecord,
+    entityType: string,
+    records: ExternalRecordPayload[],
+    advance: (tx: DatabaseQueryable, inserted: number) => Promise<void>,
+  ): Promise<{ inserted: number; duplicateDeliveries: number }> {
     let duplicateDeliveries = 0;
+    let insertedCount = 0;
     await this.dbService.db.transaction(async (tx) => {
+      duplicateDeliveries = 0;
+      insertedCount = 0;
       for (const record of records) {
         const dedupeKey = createHash('sha256').update(stableStringify({
           provider: connector.provider,
@@ -573,7 +645,9 @@ export class ConnectorService implements OnApplicationBootstrap {
             entityType, record.externalId, dedupeKey, JSON.stringify(record),
           ],
         );
-        if (!inserted.rows.length) {
+        if (inserted.rows.length) {
+          insertedCount += 1;
+        } else {
           const existing = await tx.query<any>(
             `SELECT status FROM integration_connector_ingestion_queue
              WHERE connector_id = $1 AND dedupe_key = $2`,
@@ -582,15 +656,9 @@ export class ConnectorService implements OnApplicationBootstrap {
           if (existing.rows[0]?.status === 'completed') duplicateDeliveries += 1;
         }
       }
-      await tx.query(
-        `INSERT INTO integration_connector_cursors (id, connector_id, entity_type, cursor_value, updated_at)
-         VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
-         ON CONFLICT (connector_id, entity_type)
-         DO UPDATE SET cursor_value = EXCLUDED.cursor_value, updated_at = CURRENT_TIMESTAMP`,
-        [randomUUID(), connector.id, entityType, cursorValue],
-      );
+      await advance(tx, insertedCount);
     });
-    return duplicateDeliveries;
+    return { inserted: insertedCount, duplicateDeliveries };
   }
 
   private async processDueIngestionRecords(

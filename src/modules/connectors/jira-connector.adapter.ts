@@ -126,15 +126,42 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
 
   public async fetchChanges(ctx: ConnectorContext, entityType: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {
     if (entityType !== 'issue') throw new ConnectorConfigurationError(`Jira does not expose entity type '${entityType}'`);
-    const config = ctx.connector.config;
-    const keys = stringList(config.projectKeys);
-    const maxPages = optionNumber(config.options, 'maxPagesPerPoll', 10, 1, 100);
-    const customFields = stringList((config.options as any)?.customFieldIds).filter((id) => /^customfield_\d+$/.test(id));
-    const projectClause = `project in (${keys.map((key) => `"${key}"`).join(', ')})`;
+    const projectClause = this.projectClause(ctx);
     const since = cursor?.cursorValue ? new Date(Date.parse(cursor.cursorValue) - JQL_OVERLAP_MS) : null;
     const jql = since
-      ? `${projectClause} AND updated >= "${formatInTimeZone(since, this.timeZone(config)).slice(0, 16).replace(/-/g, '/')}" ORDER BY updated ASC, key ASC`
+      ? `${projectClause} AND ${this.updatedSince(ctx, since)} ORDER BY updated ASC, key ASC`
       : `${projectClause} ORDER BY updated ASC, key ASC`;
+    return this.searchPages(ctx, jql, cursor);
+  }
+
+  /**
+   * A scheduled JQL query (US17.3). The operator's text is parenthesised and ANDed with the
+   * connector's own project scope and the watermark, so it can neither read another project nor
+   * reach history older than the saved watermark, whatever the query says.
+   */
+  public async fetchNativeQuery(ctx: ConnectorContext, entityType: string, query: string, cursor: WatermarkCursor): Promise<ConnectorFetchPage> {
+    if (entityType !== 'issue') throw new ConnectorConfigurationError(`Jira does not expose entity type '${entityType}'`);
+    if (!cursor?.cursorValue || Number.isNaN(Date.parse(cursor.cursorValue))) {
+      throw new ConnectorConfigurationError('A scheduled query needs a watermark; refusing to run it unbounded');
+    }
+    const since = new Date(Date.parse(cursor.cursorValue) - JQL_OVERLAP_MS);
+    const jql = `(${query}) AND ${this.projectClause(ctx)} AND ${this.updatedSince(ctx, since)} ORDER BY updated ASC, key ASC`;
+    return this.searchPages(ctx, jql, cursor);
+  }
+
+  private projectClause(ctx: ConnectorContext): string {
+    const keys = stringList(ctx.connector.config.projectKeys);
+    return `project in (${keys.map((key) => `"${key}"`).join(', ')})`;
+  }
+
+  private updatedSince(ctx: ConnectorContext, since: Date): string {
+    return `updated >= "${formatInTimeZone(since, this.timeZone(ctx.connector.config)).slice(0, 16).replace(/-/g, '/')}"`;
+  }
+
+  private async searchPages(ctx: ConnectorContext, jql: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {
+    const config = ctx.connector.config;
+    const maxPages = optionNumber(config.options, 'maxPagesPerPoll', 10, 1, 100);
+    const customFields = stringList((config.options as any)?.customFieldIds).filter((id) => /^customfield_\d+$/.test(id));
 
     const records: ExternalRecordPayload[] = [];
     const priorWatermark = cursor?.cursorValue ? Date.parse(cursor.cursorValue) : -Infinity;
