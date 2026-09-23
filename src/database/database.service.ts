@@ -338,6 +338,36 @@ export class DatabaseService {
         CHECK (source_system <> target_system OR source_entity_type <> target_entity_type)
       );
 
+      CREATE TABLE IF NOT EXISTS integration_native_queries (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        connector_id UUID NOT NULL,
+        name TEXT NOT NULL,
+        language TEXT NOT NULL CHECK (language IN ('jql', 'wiql', 'encoded')),
+        entity_type TEXT NOT NULL,
+        query TEXT NOT NULL,
+        interval_seconds INT NOT NULL CHECK (interval_seconds BETWEEN 60 AND 86400),
+        status TEXT NOT NULL CHECK (status IN ('draft', 'published', 'disabled')),
+        start_from TIMESTAMP WITH TIME ZONE,
+        watermark TIMESTAMP WITH TIME ZONE,
+        watermark_query_hash TEXT,
+        validation JSONB NOT NULL,
+        next_run_at TIMESTAMP WITH TIME ZONE,
+        last_run_at TIMESTAMP WITH TIME ZONE,
+        last_run_status TEXT,
+        last_error TEXT,
+        last_enqueued INT NOT NULL DEFAULT 0,
+        total_enqueued INT NOT NULL DEFAULT 0,
+        consecutive_failures INT NOT NULL DEFAULT 0,
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMP WITH TIME ZONE,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        published_by TEXT,
+        published_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE(org_id, name)
+      );
+
       CREATE TABLE IF NOT EXISTS integration_deliveries (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,
@@ -722,6 +752,8 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS integration_state_mappings_lookup
         ON integration_state_mapping_definitions
         (org_id, source_system, source_entity_type, target_system, target_entity_type, status, version);
+      CREATE INDEX IF NOT EXISTS integration_native_queries_due
+        ON integration_native_queries (status, next_run_at);
       CREATE INDEX IF NOT EXISTS integration_field_mappings_lookup
         ON integration_field_mapping_definitions
         (org_id, source_system, source_entity_type, target_system, target_entity_type, status, version);
