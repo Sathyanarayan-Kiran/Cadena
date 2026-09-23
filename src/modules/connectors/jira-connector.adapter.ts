@@ -1,4 +1,4 @@
-import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorStateWrite } from './connector.interface';
+import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
 import {
   ConnectorFetch,
   ConnectorConfigurationError,
@@ -170,22 +170,51 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
     };
   }
 
-  public async pushStateChange(ctx: ConnectorContext, write: ConnectorStateWrite): Promise<{ nativeKey?: string; message: string }> {
-    const issuePath = `/rest/api/3/issue/${encodeURIComponent(write.externalId)}`;
-    const available = await this.get(ctx, `${issuePath}/transitions`);
-    const transitions: any[] = Array.isArray(available?.transitions) ? available.transitions : [];
-    const target = write.targetState.trim().toLowerCase();
-    const transition = transitions.find((candidate) => String(candidate?.to?.name || '').trim().toLowerCase() === target);
-    if (!transition) {
-      throw new ConnectorRemoteError(
-        `Jira issue ${write.externalId} has no available transition to '${write.targetState}'`,
-        null,
-        false,
-      );
+  public async pushUpdate(ctx: ConnectorContext, update: ConnectorRecordUpdate): Promise<{ nativeKey?: string; message: string }> {
+    const hasFields = Boolean(update.fields && Object.keys(update.fields).length);
+    if (!update.targetState && !hasFields) {
+      throw new ConnectorConfigurationError('pushUpdate requires a target state, at least one field, or both');
     }
-    const fields = write.fields && Object.keys(write.fields).length ? { fields: write.fields } : {};
-    await this.post(ctx, `${issuePath}/transitions`, { transition: { id: String(transition.id) }, ...fields });
-    return { nativeKey: write.externalId, message: `Transitioned Jira issue ${write.externalId} to ${write.targetState}` };
+    const issuePath = `/rest/api/3/issue/${encodeURIComponent(update.externalId)}`;
+    const jiraFields = hasFields ? this.toJiraWriteFields(update.fields!) : undefined;
+
+    if (update.targetState) {
+      const available = await this.get(ctx, `${issuePath}/transitions`);
+      const transitions: any[] = Array.isArray(available?.transitions) ? available.transitions : [];
+      const target = update.targetState.trim().toLowerCase();
+      const transition = transitions.find((candidate) => String(candidate?.to?.name || '').trim().toLowerCase() === target);
+      if (!transition) {
+        throw new ConnectorRemoteError(
+          `Jira issue ${update.externalId} has no available transition to '${update.targetState}'`,
+          null,
+          false,
+        );
+      }
+      // Jira accepts field values alongside a transition in the same call, so a composite
+      // state-plus-fields propagation reaches the provider as one write, not two.
+      await this.post(ctx, `${issuePath}/transitions`, { transition: { id: String(transition.id) }, ...(jiraFields ? { fields: jiraFields } : {}) });
+      return { nativeKey: update.externalId, message: `Transitioned Jira issue ${update.externalId} to ${update.targetState}` };
+    }
+
+    await this.put(ctx, issuePath, { fields: jiraFields });
+    return { nativeKey: update.externalId, message: `Updated fields on Jira issue ${update.externalId}` };
+  }
+
+  /**
+   * Wraps a canonical field value into the shape the Jira issue-write API expects for that field
+   * id. Priority and assignee are reference-like fields Jira represents as objects even though
+   * discovery and ingestion surface them as flat values; every other field (including custom
+   * fields, already validated against discovery before a mapping publishes) passes through as-is.
+   */
+  private toJiraWriteFields(fields: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(fields)) {
+      if (value === undefined) continue;
+      if (key === 'priority') out.priority = { name: String(value) };
+      else if (key === 'assignee' || key === 'assigneeAccountId') out.assignee = { accountId: String(value) };
+      else out[key] = value;
+    }
+    return out;
   }
 
   private toRecord(ctx: ConnectorContext, issue: any, customFields: string[]): ExternalRecordPayload {
@@ -250,6 +279,14 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
   private post(ctx: ConnectorContext, path: string, body: unknown): Promise<any> {
     return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
       method: 'POST',
+      headers: this.headers(ctx),
+      body: JSON.stringify(body),
+    });
+  }
+
+  private put(ctx: ConnectorContext, path: string, body: unknown): Promise<any> {
+    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
+      method: 'PUT',
       headers: this.headers(ctx),
       body: JSON.stringify(body),
     });

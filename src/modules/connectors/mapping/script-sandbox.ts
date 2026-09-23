@@ -27,6 +27,12 @@ const MAX_RESULT_BYTES = 64 * 1024;
 /** Bounds the input fed in, so a pathologically large source record cannot inflate isolate cost. */
 const MAX_INPUT_BYTES = 512 * 1024;
 const MAX_SCRIPT_CHARS = 20_000;
+/**
+ * Bounds object/array nesting in the returned value. A deeply nested structure (e.g. thousands of
+ * empty arrays nested inside each other) can stay well under the byte cap while still risking a
+ * stack overflow in downstream recursive processing (stableStringify, setPath, JSON.stringify).
+ */
+const MAX_RESULT_DEPTH = 12;
 
 export interface MappingScriptInput {
   fields: Record<string, unknown>;
@@ -46,6 +52,7 @@ export type MappingScriptFailureReason =
   | 'runtime_error'
   | 'unclonable_result'
   | 'oversized_result'
+  | 'excessive_nesting'
   | 'oversized_input'
   | 'script_too_large';
 
@@ -120,6 +127,15 @@ export async function runMappingScript(
         durationMs: duration(),
       };
     }
+    const resultDepth = valueDepth(raw);
+    if (resultDepth > MAX_RESULT_DEPTH) {
+      return {
+        ok: false,
+        reason: 'excessive_nesting',
+        message: `The transform returned a value nested ${resultDepth} levels deep, exceeding the ${MAX_RESULT_DEPTH}-level limit`,
+        durationMs: duration(),
+      };
+    }
     return { ok: true, value: raw, durationMs: duration() };
   } catch (error) {
     // A failure constructing the isolate/context itself (not the script's own fault).
@@ -167,4 +183,21 @@ function safeStringify(value: unknown): string {
   } catch {
     return '';
   }
+}
+
+/**
+ * Deepest object/array nesting level in a value copied out of the isolate. `copy: true` uses the
+ * structured clone algorithm, which permits circular references, so a `seen` guard stops recursion
+ * from following a cycle back on itself rather than assuming the value is a tree.
+ */
+function valueDepth(value: unknown, seen: Set<unknown> = new Set()): number {
+  if (value === null || typeof value !== 'object' || seen.has(value)) return 0;
+  seen.add(value);
+  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  let deepest = 0;
+  for (const child of children) {
+    const childDepth = valueDepth(child, seen);
+    if (childDepth > deepest) deepest = childDepth;
+  }
+  return deepest + 1;
 }

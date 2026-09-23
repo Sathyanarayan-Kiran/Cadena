@@ -29,6 +29,8 @@ const FIELD_PATH_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_.-]{0,127}$/;
 const MAX_RULES = 200;
 const MAX_TABLE_ENTRIES = 500;
 const MAX_CONDITIONAL_CASES = 100;
+/** Bounds nesting for constant/value-table/conditional literals, same rationale as the script sandbox's result cap. */
+const MAX_JSON_DEPTH = 12;
 
 /**
  * Versioned, tenant-scoped field-level translation for correlated external records (US17.2).
@@ -237,6 +239,34 @@ export class FieldMappingService {
     return { ...result, mapping: { id: mapping.id, version: mapping.version, name: mapping.name } };
   }
 
+  /**
+   * Every field name any published mapping could ever write onto a twin of this endpoint —
+   * `target_field` from whichever rules have this endpoint as their write destination, regardless
+   * of which side of the mapping it is. Used to give an inbound field change and an outbound
+   * write-back the same echo-suppression payload shape: a natural sync observes a twin's raw
+   * values, while a write only ever touches these specific mapped destinations, so restricting the
+   * observed side to this set is what makes the two comparable at all.
+   */
+  public async writtenFieldNames(orgId: string, endpoint: FieldMappingEndpoint): Promise<string[]> {
+    const result = await this.dbService.db.query<any>(
+      `SELECT * FROM integration_field_mapping_definitions
+       WHERE org_id = $1 AND status = 'published'
+         AND ((source_system = $2 AND source_entity_type = $3) OR (target_system = $2 AND target_entity_type = $3))`,
+      [orgId, endpoint.system, endpoint.entity_type],
+    );
+    const names = new Set<string>();
+    for (const row of result.rows) {
+      const mapping = this.mapDefinition(row);
+      const isSource = sameEndpoint(mapping.source, endpoint);
+      const isTarget = sameEndpoint(mapping.target, endpoint);
+      for (const rule of mapping.rules) {
+        const writesHere = (rule.direction === 'source_to_target' && isTarget) || (rule.direction === 'target_to_source' && isSource);
+        if (writesHere) names.add(topLevel(rule.target_field));
+      }
+    }
+    return Array.from(names);
+  }
+
   private async findPublished(orgId: string, a: FieldMappingEndpoint, b: FieldMappingEndpoint): Promise<FieldMappingDefinition | null> {
     const result = await this.dbService.db.query<any>(
       `SELECT * FROM integration_field_mapping_definitions
@@ -388,11 +418,17 @@ export class FieldMappingService {
 
   private normalizeJsonValue(value: unknown, field: string): unknown {
     if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return value;
+    let normalized: unknown;
     try {
-      return JSON.parse(JSON.stringify(value));
+      normalized = JSON.parse(JSON.stringify(value));
     } catch {
       throw new InvalidFieldMappingError(`${field} must be a JSON-serializable value`);
     }
+    const depth = jsonDepth(normalized);
+    if (depth > MAX_JSON_DEPTH) {
+      throw new InvalidFieldMappingError(`${field} is nested ${depth} levels deep, exceeding the ${MAX_JSON_DEPTH}-level limit`);
+    }
+    return normalized;
   }
 
   private requiredFieldPath(value: unknown, field: string): string {
@@ -466,6 +502,18 @@ export class FieldMappingService {
 
 function topLevel(path: string): string {
   return path.split('.')[0];
+}
+
+/** Deepest object/array nesting level in a value already round-tripped through JSON (cycle-free). */
+function jsonDepth(value: unknown): number {
+  if (value === null || typeof value !== 'object') return 0;
+  const children = Array.isArray(value) ? value : Object.values(value as Record<string, unknown>);
+  let deepest = 0;
+  for (const child of children) {
+    const childDepth = jsonDepth(child);
+    if (childDepth > deepest) deepest = childDepth;
+  }
+  return deepest + 1;
 }
 
 function sameEndpoint(a: FieldMappingEndpoint, b: FieldMappingEndpoint): boolean {

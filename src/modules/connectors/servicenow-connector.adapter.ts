@@ -1,4 +1,4 @@
-import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorStateWrite } from './connector.interface';
+import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
 import {
   ConnectorFetch,
   ConnectorConfigurationError,
@@ -189,29 +189,40 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     };
   }
 
-  public async pushStateChange(ctx: ConnectorContext, write: ConnectorStateWrite): Promise<{ nativeKey?: string; message: string }> {
-    const entity = ctx.connector.discoveryMetadata?.entities?.find((candidate) => candidate.entityType === write.entityType);
-    const stateField = entity?.fields.find((field) => field.id === 'state');
-    const labels = stateField?.allowedValues || [];
-    const codes = stateField?.allowedValueCodes || [];
-    const index = labels.findIndex((label) => label.trim().toLowerCase() === write.targetState.trim().toLowerCase());
-    if (index < 0 || !codes[index]) {
-      throw new ConnectorRemoteError(
-        `ServiceNow ${write.entityType} has no discovered state choice '${write.targetState}'`,
-        null,
-        false,
-      );
+  public async pushUpdate(ctx: ConnectorContext, update: ConnectorRecordUpdate): Promise<{ nativeKey?: string; message: string }> {
+    const hasFields = Boolean(update.fields && Object.keys(update.fields).length);
+    if (!update.targetState && !hasFields) {
+      throw new ConnectorConfigurationError('pushUpdate requires a target state, at least one field, or both');
     }
-    const body = { ...(write.fields || {}), state: codes[index] };
+    // The Table API accepts field values as flat values in the same PATCH body as a state change,
+    // so a composite state-plus-fields propagation reaches the provider as one write.
+    const body: Record<string, unknown> = { ...(update.fields || {}) };
+    if (update.targetState) {
+      const entity = ctx.connector.discoveryMetadata?.entities?.find((candidate) => candidate.entityType === update.entityType);
+      const stateField = entity?.fields.find((field) => field.id === 'state');
+      const labels = stateField?.allowedValues || [];
+      const codes = stateField?.allowedValueCodes || [];
+      const index = labels.findIndex((label) => label.trim().toLowerCase() === update.targetState!.trim().toLowerCase());
+      if (index < 0 || !codes[index]) {
+        throw new ConnectorRemoteError(
+          `ServiceNow ${update.entityType} has no discovered state choice '${update.targetState}'`,
+          null,
+          false,
+        );
+      }
+      body.state = codes[index];
+    }
     const updated = await requestJson(
       this.http,
-      `${trimBaseUrl(ctx.baseUrl)}/api/now/table/${write.entityType}/${encodeURIComponent(write.externalId)}`,
+      `${trimBaseUrl(ctx.baseUrl)}/api/now/table/${update.entityType}/${encodeURIComponent(update.externalId)}`,
       { method: 'PATCH', headers: this.headers(ctx), body: JSON.stringify(body) },
     );
     const number = updated?.result?.number;
     return {
       nativeKey: typeof number === 'string' ? number : number?.value,
-      message: `Updated ServiceNow ${write.entityType} ${write.externalId} to ${write.targetState}`,
+      message: update.targetState
+        ? `Updated ServiceNow ${update.entityType} ${update.externalId} to ${update.targetState}`
+        : `Updated fields on ServiceNow ${update.entityType} ${update.externalId}`,
     };
   }
 

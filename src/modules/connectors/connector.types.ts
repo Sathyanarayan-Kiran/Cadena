@@ -49,6 +49,8 @@ export interface ConnectorConfigDto {
 export interface ConnectorWriteBackPolicy {
   /** Allow operators to change a twin's native state through an audited connector work order. */
   state?: boolean;
+  /** Canonical field names (the same keys as `CanonicalTwin.payload`) operators may edit directly on this connector's own twins. */
+  fields?: string[];
 }
 
 export interface ConnectorFieldSchema {

@@ -110,6 +110,13 @@ describe('US17.2 field-mapping script sandbox', () => {
     expect(result).toMatchObject({ ok: false, reason: 'oversized_input' });
   });
 
+  it('rejects a deeply nested return value even when it stays under the byte limit', async () => {
+    // 200 levels of nested single-element arrays serialize to well under 64KB but would risk a
+    // stack overflow in downstream recursive processing (stableStringify, setPath) if allowed through.
+    const result = await runMappingScript('let v = []; for (let i = 0; i < 200; i++) v = [v]; return v;', input());
+    expect(result).toMatchObject({ ok: false, reason: 'excessive_nesting' });
+  });
+
   it('rejects a script that exceeds the source-size limit', async () => {
     const result = await runMappingScript(`return ${'1+'.repeat(11000)}1;`, input());
     expect(result).toMatchObject({ ok: false, reason: 'script_too_large' });

@@ -26,10 +26,18 @@ export interface ConnectorFetchPage {
   hasMore: boolean;
 }
 
-export interface ConnectorStateWrite {
+/**
+ * One write to a native record: a state transition, a set of mapped field values, or both in one
+ * request (US17.2 generalizes the former state-only write so a composite propagation — a state
+ * change and its mapped fields together — reaches the provider as a single call where the
+ * provider's own API allows it, e.g. Jira sets fields alongside a transition).
+ */
+export interface ConnectorRecordUpdate {
   entityType: string;
   externalId: string;
-  targetState: string;
+  /** Native state name. Omitted for a fields-only update. */
+  targetState?: string;
+  /** Canonical field names, the same shape as `ExternalRecordPayload.fields`. */
   fields?: Record<string, unknown>;
 }
 
@@ -56,6 +64,9 @@ export interface ConnectorAdapter {
   /** Fetch records of one entity type changed at or after the cursor, oldest first. */
   fetchChanges(ctx: ConnectorContext, entityType: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage>;
 
-  /** Move one native record to the target state. Throws ConnectorRemoteError on failure. */
-  pushStateChange(ctx: ConnectorContext, write: ConnectorStateWrite): Promise<{ nativeKey?: string; message: string }>;
+  /**
+   * Writes a state, a set of fields, or both to one native record. Throws ConnectorRemoteError on
+   * failure, and ConnectorConfigurationError if neither `targetState` nor `fields` is given.
+   */
+  pushUpdate(ctx: ConnectorContext, update: ConnectorRecordUpdate): Promise<{ nativeKey?: string; message: string }>;
 }

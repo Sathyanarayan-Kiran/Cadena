@@ -250,6 +250,13 @@ describe('US17.2 — field mapping definitions', () => {
     await http().post('/integrations/field-mappings').set(headers(orgId)).send({
       ...base, rules: [{ direction: 'source_to_target', source_field: 'priority', target_field: 'priority', transform: { type: 'script', code: 'return fields.priority ===;' } }],
     }).expect(422);
+    // A pathologically nested constant literal is rejected at save time, before it can ever reach
+    // a provider write or a recursive-processing stack overflow downstream.
+    let nested: unknown = 'leaf';
+    for (let i = 0; i < 20; i++) nested = [nested];
+    await http().post('/integrations/field-mappings').set(headers(orgId)).send({
+      ...base, rules: [{ direction: 'source_to_target', source_field: 'priority', target_field: 'priority', transform: { type: 'constant', value: nested } }],
+    }).expect(422);
   });
 
   it('reports no_mapping when nothing is published for a pair, and isolates tenants', async () => {
@@ -271,5 +278,190 @@ describe('US17.2 — field mapping definitions', () => {
       source: jira(), target: snow(), direction: 'source_to_target', source_fields: { priority: 'High' },
     }).expect(201);
     expect(otherPreview.body).toMatchObject({ status: 'no_mapping' });
+  });
+});
+
+/**
+ * US17.2 wired into the real US17.1 connector pipeline: a published field mapping translates a
+ * natural provider change into a governed write on the correlated counterpart, composes with
+ * US13.1 state mapping into one work order, is echo-suppressed on its own return trip, and holds
+ * on schema drift instead of writing to a field the target no longer has.
+ */
+describe('US17.2 — field mapping wired into connector propagation', () => {
+  let app: INestApplication;
+  let connectors: ConnectorService;
+  const database = DatabaseService.getInstance();
+
+  beforeAll(async () => {
+    await database.initialize();
+    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
+    app = moduleRef.createNestApplication();
+    await app.init();
+    connectors = app.get(ConnectorService);
+  });
+
+  afterAll(async () => {
+    connectors.registerAdapter(new JiraConnectorAdapter());
+    connectors.registerAdapter(new ServiceNowConnectorAdapter());
+    if (app) await app.close();
+  });
+
+  const http = () => request(app.getHttpServer());
+  const headers = (orgId: string, actor = 'ops.lead') => ({ 'x-org-id': orgId, 'x-actor-id': actor });
+  const jiraEndpoint = { system: 'jira', entity_type: 'issue' };
+  const snowEndpoint = { system: 'servicenow', entity_type: 'incident' };
+
+  const onboard = async (orgId: string, config: Record<string, unknown>) => {
+    const created = await http().post('/integrations/connectors').set(headers(orgId)).send(config).expect(201);
+    const id = created.body.id as string;
+    for (const step of ['test', 'discover', 'activate', 'sync']) {
+      await http().post(`/integrations/connectors/${id}/${step}`).set(headers(orgId)).expect(201);
+    }
+    return id;
+  };
+  const sync = (orgId: string, id: string) => http().post(`/integrations/connectors/${id}/sync`).set(headers(orgId)).expect(201);
+
+  /** A correlated Jira issue and ServiceNow incident, with a published priority field mapping. */
+  const scenario = async () => {
+    const orgId = randomUUID();
+    const jiraApi = new FakeJiraApi();
+    const snowApi = new FakeServiceNowApi();
+    connectors.registerAdapter(new JiraConnectorAdapter(jiraApi.fetch));
+    connectors.registerAdapter(new ServiceNowConnectorAdapter(snowApi.fetch));
+    const issue = jiraApi.addIssue({ key: 'CAD-900', summary: 'Checkout latency', status: 'In Progress', priority: 'High' });
+    const incident = snowApi.addRecord('incident', { short_description: 'Checkout slow', state: '2', priority: '1' });
+    const jiraId = await onboard(orgId, {
+      name: 'Jira Cloud', provider: 'jira', baseUrl: 'https://acme.atlassian.net',
+      credentials: { apiToken: 'env:US172_JIRA_TOKEN' }, options: { accountEmail: 'sync@acme.test' }, projectKeys: ['CAD'],
+    });
+    const snowId = await onboard(orgId, {
+      name: 'ServiceNow ITSM', provider: 'servicenow', baseUrl: 'https://acme.service-now.com',
+      credentials: { password: 'env:US172_SNOW_PASSWORD' }, options: { username: 'svc.cadena' }, tableNames: ['incident'],
+    });
+    await http().post('/integrations/correlations').set(headers(orgId)).send({
+      source: { system: 'servicenow', entity_type: 'incident', immutable_id: incident.sys_id },
+      target: { system: 'jira', entity_type: 'issue', immutable_id: issue.id },
+    }).expect(201);
+    const draft = await http().post('/integrations/field-mappings').set(headers(orgId)).send({
+      name: 'Priority translation', source: jiraEndpoint, target: snowEndpoint,
+      rules: [
+        {
+          direction: 'source_to_target', source_field: 'priority', target_field: 'priority',
+          transform: { type: 'value_table', table: { High: '1 - Critical', Medium: '3 - Moderate', Low: '4 - Low' } },
+        },
+        {
+          direction: 'target_to_source', source_field: 'priority', target_field: 'priority',
+          transform: { type: 'value_table', table: { '1 - Critical': 'Highest', '3 - Moderate': 'Medium', '4 - Low': 'Low' } },
+        },
+      ],
+    }).expect(201);
+    await http().post(`/integrations/field-mappings/${draft.body.id}/publish`).set(headers(orgId)).expect(201);
+    return { orgId, jiraApi, snowApi, issue, incident, jiraId, snowId };
+  };
+
+  const twinsFor = (orgId: string) => http().get('/integrations/connectors/twins').set(headers(orgId)).expect(200).then((r) => r.body);
+
+  it('propagates a mapped field with no state change as a fields-only work order, and suppresses its own echo', async () => {
+    const { orgId, jiraApi, snowApi, issue, incident, jiraId, snowId } = await scenario();
+    jiraApi.editIssue(issue.id, { priority: 'Low' });
+
+    const jiraSync = await sync(orgId, jiraId);
+    expect(jiraSync.body).toMatchObject({ twinsUpdated: 1, workOrdersPrepared: 1, workOrdersExecuted: 1 });
+
+    const patch = snowApi.requests.find((r) => r.method === 'PATCH');
+    expect(patch?.path).toBe(`/api/now/table/incident/${incident.sys_id}`);
+    expect(patch?.body).toEqual({ priority: '4 - Low' });
+    expect(snowApi.tables.get('incident')!.get(incident.sys_id)!.priority).toBe('4 - Low');
+    // No state field was touched: the counterpart's own state is untouched.
+    expect(snowApi.tables.get('incident')!.get(incident.sys_id)!.state).toBe('2');
+
+    const orders = await http().get(`/integrations/connectors/${snowId}/work-orders`).set(headers(orgId)).expect(200);
+    expect(orders.body).toEqual([expect.objectContaining({ status: 'executed', targetState: null, fields: { priority: '4 - Low' } })]);
+
+    // The counterpart's own next sync observes the write we just made and does not re-propagate.
+    const snowSync = await sync(orgId, snowId);
+    expect(snowSync.body).toMatchObject({ twinsUpdated: 1, echoesSuppressed: 1, workOrdersPrepared: 0 });
+    expect(jiraApi.issues.get(issue.id)!.priority).toBe('Low');
+    const twins = await twinsFor(orgId);
+    expect(twins.find((t: any) => t.nativeKey === incident.number).payload.priority).toBe('4 - Low');
+  });
+
+  it('composes a state change and a mapped field change into one work order', async () => {
+    const { orgId, jiraApi, snowApi, issue, incident, jiraId, snowId } = await scenario();
+    const stateDraft = await http().post('/integrations/state-mappings').set(headers(orgId)).send({
+      name: 'Delivery lifecycle', source: { system: 'servicenow', entity_type: 'incident' }, target: jiraEndpoint,
+      rules: [{ direction: 'source_to_target', from_state: 'Resolved', to_state: 'In Review' }],
+    }).expect(201);
+    await http().post(`/integrations/state-mappings/${stateDraft.body.id}/publish`).set(headers(orgId)).expect(201);
+
+    // Moves the incident away from its scenario()-seeded state ('2'/'1') so both the state and the
+    // field actually change; a no-op edit would never trigger propagation.
+    snowApi.editRecord('incident', incident.sys_id, { state: '6', priority: '3 - Moderate' });
+    const result = await sync(orgId, snowId);
+    expect(result.body).toMatchObject({ workOrdersPrepared: 1, workOrdersExecuted: 1 });
+
+    const order = (await http().get(`/integrations/connectors/${jiraId}/work-orders`).set(headers(orgId)).expect(200)).body[0];
+    expect(order).toMatchObject({ targetState: 'In Review', fields: { priority: 'Medium' } });
+    expect(jiraApi.issues.get(issue.id)).toMatchObject({ status: 'In Review', priority: 'Medium' });
+    const transition = jiraApi.requests.find((r) => r.method === 'POST' && r.path === `/rest/api/3/issue/${issue.id}/transitions`);
+    // Jira accepts the mapped field alongside the transition in the same request.
+    expect(transition?.body.fields).toEqual({ priority: { name: 'Medium' } });
+  });
+
+  it('holds the whole work order when the target field drops out of the discovered schema', async () => {
+    const { orgId, jiraApi, snowApi, issue, incident, jiraId, snowId } = await scenario();
+    const draft = await http().post('/integrations/field-mappings').set(headers(orgId)).send({
+      name: 'Short description', source: jiraEndpoint, target: snowEndpoint,
+      rules: [{ direction: 'source_to_target', source_field: 'summary', target_field: 'short_description', transform: { type: 'direct' } }],
+    }).expect(201);
+    await http().post(`/integrations/field-mappings/${draft.body.id}/publish`).set(headers(orgId)).expect(201);
+
+    // Simulates schema drift between publish time and execution time by directly editing the
+    // ServiceNow connector's last-known discovery to no longer list short_description, since the
+    // sandbox always discovers it for a real table and cannot otherwise be made to "forget" it.
+    const connectorRow = (await database.db.query<any>(
+      `SELECT discovery_metadata FROM integration_connectors WHERE id = $1`, [snowId],
+    )).rows[0];
+    const discovery = JSON.parse(connectorRow.discovery_metadata);
+    for (const entity of discovery.entities) entity.fields = entity.fields.filter((f: any) => f.id !== 'short_description');
+    await database.db.query(
+      `UPDATE integration_connectors SET discovery_metadata = $1 WHERE id = $2`,
+      [JSON.stringify(discovery), snowId],
+    );
+
+    // Publishing this second mapping for the same connector pair superseded the "Priority
+    // translation" mapping from scenario(), exactly like US13.1 versioning; only this mapping's
+    // rule is active now.
+    jiraApi.editIssue(issue.id, { summary: 'Renamed while priority also changes', priority: 'Medium' });
+    const result = await sync(orgId, jiraId);
+    expect(result.body).toMatchObject({ workOrdersHeld: 1, workOrdersExecuted: 0 });
+
+    const orders = (await http().get(`/integrations/connectors/${snowId}/work-orders`).set(headers(orgId)).expect(200)).body;
+    const held = orders.find((o: any) => o.status === 'held');
+    expect(held).toBeTruthy();
+    expect(held.lastError).toMatch(/short_description.*no longer/);
+    // Nothing was written: a partially-applied mapping is never sent.
+    expect(snowApi.tables.get('incident')!.get(incident.sys_id)!.short_description).toBe('Checkout slow');
+  });
+
+  it('routes an operator field edit through governed write-back and propagates it via the published mapping', async () => {
+    const { orgId, jiraApi, snowApi, issue, incident, jiraId } = await scenario();
+    await http().post(`/integrations/connectors/${jiraId}/write-back`).set(headers(orgId)).send({ fields: ['priority'] }).expect(201);
+    const twins = await twinsFor(orgId);
+    const jiraTwin = twins.find((t: any) => t.nativeKey === issue.key);
+
+    const detail = await http().get(`/workspace/twins/${jiraTwin.id}`).set(headers(orgId)).expect(200);
+    const priorityPolicy = detail.body.fields.find((f: any) => f.field === 'priority');
+    expect(priorityPolicy).toMatchObject({ editable: true, reason: 'write_back_enabled' });
+
+    const routed = await http().post(`/workspace/twins/${jiraTwin.id}/edits`).set(headers(orgId))
+      .send({ field: 'priority', value: 'Low' }).expect(201);
+    expect(routed.body).toMatchObject({ decision: 'routed', value: 'Low' });
+    expect(jiraApi.issues.get(issue.id)!.priority).toBe('Low');
+
+    // Propagated onward to ServiceNow via the published field mapping, same as a natural change.
+    expect(routed.body.propagation).toMatchObject({ prepared: 1, executed: 1 });
+    expect(snowApi.tables.get('incident')!.get(incident.sys_id)!.priority).toBe('4 - Low');
+    void jiraApi;
   });
 });

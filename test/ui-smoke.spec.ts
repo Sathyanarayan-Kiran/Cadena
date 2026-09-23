@@ -644,6 +644,50 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await closeAnyDialog();
   });
 
+  it('creates and publishes a visual field mapping with a value-table transform', async () => {
+    await closeAnyDialog();
+    await page.click('#openFieldMappingsFromNav');
+    await page.waitForSelector('#fieldMappingDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(
+      () => !document.querySelector('#fieldMappingList .skeleton'),
+      { timeout: 10000 },
+    );
+
+    await page.type('#fieldMappingName', 'UI priority translation');
+    await page.type('.fm-source', 'priority');
+    await page.type('.fm-target', 'priority');
+    await page.select('.fm-type', 'value_table');
+    await page.waitForSelector('.fm-kv-row', { timeout: 5000 });
+    await page.type('.fm-kv-key', 'High');
+    await page.type('.fm-kv-value', '1 - Critical');
+    await page.click('#saveFieldMappingButton');
+
+    await page.waitForFunction(
+      () => (document.querySelector('#fieldMappingList')?.textContent ?? '').includes('UI priority translation')
+        && (document.querySelector('#fieldMappingList')?.textContent ?? '').includes('draft'),
+      { timeout: 10000 },
+    );
+    expect(await textOf('#fieldMappingList')).toContain('priority → priority (value_table)');
+
+    const publishClicked = await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('#fieldMappingList .mapping-card')).find(
+        (node) => node.textContent?.includes('UI priority translation'),
+      );
+      const button = card?.querySelector('button') as HTMLButtonElement | undefined;
+      if (!button) return false;
+      button.click();
+      return true;
+    });
+    expect(publishClicked).toBe(true);
+
+    await page.waitForFunction(
+      () => (document.querySelector('#fieldMappingList')?.textContent ?? '').includes('UI priority translation')
+        && (document.querySelector('#fieldMappingList')?.textContent ?? '').includes('published'),
+      { timeout: 10000 },
+    );
+    await closeAnyDialog();
+  });
+
   it('connects a source system and reports that live provider access is not yet authorised', async () => {
     await closeAnyDialog();
     await page.click('#openConnectorsFromNav');
@@ -707,6 +751,20 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
       (node) => window.getComputedStyle(node).display !== 'none',
     );
     expect(menuVisible).toBe(true);
+
+    // The field-mapping studio's transform editor is the newest, most nested form on the page;
+    // it must reflow to a single column at phone width rather than clip or force page-wide scroll.
+    await page.click('#mobileMenuButton');
+    await page.waitForSelector('#sidebar.open', { timeout: 5000 });
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openFieldMappingsFromNav')?.click());
+    await page.waitForSelector('#fieldMappingDialog[open]', { timeout: 10000 });
+    await page.select('.fm-type', 'conditional');
+    await page.waitForSelector('.fm-cond-row', { timeout: 5000 });
+    const dialogOverflows = await page.evaluate(
+      () => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1,
+    );
+    expect(dialogOverflows).toBe(false);
+    await closeAnyDialog();
 
     expect(consoleErrors).toEqual([]);
   });
@@ -910,6 +968,40 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     await call(`/integrations/connectors/${snow.id}/sync`, {});
     const twins = (await call('/workspace/twins')).body;
     expect(twins.find((twin: any) => twin.nativeKey === 'INC0010000').status).toBe('Resolved');
+  });
+
+  it('edits a governed non-state field in the twin drawer as free text, not a picklist', async () => {
+    // Priority has no discovered picklist (unlike state), so US17.2's write-back generalization
+    // must render it as a text input rather than the state field's empty-if-no-choices <select>.
+    const jira = (await call('/integrations/connectors')).body.find((connector: any) => connector.provider === 'jira');
+    expect((await call(`/integrations/connectors/${jira.id}/write-back`, { state: true, fields: ['priority'] })).status).toBe(201);
+
+    await openTwinRow('CAD-101');
+    const priorityRow = '#twinBody .twin-field[data-field="priority"]';
+    await page.waitForSelector(priorityRow, { timeout: 10000 });
+    expect(await page.$eval(priorityRow, (node) => (node as HTMLElement).innerText)).toContain('Write-back to Jira');
+    expect(await page.$(`${priorityRow} select`)).toBeNull();
+    const input = await page.$(`${priorityRow} input`);
+    expect(input).not.toBeNull();
+    expect(await page.$eval(`${priorityRow} input`, (node) => (node as HTMLInputElement).value)).toBe('High');
+
+    await page.$eval(`${priorityRow} input`, (node) => ((node as HTMLInputElement).value = ''));
+    await page.type(`${priorityRow} input`, 'Highest');
+    await page.click(`${priorityRow} button`);
+    await page.waitForFunction(
+      () => (document.querySelector('#twinBody')?.textContent ?? '').includes('Operator edit → priority'),
+      { timeout: 10000 },
+    );
+    expect(await textOf('#twinBody .activity-list')).toContain('Operator edit → priority');
+    expect(await textOf('#twinBody .activity-list')).toContain('executed');
+    await page.evaluate(() => (document.querySelector('#twinDialog') as HTMLDialogElement).close());
+
+    // The twin's own field only reflects the write after its connector's next sync pulls it back,
+    // same as a state edit; confirm the round trip actually reached Jira.
+    expect((await call(`/integrations/connectors/${jira.id}/sync`, {})).status).toBe(201);
+    await openTwinRow('CAD-101');
+    expect(await page.$eval(priorityRow, (node) => (node as HTMLElement).innerText)).toContain('Highest');
+    await page.evaluate(() => (document.querySelector('#twinDialog') as HTMLDialogElement).close());
   });
 
   it('flags a degraded source and stays within a phone viewport without console errors', async () => {

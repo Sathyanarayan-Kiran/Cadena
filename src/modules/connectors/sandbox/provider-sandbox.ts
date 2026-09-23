@@ -109,6 +109,7 @@ export interface FakeJiraIssue {
   updated: number;
   created?: number;
   issueType?: string;
+  assigneeAccountId?: string;
   assigneeEmail?: string;
   custom?: Record<string, unknown>;
 }
@@ -178,11 +179,35 @@ export class FakeJiraApi extends FakeProviderApi {
         const chosen = available.find((candidate) => candidate.id === body?.transition?.id);
         if (!chosen) return respond(400, { errorMessages: ['Transition is not valid'] });
         issue.status = chosen.to.name;
+        this.applyJiraFieldWrite(issue, body?.fields);
         issue.updated = this.tick(1000);
         return respond(204);
       }
     }
+
+    const bareIssue = /^\/rest\/api\/3\/issue\/([^/]+)$/.exec(path);
+    if (bareIssue && method === 'PUT') {
+      const issue = this.findIssue(decodeURIComponent(bareIssue[1]));
+      if (!issue) return respond(404, { errorMessages: ['Issue does not exist'] });
+      this.applyJiraFieldWrite(issue, body?.fields);
+      issue.updated = this.tick(1000);
+      return respond(204);
+    }
     return respond(404, { errorMessages: [`No route for ${method} ${path}`] });
+  }
+
+  /** Applies a governed field write in the same wrapped shape the real adapter sends. */
+  private applyJiraFieldWrite(issue: FakeJiraIssue, fields: Record<string, any> | undefined): void {
+    if (!fields) return;
+    for (const [key, value] of Object.entries(fields)) {
+      if (key === 'priority') issue.priority = value?.name ?? value;
+      else if (key === 'assignee') issue.assigneeAccountId = value?.accountId ?? value;
+      else if (key === 'summary') issue.summary = String(value);
+      else {
+        issue.custom = issue.custom || {};
+        issue.custom[key] = value;
+      }
+    }
   }
 
   private findIssue(idOrKey: string): FakeJiraIssue | undefined {
@@ -214,7 +239,9 @@ export class FakeJiraApi extends FakeProviderApi {
           summary: issue.summary,
           status: { name: issue.status },
           priority: issue.priority ? { name: issue.priority } : null,
-          assignee: issue.assigneeEmail ? { displayName: null, accountId: null, emailAddress: issue.assigneeEmail } : null,
+          assignee: (issue.assigneeEmail || issue.assigneeAccountId)
+            ? { displayName: null, accountId: issue.assigneeAccountId ?? null, emailAddress: issue.assigneeEmail ?? null }
+            : null,
           issuetype: { name: issue.issueType || 'Story' },
           project: { key: issue.key.split('-')[0] },
           description: null,
@@ -240,7 +267,10 @@ export interface FakeServiceNowRecord {
   sys_created_on?: number;
   assigned_to?: string;
   assigned_to_email?: string;
+  assignment_group?: string;
   sys_updated_by: string;
+  /** Any other governed field a mapping/write-back writes; round-trips through GET/PATCH as-is. */
+  [extra: string]: unknown;
 }
 
 const INCIDENT_STATES: Array<[string, string]> = [
@@ -324,7 +354,12 @@ export class FakeServiceNowApi extends FakeProviderApi {
     if (method === 'PATCH' && sysId) {
       const record = rows.get(decodeURIComponent(sysId));
       if (!record) return respond(404, { error: { message: 'No Record found' } });
-      if (body?.state !== undefined) record.state = String(body.state);
+      // Any governed field write (e.g. priority, assignment_group) round-trips as a flat value,
+      // matching the real Table API's PATCH contract; `state` alone gets its usual special case.
+      for (const [key, value] of Object.entries(body || {})) {
+        if (key === 'state') record.state = String(value);
+        else record[key] = value;
+      }
       record.sys_updated_on = this.tick(1000);
       record.sys_updated_by = this.username;
       return respond(200, { result: { sys_id: record.sys_id, number: record.number, state: record.state } });
@@ -347,7 +382,7 @@ export class FakeServiceNowApi extends FakeProviderApi {
           number: pair(record.number),
           short_description: pair(record.short_description),
           state: pair(record.state, this.stateLabel(record.state)),
-          priority: pair(record.priority || '3', record.priority ? `${record.priority} - Custom` : '3 - Moderate'),
+          priority: pair(record.priority || '3', record.priority || '3 - Moderate'),
           assigned_to: pair(record.assigned_to || '', record.assigned_to || ''),
           'assigned_to.email': pair(record.assigned_to_email || '', record.assigned_to_email || ''),
           sys_created_on: pair(new Date(record.sys_created_on ?? record.sys_updated_on).toISOString().slice(0, 19).replace('T', ' ')),

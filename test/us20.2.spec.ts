@@ -229,7 +229,7 @@ describe('US20.2 — connector-led management workspace', () => {
   it('routes a permitted state change through an audited work order, propagates it, and suppresses its echo', async () => {
     const { orgId, jira, snow, issue, incident, jiraTwin, snowId, jiraId } = await scenario();
     const enabled = await http().post(`/integrations/connectors/${jiraId}/write-back`).set(headers(orgId)).send({ state: true }).expect(201);
-    expect(enabled.body.config.writeBack).toEqual({ state: true });
+    expect(enabled.body.config.writeBack).toEqual({ state: true, fields: [] });
     const policy = (await http().get(`/workspace/twins/${jiraTwin.id}`).set(headers(orgId))).body.fields[0];
     expect(policy).toMatchObject({ editable: true, reason: 'write_back_enabled', allowedValues: ['To Do', 'In Progress', 'In Review', 'Done'] });
 

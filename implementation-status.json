@@ -91,6 +91,20 @@
       "expanded_stories": [
         "US17.1"
       ]
+    },
+    {
+      "id": "field-mapping-2026-09-23",
+      "source": "US17.2 governed field mappings and write-back",
+      "date": "2026-09-23",
+      "baseline_epics": 20,
+      "baseline_stories": 73,
+      "current_epics": 20,
+      "current_stories": 73,
+      "added_epics": [],
+      "added_stories": [],
+      "expanded_stories": [
+        "US17.2"
+      ]
     }
   ],
   "spec_phases": [
@@ -619,11 +633,12 @@
     },
     "US17.2": {
       "name": "Visual mappings with sandboxed scripts",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
-      "note": "New from the master backlog. No visual mapping editor or resource-constrained JS/TS transformation sandbox exists."
+      "expandedIn": "field-mapping-2026-09-23",
+      "note": "Versioned, tenant-scoped field mapping definitions (draft/published/superseded) with direct, constant, value-table, conditional and scripted rules, evaluated by a pure translator and validated against discovered target schemas and a nesting-depth cap at save time. Scripts run in a genuine V8 isolate (<code>isolated-vm</code>, not Node's <code>vm</code>) under a real 500ms wall-clock timeout, a real heap-memory limit, zero ambient globals, and a fresh isolate per call. Wired into the same durable FIFO work-order pipeline as US13.1 state translation: one composite work order carries whichever of state and mapped fields actually changed, echo suppression extends to the mapped field set, and schema drift or an unmapped value holds the whole work order rather than partially writing it. Jira and ServiceNow adapters and their sandboxes accept field-plus-state or fields-only writes. Operators edit any explicitly write-back-enabled field as free text or a picklist in the twin drawer, routed through the same governed connector work order as a state change. A visual field-mapping studio (value-table and conditional rule builders, plus a script editor) mirrors the existing state-mapping studio. Verified by <code>test/us17.2.spec.ts</code> (definitions, publish-time validation, and the full propagation pipeline), <code>test/mapping-script-sandbox.spec.ts</code> (real timeout/memory kills, capability absence, a vm-escape attempt, oversized/malformed/deeply-nested output), and 3 new browser tests at desktop and 390px."
     },
     "US17.3": {
       "name": "Scheduled native-query triggers",

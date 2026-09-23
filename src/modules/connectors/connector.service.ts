@@ -57,6 +57,7 @@ import {
 } from './connector.types';
 import { SecretManagerResolver } from './secret-manager-ref';
 import { getProviderSandbox } from './sandbox/provider-sandbox';
+import { FieldMappingService } from './mapping/field-mapping.service';
 import { TwinProjectionConfig, TwinProjectionService } from './twin-projection.service';
 import { loadRuntimeConfig } from '../../config/runtime-config';
 
@@ -99,6 +100,7 @@ export class ConnectorService implements OnApplicationBootstrap {
   private outbox = new EventOutboxService();
   private correlationService = new CorrelationService();
   private stateMappingService = new StateMappingService();
+  private fieldMappingService = new FieldMappingService();
   private syncGuardService = new SyncGuardService();
   private secrets = new SecretManagerResolver();
   private projection = new TwinProjectionService();
@@ -729,7 +731,7 @@ export class ConnectorService implements OnApplicationBootstrap {
   ): Promise<RecordOutcome> {
     if (!record.externalId) throw new Error('Provider record has no immutable id');
     const existing = await this.dbService.db.query<any>(
-      `SELECT t.id, t.connector_id, t.content_hash, t.native_status, c.name AS connector_name
+      `SELECT t.id, t.connector_id, t.content_hash, t.native_status, t.payload, c.name AS connector_name
        FROM integration_canonical_twins t
        JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
        WHERE t.org_id = $1 AND t.provider = $2 AND t.artifact_type = $3 AND t.external_id = $4`,
@@ -766,6 +768,14 @@ export class ConnectorService implements OnApplicationBootstrap {
 
     const twinId: string = prior?.id || randomUUID();
     const stateChanged = !prior || !sameState(prior.native_status, record.status);
+    // A field-mapping-relevant change (e.g. priority) can arrive with no state change at all;
+    // gating propagation on state alone would silently drop it. `unchanged` was already ruled out
+    // above by the content-hash check, so once we reach here, comparing per-key against the prior
+    // payload is what tells state-only churn (title/metadata) apart from an actual field change.
+    const priorFields = prior ? parseJson<Record<string, unknown>>(prior.payload, {}) : {};
+    const fieldsChanged = !prior || Object.keys({ ...priorFields, ...record.fields }).some(
+      (key) => stableStringify(priorFields[key] ?? null) !== stableStringify(record.fields[key] ?? null),
+    );
     const twinEvent = await this.withEvent(async (tx) => {
       if (prior) {
         await tx.query(
@@ -805,6 +815,7 @@ export class ConnectorService implements OnApplicationBootstrap {
         correlation_node_id: node.id,
         source_updated_at: record.updatedAt,
         state_changed: stateChanged,
+        fields_changed: fieldsChanged,
         title: record.title,
         fields: record.fields,
         updated_by: record.updatedBy || `${connector.provider}:unattributed`,
@@ -813,7 +824,7 @@ export class ConnectorService implements OnApplicationBootstrap {
     if (prior) counters.twinsUpdated++;
     else counters.twinsCreated++;
 
-    if (stateChanged && record.status) {
+    if ((stateChanged && record.status) || fieldsChanged) {
       await this.addPropagationCounters(twinEvent.event_id, counters);
     }
     return prior ? 'updated' : 'created';
@@ -828,7 +839,10 @@ export class ConnectorService implements OnApplicationBootstrap {
     const payload = event.payload || {};
     const orgId = String(payload.org_id || '');
     const twinId = String(payload.twin_id || event.work_item_id || '');
-    if (!orgId || !twinId || payload.state_changed === false) return;
+    // A field-mapping-relevant change (e.g. priority) can arrive with no state change at all, so
+    // this only bails when *neither* changed — `fields_changed` defaults true for events (like an
+    // operator field edit) that predate this flag and always mean something worth propagating.
+    if (!orgId || !twinId || (payload.state_changed === false && payload.fields_changed === false)) return;
 
     const existingReceipt = await this.dbService.db.query<any>(
       `SELECT status FROM integration_connector_propagations WHERE source_event_id = $1 AND org_id = $2`,
@@ -853,7 +867,13 @@ export class ConnectorService implements OnApplicationBootstrap {
       immutable_id: source.external_id,
     };
     const state = String(payload.native_status || payload.state || source.native_status || '');
-    if (!state) return;
+    // `state` always reflects the twin's *current* value, whether or not it just changed, since
+    // it also has to be available to build the echo-suppression payload below. Whether a state
+    // translation should even be attempted downstream depends on the distinct question of whether
+    // it *changed* on this event — carried through separately so a fields-only change is never
+    // mistaken for one with an (unmapped, and therefore held) state transition.
+    const stateChanged = payload.state_changed === true;
+    const sourceFields = (payload.fields && typeof payload.fields === 'object' ? payload.fields : parseJson(source.payload, {})) as Record<string, unknown>;
 
     await this.dbService.db.query(
       `INSERT INTO integration_connector_propagations
@@ -865,10 +885,21 @@ export class ConnectorService implements OnApplicationBootstrap {
 
     const skipEchoCheck = event.event_type === 'ConnectorOperatorStateWritten';
     if (!skipEchoCheck) {
+      // A write we made ourselves only ever touches fields a published mapping actually writes to
+      // this endpoint, so the check is restricted to that set — comparing the twin's *entire*
+      // field set would treat an unrelated concurrent change on some other field as if it broke
+      // the echo match.
+      const writtenFieldNames = await this.fieldMappingService.writtenFieldNames(orgId, {
+        system: source.provider, entity_type: source.artifact_type,
+      });
+      const watchedFields = pickPaths(sourceFields, writtenFieldNames);
+      // Mirrors exactly what a governed write would have recorded: `state` only when this event's
+      // state actually changed, since a fields-only write never touches state and would otherwise
+      // never content-hash-match against this always-present "current state" value.
       const decision = await this.syncGuardService.evaluateWebhook(orgId, {
         identity,
         actor_id: String(payload.updated_by || `${source.provider}:unattributed`),
-        payload: { state },
+        payload: { ...(stateChanged && state ? { state } : {}), ...(Object.keys(watchedFields).length ? { fields: watchedFields } : {}) },
       });
       if (decision.suppressed) {
         await this.dbService.db.query(
@@ -905,8 +936,12 @@ export class ConnectorService implements OnApplicationBootstrap {
          ON CONFLICT (source_event_id, target_twin_id) WHERE source_event_id IS NOT NULL DO NOTHING`,
         [
           workOrderId, orgId, event.event_id,
-          JSON.stringify({ identity, state, fields: payload.fields || parseJson(source.payload, {}), title: payload.title || source.title }),
-          source.connector_id, target.connector_id, target.id, target.artifact_type, target.external_id, state,
+          JSON.stringify({ identity, state: state || null, stateChanged, fields: sourceFields, title: payload.title || source.title }),
+          source.connector_id, target.connector_id, target.id, target.artifact_type, target.external_id,
+          // The real target state, if any, is only known once state-mapping translation runs;
+          // storing the (unchanged) current state here would leak through as a stale write for a
+          // fields-only propagation, since `targetState` below defaults from this column.
+          stateChanged ? state || null : null,
         ],
       );
     }
@@ -1035,7 +1070,7 @@ export class ConnectorService implements OnApplicationBootstrap {
     const target = await this.getConnector(orgId, work.target_connector_id);
     const adapter = this.getAdapter(target.provider);
     let transactionId: string | null = work.transaction_id || null;
-    let targetState = String(work.target_state);
+    let targetState: string | undefined = work.target_state ?? undefined;
     let fields = parseJson<Record<string, unknown>>(work.fields, {});
     let translationInProgress = work.origin === 'state_propagation' && !transactionId;
     try {
@@ -1047,6 +1082,7 @@ export class ConnectorService implements OnApplicationBootstrap {
                     SELECT prior.target_state FROM integration_connector_work_orders prior
                     WHERE prior.org_id = twin.org_id AND prior.target_twin_id = twin.id
                       AND prior.queue_position < $3 AND prior.status IN ('executed', 'noop')
+                      AND prior.target_state IS NOT NULL
                     ORDER BY prior.queue_position DESC LIMIT 1
                   ), twin.native_status) AS effective_status
            FROM integration_canonical_twins twin WHERE twin.id = $1 AND twin.org_id = $2`,
@@ -1054,23 +1090,66 @@ export class ConnectorService implements OnApplicationBootstrap {
         );
         const twin = targetTwin.rows[0];
         if (!twin) throw new Error(`Target twin ${work.target_twin_id} no longer exists`);
-        const translation = await this.stateMappingService.translate(orgId, {
-          source_identity: sourcePayload.identity,
-          target_identity: { system: twin.provider, entity_type: twin.artifact_type, immutable_id: twin.external_id },
-          source_state: sourcePayload.state,
-          current_target_state: twin.effective_status || null,
-          target_fields: sourcePayload.fields || {},
-          dry_run: false,
-        }, `connector:${work.source_connector_id || target.id}`);
-        transactionId = translation.transaction_id;
-        if (translation.status !== 'ready' || !transactionId || !translation.mapped_target_state) {
-          const message = translation.message || 'State translation requires operator review';
+        const sourceIdentity: SyncIdentity = sourcePayload.identity;
+        const targetIdentity: SyncIdentity = { system: twin.provider, entity_type: twin.artifact_type, immutable_id: twin.external_id };
+        const sourceFields = (sourcePayload.fields || {}) as Record<string, unknown>;
+
+        // US13.1 state translation and US17.2 field-mapping translation are independent; a
+        // composite work order carries whichever of the two actually apply. Neither is attempted
+        // unless there is something for it to translate, so a fields-only propagation never
+        // touches state-mapping, and a state-only one (no published field mapping) never touches
+        // field-mapping.
+        let holdReason: string | null = null;
+        let holdMessage: string | null = null;
+
+        if (sourcePayload.stateChanged && sourcePayload.state) {
+          const translation = await this.stateMappingService.translate(orgId, {
+            source_identity: sourceIdentity,
+            target_identity: targetIdentity,
+            source_state: sourcePayload.state,
+            current_target_state: twin.effective_status || null,
+            target_fields: sourceFields,
+            dry_run: false,
+          }, `connector:${work.source_connector_id || target.id}`);
+          transactionId = translation.transaction_id;
+          if (translation.status !== 'ready' || !transactionId || !translation.mapped_target_state) {
+            holdReason = translation.reason;
+            holdMessage = translation.message || 'State translation requires operator review';
+          } else {
+            const required = await this.dbService.db.query<any>(
+              `SELECT required_target_fields FROM integration_state_sync_transactions WHERE id = $1 AND org_id = $2`,
+              [translation.transaction_id, orgId],
+            );
+            const requiredPaths: string[] = parseJson(required.rows[0]?.required_target_fields, []);
+            targetState = translation.mapped_target_state;
+            fields = { ...fields, ...pickPaths(sourceFields, requiredPaths) };
+          }
+        }
+
+        if (!holdReason) {
+          const fieldTranslation = await this.fieldMappingService.translate(orgId, sourceIdentity, targetIdentity, {
+            sourceFields,
+            sourceState: sourcePayload.state || null,
+            targetState: twin.effective_status || null,
+          });
+          if (fieldTranslation) {
+            if (fieldTranslation.status === 'held') {
+              const first = fieldTranslation.outcomes.find((outcome) => outcome.status === 'held');
+              holdReason = 'field_mapping_held';
+              holdMessage = (first && 'message' in first ? first.message : null) || 'Field mapping requires operator review';
+            } else {
+              fields = { ...fields, ...fieldTranslation.fields };
+            }
+          }
+        }
+
+        if (holdReason) {
           const history = this.appendAttempt(work.attempt_history, {
             attempt: attempts,
             startedAt,
             completedAt: new Date().toISOString(),
             outcome: 'held',
-            error: message,
+            error: holdMessage || undefined,
           });
           await this.withEvent(async (tx) => {
             await tx.query(
@@ -1078,7 +1157,7 @@ export class ConnectorService implements OnApplicationBootstrap {
                SET transaction_id = $1, status = 'held', last_error = $2, attempt_history = $3,
                    claimed_by = NULL, claim_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
                WHERE id = $4 AND org_id = $5 AND claimed_by = $6`,
-              [transactionId, message.slice(0, 500), JSON.stringify(history), workOrderId, orgId, claimId],
+              [transactionId, (holdMessage || '').slice(0, 500), JSON.stringify(history), workOrderId, orgId, claimId],
             );
             await tx.query(
               `UPDATE integration_canonical_twins SET sync_state = 'paused', updated_at = CURRENT_TIMESTAMP
@@ -1089,21 +1168,15 @@ export class ConnectorService implements OnApplicationBootstrap {
               work_order_id: workOrderId,
               transaction_id: transactionId,
               target_twin_id: work.target_twin_id,
-              reason: translation.reason,
-              error: message,
+              reason: holdReason,
+              error: holdMessage,
             });
           });
           return 'held';
         }
 
-        const required = await this.dbService.db.query<any>(
-          `SELECT required_target_fields FROM integration_state_sync_transactions WHERE id = $1 AND org_id = $2`,
-          [translation.transaction_id, orgId],
-        );
-        const requiredPaths: string[] = parseJson(required.rows[0]?.required_target_fields, []);
-        targetState = translation.mapped_target_state;
-        fields = pickPaths(sourcePayload.fields || {}, requiredPaths);
-        if (sameState(twin.effective_status, targetState)) {
+        const noop = (!targetState || sameState(twin.effective_status, targetState)) && Object.keys(fields).length === 0;
+        if (noop) {
           const history = this.appendAttempt(work.attempt_history, {
             attempt: attempts,
             startedAt,
@@ -1116,7 +1189,7 @@ export class ConnectorService implements OnApplicationBootstrap {
                  attempt_history = $4, claimed_by = NULL, claim_expires_at = NULL,
                  updated_at = CURRENT_TIMESTAMP
              WHERE id = $5 AND org_id = $6 AND claimed_by = $7`,
-            [transactionId, targetState, JSON.stringify(fields), JSON.stringify(history), workOrderId, orgId, claimId],
+            [transactionId, targetState ?? null, JSON.stringify(fields), JSON.stringify(history), workOrderId, orgId, claimId],
           );
           return 'noop';
         }
@@ -1124,12 +1197,12 @@ export class ConnectorService implements OnApplicationBootstrap {
           `UPDATE integration_connector_work_orders
            SET transaction_id = $1, target_state = $2, fields = $3, updated_at = CURRENT_TIMESTAMP
            WHERE id = $4 AND org_id = $5 AND claimed_by = $6`,
-          [transactionId, targetState, JSON.stringify(fields), workOrderId, orgId, claimId],
+          [transactionId, targetState ?? null, JSON.stringify(fields), workOrderId, orgId, claimId],
         );
         translationInProgress = false;
       }
 
-      const result = await adapter.pushStateChange(this.context(target), {
+      const result = await adapter.pushUpdate(this.context(target), {
         entityType: work.target_entity_type,
         externalId: work.target_external_id,
         targetState,
@@ -1138,7 +1211,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       await this.syncGuardService.recordIntegrationWrite(orgId, {
         identity: { system: target.provider, entity_type: work.target_entity_type, immutable_id: work.target_external_id },
         service_account_id: `connector:${target.id}`,
-        payload: { state: targetState },
+        payload: { ...(targetState ? { state: targetState } : {}), ...(Object.keys(fields).length ? { fields } : {}) },
       });
       const history = this.appendAttempt(work.attempt_history, {
         attempt: attempts,
@@ -1178,7 +1251,11 @@ export class ConnectorService implements OnApplicationBootstrap {
             twin_id: work.target_twin_id,
             identity: { system: target.provider, entity_type: work.target_entity_type, immutable_id: work.target_external_id },
             native_status: targetState,
-            state_changed: true,
+            // Only the field the operator actually edited changed: a field-only edit must not
+            // make executeWorkOrder attempt a state-mapping translation downstream, and a state
+            // edit must not be mistaken for a field-mapping change with no fields to translate.
+            state_changed: Boolean(targetState),
+            fields_changed: Object.keys(fields).length > 0,
             updated_by: `connector:${target.id}`,
             fields: parseJson<any>(work.source_payload, {}).fields || {},
           } : {}),
@@ -1666,22 +1743,30 @@ export class ConnectorService implements OnApplicationBootstrap {
       });
     }
 
-    const value = policy.allowedValues?.find((candidate) => sameState(candidate, input.value)) || null;
+    // An enumerated field (state, or a field whose discovered schema has allowed values) must
+    // match one of them exactly; a free-text field accepts the trimmed value as given.
+    const requestedValue = String(input.value).trim();
+    const value = policy.allowedValues
+      ? policy.allowedValues.find((candidate) => sameState(candidate, requestedValue)) || null
+      : requestedValue;
     if (!value) {
       throw new UnprocessableEntityException({
         statusCode: 422,
         decision: 'blocked',
         field: policy.field,
         reason: 'invalid_value',
-        message: `'${String(input.value).trim()}' is not a ${providerName(twin.provider)} ${policy.label.toLowerCase()}. Allowed: ${(policy.allowedValues || []).join(', ')}`,
+        message: `'${requestedValue}' is not a ${providerName(twin.provider)} ${policy.label.toLowerCase()}. Allowed: ${(policy.allowedValues || []).join(', ')}`,
       });
     }
+    const isState = policy.field === 'state';
+    const currentValue = isState ? twin.status : (twin.payload[policy.nativeField] ?? null);
     const empty = { prepared: 0, executed: 0, held: 0 };
-    if (sameState(twin.status, value)) {
-      return { decision: 'noop', twinId, field: policy.field, value, propagation: empty, message: `${twin.nativeKey || twin.externalId} is already ${value}` };
+    if (isState ? sameState(currentValue, value) : stableStringify(currentValue ?? null) === stableStringify(value)) {
+      return { decision: 'noop', twinId, field: policy.field, value, propagation: empty, message: `${twin.nativeKey || twin.externalId} already has ${policy.label} = ${value}` };
     }
 
     const workOrderId = randomUUID();
+    const editedFields = isState ? twin.payload : { ...twin.payload, [policy.nativeField]: value };
     await this.withEvent(async (tx) => {
       await tx.query(
         `INSERT INTO integration_connector_work_orders
@@ -1689,10 +1774,11 @@ export class ConnectorService implements OnApplicationBootstrap {
           target_connector_id, target_twin_id, target_entity_type, target_external_id, target_state,
           fields, status, created_at, updated_at)
          VALUES ($1, $2, NULL, 'operator_edit', $3, $4, NULL, $5, $6, $7, $8, $9,
-                 '{}', 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+                 $10, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
         [
-          workOrderId, orgId, actorId, JSON.stringify({ title: twin.title || '', fields: twin.payload }),
-          twin.connectorId, twinId, twin.artifactType, twin.externalId, value,
+          workOrderId, orgId, actorId, JSON.stringify({ title: twin.title || '', fields: editedFields }),
+          twin.connectorId, twinId, twin.artifactType, twin.externalId, isState ? value : null,
+          JSON.stringify(isState ? {} : { [policy.nativeField]: value }),
         ],
       );
       return this.event(orgId, twinId, actorId, 'TwinEditRouted', {
@@ -1700,7 +1786,7 @@ export class ConnectorService implements OnApplicationBootstrap {
         work_order_id: workOrderId,
         connector_id: twin.connectorId,
         field: policy.field,
-        before: twin.status || null,
+        before: currentValue,
         after: value,
       });
     });
@@ -1858,9 +1944,35 @@ export class ConnectorService implements OnApplicationBootstrap {
       message,
       ...(stateSchema?.allowedValues?.length ? { allowedValues: stateSchema.allowedValues } : {}),
     }];
+    const writableFields = new Set(writeBack.fields || []);
     for (const [fieldId, authority] of Object.entries(twin.fieldAuthority)) {
       if (fieldId === nativeState) continue;
       const schema = entity?.fields.find((field) => field.id === fieldId);
+      if (writableFields.has(fieldId)) {
+        // Same self-write gates as state (capability, availability), plus this specific field
+        // must be in the connector's own writeBack.fields allow-list — never on by default.
+        let fieldReason: TwinFieldPolicy['reason'] = 'write_back_enabled';
+        let fieldMessage = `Changes are written to ${provider} through an audited connector work order.`;
+        if (!canWrite) {
+          fieldReason = 'capability_missing';
+          fieldMessage = `${connector.name} cannot write fields back to ${provider}.`;
+        } else if (!available) {
+          fieldReason = 'connector_unavailable';
+          fieldMessage = `${connector.name} is ${connector.status}; field changes are refused until it is active.`;
+        }
+        policies.push({
+          field: fieldId,
+          nativeField: fieldId,
+          label: schema?.name || fieldId,
+          value: twin.payload[fieldId] ?? null,
+          authority,
+          editable: fieldReason === 'write_back_enabled',
+          reason: fieldReason,
+          message: fieldMessage,
+          ...(schema?.allowedValues?.length ? { allowedValues: schema.allowedValues } : {}),
+        });
+        continue;
+      }
       policies.push({
         field: fieldId,
         nativeField: fieldId,
@@ -2026,15 +2138,15 @@ export class ConnectorService implements OnApplicationBootstrap {
   }
 
   private validateWriteBack(input: unknown): ConnectorWriteBackPolicy {
-    if (input === undefined || input === null) return { state: false };
+    if (input === undefined || input === null) return { state: false, fields: [] };
     if (typeof input !== 'object' || Array.isArray(input)) throw new ConnectorConfigurationError('writeBack must be an object');
-    const unknown = Object.keys(input).filter((key) => key !== 'state');
+    const unknown = Object.keys(input).filter((key) => !['state', 'fields'].includes(key));
     if (unknown.length) {
-      throw new ConnectorConfigurationError(`writeBack supports only 'state'; no outbound mapping exists for ${unknown.join(', ')}`);
+      throw new ConnectorConfigurationError(`writeBack supports only 'state' and 'fields'; no outbound mapping exists for ${unknown.join(', ')}`);
     }
     const state = (input as Record<string, unknown>).state;
     if (state !== undefined && typeof state !== 'boolean') throw new ConnectorConfigurationError('writeBack.state must be true or false');
-    return { state: state === true };
+    return { state: state === true, fields: stringList((input as Record<string, unknown>).fields) };
   }
 
   private validateRequiredFields(input: unknown): Record<string, string[]> | undefined {
