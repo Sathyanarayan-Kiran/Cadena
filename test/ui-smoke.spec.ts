@@ -1004,6 +1004,93 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     await page.evaluate(() => (document.querySelector('#twinDialog') as HTMLDialogElement).close());
   });
 
+  it('checks, blocks, saves, publishes, runs and disables a scheduled native query', async () => {
+    const cardButton = (name: string, label: string) => page.evaluate((cardName, buttonLabel) => {
+      const card = Array.from(document.querySelectorAll('#nativeQueryList .mapping-card')).find((node) => node.textContent?.includes(cardName));
+      const button = Array.from(card?.querySelectorAll('button') ?? []).find((node) => node.textContent === buttonLabel) as HTMLButtonElement | undefined;
+      button?.click();
+      return Boolean(button);
+    }, name, label);
+    // The dialog's sticky footer covers a control that Puppeteer scrolls to the bottom edge, so centre it first.
+    const centeredClick = async (selector: string) => {
+      await page.$eval(selector, (node) => node.scrollIntoView({ block: 'center' }));
+      await page.click(selector);
+    };
+    const cardText = (name: string) => page.evaluate((cardName) => {
+      const card = Array.from(document.querySelectorAll('#nativeQueryList .mapping-card')).find((node) => node.textContent?.includes(cardName));
+      return (card as HTMLElement | undefined)?.innerText ?? '';
+    }, name);
+
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openNativeQueriesFromNav')?.click());
+    await page.waitForSelector('#nativeQueryDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => !document.querySelector('#nativeQueryList .skeleton'), { timeout: 10000 });
+
+    // The Jira connector is offered with its own language and entity type.
+    const jiraOption = await page.$$eval('#nativeQueryConnector option', (options) =>
+      options.map((option) => ({ value: (option as HTMLOptionElement).value, text: option.textContent || '' })).find((option) => option.text.includes('JQL')));
+    expect(jiraOption).toBeTruthy();
+    await page.select('#nativeQueryConnector', jiraOption!.value);
+    expect(await page.$eval('#nativeQueryEntity', (node) => (node as HTMLInputElement).value)).toBe('issue');
+    expect(await textOf('#nativeQueryLanguageHint')).toContain('JQL');
+
+    // An unbounded query is explained before it is saved, and cannot be published afterwards.
+    await page.type('#nativeQueryName', 'UI unbounded');
+    await page.type('#nativeQueryText', 'status = Open');
+    await centeredClick('#checkNativeQueryButton');
+    await page.waitForFunction(() => (document.querySelector('#nativeQueryCheck')?.textContent ?? '').includes('no selective scope'), { timeout: 10000 });
+    expect(await textOf('#nativeQueryCheck')).toContain('project = "CAD"');
+    await page.click('#saveNativeQueryButton');
+    await page.waitForFunction(() => (document.querySelector('#nativeQueryList')?.textContent ?? '').includes('UI unbounded'), { timeout: 10000 });
+    const draftText = await cardText('UI unbounded');
+    expect(draftText).toContain('draft');
+    expect(draftText).toContain('no selective scope');
+    expect(await cardButton('UI unbounded', 'Publish')).toBe(true);
+    await page.waitForFunction(() => !(document.querySelector('#nativeQueryAlert') as HTMLElement).hidden, { timeout: 10000 });
+    expect(await textOf('#nativeQueryAlert')).toContain('Cannot publish');
+    expect(await cardText('UI unbounded')).toContain('draft');
+    // Chromium logs the deliberately refused publish as a network error; nothing else is excused.
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((message) => !/Failed to load resource.*422/.test(message)));
+
+    // A bounded query checks clean, saves, publishes, runs and can be disabled. The sandbox's seeded
+    // records are timestamped 2026-09-22, so the run starts from the day before.
+    await page.type('#nativeQueryName', 'UI CAD watch');
+    await page.$eval('#nativeQueryText', (node) => { (node as HTMLTextAreaElement).value = ''; });
+    await page.type('#nativeQueryText', 'project = CAD');
+    await page.$eval('#nativeQueryStart', (node) => { (node as HTMLInputElement).value = '2026-09-21T00:00'; });
+    await centeredClick('#checkNativeQueryButton');
+    await page.waitForFunction(() => (document.querySelector('#nativeQueryCheck')?.textContent ?? '').includes('Valid'), { timeout: 10000 });
+    await page.click('#saveNativeQueryButton');
+    await page.waitForFunction(() => (document.querySelector('#nativeQueryList')?.textContent ?? '').includes('UI CAD watch'), { timeout: 10000 });
+    expect(await cardButton('UI CAD watch', 'Publish')).toBe(true);
+    await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll('#nativeQueryList .mapping-card')).find((node) => node.textContent?.includes('UI CAD watch'));
+      return Boolean(card?.textContent?.includes('published'));
+    }, { timeout: 10000 });
+    expect(await cardText('UI CAD watch')).toContain('watermark');
+
+    expect(await cardButton('UI CAD watch', 'Run now')).toBe(true);
+    await page.waitForFunction(() => (document.querySelector('#toastRegion')?.textContent ?? '').includes('Run complete'), { timeout: 15000 });
+    await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll('#nativeQueryList .mapping-card')).find((node) => node.textContent?.includes('UI CAD watch'));
+      return Boolean(card?.textContent?.includes('last run succeeded'));
+    }, { timeout: 10000 });
+
+    expect(await cardButton('UI CAD watch', 'Disable')).toBe(true);
+    await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll('#nativeQueryList .mapping-card')).find((node) => node.textContent?.includes('UI CAD watch'));
+      return Boolean(card?.textContent?.includes('disabled'));
+    }, { timeout: 10000 });
+    expect(await cardButton('UI CAD watch', 'Publish')).toBe(true);
+
+    // WIQL can be checked but is reported as not schedulable.
+    await page.select('#nativeQueryCheckLanguage', 'wiql');
+    await page.$eval('#nativeQueryText', (node) => { (node as HTMLTextAreaElement).value = "SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = 'Payments'"; });
+    await centeredClick('#checkNativeQueryButton');
+    await page.waitForFunction(() => (document.querySelector('#nativeQueryCheck')?.textContent ?? '').includes('cannot be scheduled') || (document.querySelector('#nativeQueryCheck')?.textContent ?? '').includes('not scheduled'), { timeout: 10000 });
+    expect(await textOf('#nativeQueryCheck')).toContain('Valid');
+    await page.evaluate(() => (document.querySelector('#nativeQueryDialog') as HTMLDialogElement).close());
+  });
+
   it('flags a degraded source and stays within a phone viewport without console errors', async () => {
     await onboard(jiraConfig('Overlapping Jira'));
     await reload();
@@ -1023,6 +1110,17 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     await openTwinRow('CAD-102');
     const drawerFits = await page.$eval('#twinDialog', (node) => node.getBoundingClientRect().width <= window.innerWidth + 1);
     expect(drawerFits).toBe(true);
+
+    // The scheduled-query studio holds long error text and query strings; it must wrap, not overflow.
+    await page.evaluate(() => (document.querySelector('#twinDialog') as HTMLDialogElement).close());
+    await page.click('#mobileMenuButton');
+    await page.waitForSelector('#sidebar.open', { timeout: 5000 });
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openNativeQueriesFromNav')?.click());
+    await page.waitForSelector('#nativeQueryDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelectorAll('#nativeQueryList .mapping-card').length > 0, { timeout: 10000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
+    expect(await page.$eval('#nativeQueryDialog', (node) => node.getBoundingClientRect().width <= window.innerWidth + 1)).toBe(true);
+    await page.evaluate(() => (document.querySelector('#nativeQueryDialog') as HTMLDialogElement).close());
     expect(consoleErrors).toEqual([]);
   });
 });

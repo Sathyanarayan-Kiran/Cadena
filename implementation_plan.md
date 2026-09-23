@@ -2,6 +2,45 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — US17.3 scheduled native-query triggers — 2026-09-23
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-23, in three commits (`8c507ac`, `4e9199f` and the studio/docs commit that follows them), building on the US17.2 increment below. Nothing there is superseded.
+
+**Status:** US17.3 moves from not-started to **partial**. The ledger moves to **39 done / 7 partial / 27 not started**. The second acceptance criterion (an unbounded query is blocked at publish with an actionable error) is met for JQL, encoded queries and WIQL. The first (matching records changed since the saved watermark are enqueued) is met for JQL and ServiceNow encoded queries against the deterministic fakes, but **not for WIQL**, which is validated and cannot be run: Cadena has no Azure DevOps adapter. Nothing has run against a live Jira or ServiceNow tenant. The story stays partial until both of those close.
+
+### What shipped
+
+- **Validation (`native-query-validator.ts`).** Pure functions for JQL, ServiceNow encoded queries and WIQL. Cadena appends its own watermark predicate and ordering to every scheduled query, so a run is always bounded in time; the validator prevents the remaining case, a query that would read *every record* inside that window. Every `OR` branch (JQL/WIQL) or `^NQ` part (encoded) needs a selective scope, and a scope on only one alternative does not count. Negations, ranges, wildcards, boolean flags, text search and `NOT (...)` never count. A user `ORDER BY`/`ORDERBY` and any filter on the managed watermark field are rejected. Keywords inside quoted strings are ignored. Each finding carries a `hint` naming the clause to add. **This is a static heuristic**: it cannot see which fields a given instance has indexed, and it is documented as such rather than as an indexing guarantee.
+- **Definitions (`integration_native_queries`, `NativeQueryService`).** Drafts, published and disabled queries bound to one connector; the language is derived from its provider and the entity type must be one it exposes. The starting watermark is fixed at publication from `start_from` (default: now, at most 366 days back), so a trigger can never replay older history. Re-publishing identical text keeps the saved watermark; changed text restarts it, because it could match records that changed before it. Editing a published query requires disabling it first. Publish re-validates and returns HTTP 422 with the validator's message and full payload.
+- **Runner.** Adapters gained an optional `fetchNativeQuery`. The Jira adapter ANDs the operator's parenthesised query with the connector's own project scope and the watermark, so a query can narrow the connector's scope but never widen it. The ServiceNow adapter appends the watermark to *every* `^NQ` part (a trailing condition alone would only bound the last one). Both refuse to run without a watermark, and `fetchChanges` and `fetchNativeQuery` now share one paging routine per adapter. Records are enqueued through the same dedupe key and durable queue as ordinary polling (`ConnectorService.acceptRecords`, generalized from `acceptIngestionPage`), so the one-minute JQL overlap re-reads are dropped; the records and the query's watermark commit in one transaction, the watermark never moves backwards, and the connector's own polling cursor is never touched. A run that enqueued anything then drains the ingestion queue under the existing sync lease (`drainIngestionQueue`), or leaves the records durably queued if a sync holds it.
+- **Concurrency and failure.** A run takes a database lease first, so concurrent schedulers or an operator can never run one query twice. Disabling a query mid-run makes the run abandon its whole transaction, records included. Every run re-validates the stored query, so one edited at rest still cannot scan unbounded. A provider failure keeps the watermark, records the error and backs off exponentially up to six hours; a run that leaves pages behind is due again immediately.
+- **Scheduler (`NativeQueryScheduler`).** An in-process timer in the style of the SLA aging engine, 30 seconds by default. Multiple instances are safe because each due query is claimed by lease. `CADENA_NATIVE_QUERY_SCHEDULER=disabled` turns it off and `CADENA_NATIVE_QUERY_TICK_MS` (minimum 1000) sets the period. Live provider traffic is unchanged: it is still gated by `CADENA_CONNECTOR_LIVE_HTTP`.
+- **API and studio.** `POST/GET/PATCH /integrations/native-queries`, `/validate`, `/:id/publish`, `/:id/run`, `/:id/disable`. A **Scheduled queries** dialog in the studio checks a query (including WIQL, reported as not schedulable), saves drafts, and publishes, runs and disables them, showing each unbounded-scan error and its hint on the draft's card. Audit events: `NativeQueryDraftCreated`, `NativeQueryPublished`, `NativeQueryDisabled`, `NativeQueryRunCompleted`, `NativeQueryRunFailed`.
+- **Fakes made more faithful.** `FakeJiraApi` now evaluates a query's own `status`/`issuetype`/`priority` equalities and requires *every* `project` clause to hold, and `FakeServiceNowApi` evaluates equality/`IN` conditions with `^OR` and `^NQ`, so the tests prove filtering and scope confinement rather than assuming them.
+
+### Left open, deliberately
+
+- **WIQL execution.** Needs an Azure DevOps connector adapter, which is also part of US17.1's remaining scope. Until then WIQL is check-only.
+- **Live-tenant validation.** Encoded-query `^NQ` behaviour combined with a trailing `ORDERBY`, JQL minute-precision overlap, and time-zone handling of the watermark are implemented from provider documentation and exercised only against the fakes. They need a real Jira and ServiceNow tenant, and explicit authorisation, before this story can be called done.
+- **The indexing check is a heuristic**, not a query-plan analysis.
+- **In-process scheduling.** There is no dedicated worker or managed scheduler; leases make several instances safe, but the timer lives in the API process.
+- **UI polish, not acceptance gaps.** The studio creates, publishes, runs and disables queries but does not edit an existing one (the `PATCH` endpoint does), and there is no per-run history view beyond the last-run fields and the audit events.
+- **History further back than 366 days** belongs to US17.4's governed backfill.
+
+### Verification
+
+`test/us17.3.spec.ts` (30 tests): validator behaviour for all three languages (accepted and blocked shapes, quoted keywords, malformed input); the definition lifecycle through the API; and runs against the fakes: incremental enqueue with quiet reruns (including the JQL overlap), connector-scope confinement, `^NQ` bounding, a query that stops being bounded at rest, failure/backoff/recovery, a 130-record backlog drained in resumable pages, mid-run disable, a paused connector, scheduler due-time and lease handling, and tenant isolation. The `^NQ` and scope-confinement tests were confirmed to fail when their behaviour is deliberately broken. `test/ui-smoke.spec.ts` gained one browser test (check, blocked publish, save, publish, run, disable, and a WIQL check) and its 390px test now also checks the new dialog. **236 non-browser tests across 49 files and 24 browser tests, all passing.** No live provider traffic was generated.
+
+### Primary files added / updated by Claude
+
+- `src/modules/connectors/native-query/native-query.types.ts`, `native-query-validator.ts`, `native-query.service.ts`, `native-query.controller.ts`, `native-query.scheduler.ts` (all new)
+- `src/modules/connectors/connector.interface.ts`, `connector.service.ts` (`acceptRecords`, `enqueueNativeQueryRecords`, `fetchNativeQueryPage`, `drainIngestionQueue`), `connector.module.ts`
+- `src/modules/connectors/jira-connector.adapter.ts`, `servicenow-connector.adapter.ts`, `sandbox/provider-sandbox.ts`
+- `src/database/database.service.ts` (`integration_native_queries`)
+- `public/index.html` (Scheduled queries dialog)
+- `test/us17.3.spec.ts` (new, 30 tests), `test/ui-smoke.spec.ts` (1 new test, 390px test extended)
+- `implementation-status.json`, `README.md`, `walkthrough.md`, `implementation_plan.md`; `public/status.html` regenerated with `npm run tracker`
+
 ## Claude — US17.2 governed visual field mappings and field-level write-back — 2026-09-23
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-23, building on the projection-closure increment below (nothing there is superseded) and closing the field-level portion of the US13.1/US20.2 write-back boundary that both left open.
