@@ -25,7 +25,20 @@ export type ConnectorCapability =
   | 'custom_field_discovery'
   | 'state_discovery'
   | 'incremental_query'
-  | 'state_write';
+  | 'state_write'
+  | 'comment_read'
+  | 'comment_write';
+
+export type ConnectorCommentDirection = 'from_source' | 'to_source' | 'bidirectional';
+
+/** Public-comment synchronization is deliberately independent for every connector and off by default. */
+export interface ConnectorCommentSyncPolicy {
+  enabled: boolean;
+  direction: ConnectorCommentDirection;
+  /** Stable provider account ids. A non-empty allow-list is restrictive; the block-list always wins. */
+  authorAllowList: string[];
+  authorBlockList: string[];
+}
 
 export interface ConnectorConfigDto {
   name: string;
@@ -42,6 +55,8 @@ export interface ConnectorConfigDto {
   requiredFields?: Record<string, string[]>;
   /** Operator edits Cadena may write back to this source. Everything is read-only by default. */
   writeBack?: ConnectorWriteBackPolicy;
+  /** Public comments only. Private work notes/restricted comments are discarded inside the adapter. */
+  commentSync?: ConnectorCommentSyncPolicy;
   /** How twins become governed WorkItems: owning team, type map and owner map. */
   projection?: Record<string, unknown>;
 }
@@ -126,6 +141,32 @@ export interface ExternalRecordPayload {
   updatedBy?: string;
 }
 
+/** A provider comment that the adapter has already classified as customer-visible. */
+export interface ExternalPublicComment {
+  externalId: string;
+  body: string;
+  authorId: string;
+  authorName: string;
+  createdAt: string;
+  nativeUrl?: string;
+  /** Cadena marker found on a returning transferred comment. */
+  originMarker?: string;
+}
+
+export interface TwinPublicComment {
+  id: string;
+  sourceTwinId: string;
+  sourceConnectorId: string;
+  providerCommentId: string;
+  body: string;
+  originalAuthorId: string;
+  originalAuthorName: string;
+  sourceSystem: ConnectorProviderType;
+  sourceCreatedAt: string;
+  nativeUrl?: string;
+  readOnly: true;
+}
+
 export interface CanonicalTwin {
   id: string;
   orgId: string;
@@ -182,6 +223,11 @@ export interface IngestionPollResult {
   workOrdersHeld: number;
   workOrdersExecuted: number;
   workOrdersFailed: number;
+  commentsFetched: number;
+  commentsStored: number;
+  commentsFiltered: number;
+  commentsTransferred: number;
+  commentsFailed: number;
   recordErrors: IngestionRecordError[];
   hasMore: boolean;
   nextCursors: WatermarkCursor[];
@@ -341,6 +387,7 @@ export interface TwinProjectionSummary {
 export interface TwinDetail extends TwinWorkspaceRow {
   fields: TwinFieldPolicy[];
   workOrders: ConnectorWorkOrder[];
+  comments: TwinPublicComment[];
 }
 
 export interface TwinEditResult {

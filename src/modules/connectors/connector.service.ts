@@ -38,6 +38,7 @@ import { ServiceNowConnectorAdapter } from './servicenow-connector.adapter';
 import {
   CanonicalTwin,
   ConnectorCapabilityReport,
+  ConnectorCommentSyncPolicy,
   ConnectorConfigDto,
   ConnectorDiscoveryResult,
   ConnectorHealth,
@@ -50,6 +51,7 @@ import {
   ConnectorWorkOrderStatus,
   ConnectorQueueAttempt,
   ConnectorWriteBackPolicy,
+  ExternalPublicComment,
   ExternalRecordPayload,
   IngestionPollResult,
   TwinCounterpart,
@@ -59,6 +61,7 @@ import {
   TwinWorkspaceRow,
   TwinQueueDeadLetter,
   TwinQueueReinjectionResult,
+  TwinPublicComment,
   WatermarkCursor,
   WorkspaceOverview,
 } from './connector.types';
@@ -87,6 +90,11 @@ interface PollCounters {
   workOrdersHeld: number;
   workOrdersExecuted: number;
   workOrdersFailed: number;
+  commentsFetched: number;
+  commentsStored: number;
+  commentsFiltered: number;
+  commentsTransferred: number;
+  commentsFailed: number;
 }
 
 /**
@@ -187,6 +195,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       tableNames: dto.tableNames === undefined ? undefined : stringList(dto.tableNames).map((table) => table.toLowerCase()),
       requiredFields: this.validateRequiredFields(dto.requiredFields),
       writeBack: this.validateWriteBack(dto.writeBack),
+      commentSync: this.validateCommentSync(dto.commentSync),
       projection: TwinProjectionService.validateConfig(dto.projection),
     }));
     this.guard(() => adapter.validateConfig(config));
@@ -375,6 +384,30 @@ export class ConnectorService implements OnApplicationBootstrap {
     return this.getConnector(orgId, connectorId);
   }
 
+  /** Public-comment synchronization is a separate, explicitly opt-in connector policy. */
+  public async configureCommentSync(
+    orgId: string,
+    connectorId: string,
+    input: unknown,
+    actorId = 'system',
+  ): Promise<ConnectorRecord> {
+    const connector = await this.getConnector(orgId, connectorId);
+    const policy = this.guard(() => this.validateCommentSync(input));
+    await this.withEvent(async (tx) => {
+      await tx.query(
+        `UPDATE integration_connectors SET config = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND org_id = $3`,
+        [JSON.stringify({ ...connector.config, commentSync: policy }), connectorId, orgId],
+      );
+      return this.event(orgId, connectorId, actorId, 'ConnectorCommentSyncConfigured', {
+        connector_id: connectorId,
+        provider: connector.provider,
+        before: connector.config.commentSync || this.validateCommentSync(undefined),
+        after: policy,
+      });
+    });
+    return this.getConnector(orgId, connectorId);
+  }
+
   /**
    * Sets how this connector's twins are projected as WorkItems (owning team, type and owner
    * mapping) and re-projects its existing twins. Source fields stay owned by the provider.
@@ -449,11 +482,19 @@ export class ConnectorService implements OnApplicationBootstrap {
         workOrdersHeld: 0,
         workOrdersExecuted: 0,
         workOrdersFailed: 0,
+        commentsFetched: 0,
+        commentsStored: 0,
+        commentsFiltered: 0,
+        commentsTransferred: 0,
+        commentsFailed: 0,
       };
       await this.processDueWorkOrders(orgId, connector, counters);
+      await this.processDueCommentDeliveries(orgId, counters);
 
       const recordErrors: IngestionPollResult['recordErrors'] = [];
       await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
+      await this.ensureConnectorCommentDeliveries(orgId, connector.id);
+      await this.processDueCommentDeliveries(orgId, counters);
       const nextCursors: WatermarkCursor[] = [];
       let fetchedCount = 0;
       let hasMore = false;
@@ -492,6 +533,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       }
 
       await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
+      await this.processDueCommentDeliveries(orgId, counters);
       const queued = await this.dbService.db.query<any>(
         `SELECT MIN((payload::jsonb ->> 'updatedAt')::timestamptz) AS oldest,
                 COUNT(*) FILTER (WHERE status IN ('retry', 'dead'))::int AS failures,
@@ -577,8 +619,11 @@ export class ConnectorService implements OnApplicationBootstrap {
       const counters: PollCounters = {
         twinsCreated: 0, twinsUpdated: 0, twinsUnchanged: 0, echoesSuppressed: 0,
         workOrdersPrepared: 0, workOrdersHeld: 0, workOrdersExecuted: 0, workOrdersFailed: 0,
+        commentsFetched: 0, commentsStored: 0, commentsFiltered: 0, commentsTransferred: 0, commentsFailed: 0,
       };
       await this.processDueIngestionRecords(orgId, connector, counters, []);
+      await this.ensureConnectorCommentDeliveries(orgId, connector.id);
+      await this.processDueCommentDeliveries(orgId, counters);
       return true;
     } finally {
       await this.releaseSyncLease(connectorId, leaseOwner);
@@ -780,6 +825,9 @@ export class ConnectorService implements OnApplicationBootstrap {
          WHERE org_id = $1 AND provider = $2 AND artifact_type = $3 AND external_id = $4`,
         [orgId, connector.provider, record.artifactType, record.externalId],
       );
+      if (twin.rows[0]?.id) {
+        await this.syncRecordComments(orgId, connector, record, twin.rows[0].id, counters);
+      }
       const history = this.appendAttempt(job.attempt_history, {
         attempt,
         startedAt,
@@ -957,6 +1005,280 @@ export class ConnectorService implements OnApplicationBootstrap {
     return prior ? 'updated' : 'created';
   }
 
+  // â”€â”€â”€ Public comments (US13.4) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+  /**
+   * Reads comments only when this connector explicitly opts in. The adapter has already removed
+   * ServiceNow work notes and Jira/JSM restricted comments, so private text never enters a queue,
+   * table or event. Stable provider author ids are then screened by the connector policy.
+   */
+  private async syncRecordComments(
+    orgId: string,
+    connector: ConnectorRecord,
+    record: ExternalRecordPayload,
+    twinId: string,
+    counters: PollCounters,
+  ): Promise<void> {
+    const policy = this.commentPolicy(connector);
+    if (!this.commentCanRead(policy)) return;
+    const adapter = this.getAdapter(connector.provider);
+    if (!adapter.fetchPublicComments) {
+      throw new ConnectorConfigurationError(`${connector.provider} does not support public-comment reads`);
+    }
+    const comments = await adapter.fetchPublicComments(this.context(connector), {
+      entityType: record.artifactType,
+      externalId: record.externalId,
+    });
+    counters.commentsFetched += comments.length;
+
+    for (const comment of comments) {
+      if (!this.validPublicComment(comment) || !this.commentAuthorPermitted(policy, comment.authorId)) {
+        counters.commentsFiltered += 1;
+        continue;
+      }
+      if (comment.originMarker) {
+        const echo = await this.dbService.db.query<any>(
+          `SELECT id FROM integration_comment_deliveries
+           WHERE org_id = $1 AND target_connector_id = $2 AND target_twin_id = $3 AND marker = $4`,
+          [orgId, connector.id, twinId, comment.originMarker.toLowerCase()],
+        );
+        if (echo.rows.length) {
+          counters.commentsFiltered += 1;
+          continue;
+        }
+      }
+
+      const commentId = randomUUID();
+      const inserted = await this.dbService.db.query<any>(
+        `INSERT INTO integration_public_comments
+         (id, org_id, source_twin_id, source_connector_id, provider_comment_id, body,
+          original_author_id, original_author_name, source_system, source_created_at, native_url, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+         ON CONFLICT (source_connector_id, provider_comment_id) DO NOTHING RETURNING id`,
+        [
+          commentId, orgId, twinId, connector.id, comment.externalId, comment.body.trim(),
+          comment.authorId, comment.authorName, connector.provider, comment.createdAt,
+          comment.nativeUrl || null,
+        ],
+      );
+      let storedId = inserted.rows[0]?.id as string | undefined;
+      if (storedId) counters.commentsStored += 1;
+      else {
+        const existing = await this.dbService.db.query<any>(
+          `SELECT id FROM integration_public_comments
+           WHERE org_id = $1 AND source_connector_id = $2 AND provider_comment_id = $3`,
+          [orgId, connector.id, comment.externalId],
+        );
+        storedId = existing.rows[0]?.id;
+      }
+      if (storedId) await this.ensureCommentDeliveries(orgId, storedId, twinId);
+    }
+  }
+
+  private validPublicComment(comment: ExternalPublicComment): boolean {
+    return Boolean(comment?.externalId?.trim() && comment?.body?.trim() && comment?.authorId?.trim()
+      && comment?.authorName?.trim() && Number.isFinite(Date.parse(comment?.createdAt)));
+  }
+
+  /** Creates at most one durable delivery for every currently managed counterpart. */
+  private async ensureCommentDeliveries(orgId: string, commentId: string, sourceTwinId: string): Promise<void> {
+    const source = await this.dbService.db.query<any>(
+      `SELECT correlation_node_id FROM integration_canonical_twins WHERE id = $1 AND org_id = $2`,
+      [sourceTwinId, orgId],
+    );
+    const nodeId = source.rows[0]?.correlation_node_id;
+    if (!nodeId) return;
+    const targets = await this.dbService.db.query<any>(
+      `SELECT t.id AS twin_id, t.connector_id, c.config
+       FROM integration_correlation_links l
+       JOIN integration_canonical_twins t
+         ON t.org_id = l.org_id
+        AND t.correlation_node_id = CASE WHEN l.source_node_id = $2 THEN l.target_node_id ELSE l.source_node_id END
+       JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
+       WHERE l.org_id = $1 AND l.relationship = 'counterpart'
+         AND (l.source_node_id = $2 OR l.target_node_id = $2)`,
+      [orgId, nodeId],
+    );
+    for (const target of targets.rows) {
+      const config = parseJson<Record<string, unknown>>(target.config, {});
+      const policy = this.validateCommentSync(config.commentSync);
+      if (!this.commentCanWrite(policy)) continue;
+      const deliveryId = randomUUID();
+      await this.dbService.db.query(
+        `INSERT INTO integration_comment_deliveries
+         (id, org_id, comment_id, target_connector_id, target_twin_id, marker, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT (comment_id, target_twin_id) DO NOTHING`,
+        [deliveryId, orgId, commentId, target.connector_id, target.twin_id, deliveryId],
+      );
+    }
+  }
+
+  /** A counterpart can be linked after a comment was first ingested; a later source sync catches it up. */
+  private async ensureConnectorCommentDeliveries(orgId: string, connectorId: string): Promise<void> {
+    const comments = await this.dbService.db.query<any>(
+      `SELECT id, source_twin_id FROM integration_public_comments
+       WHERE org_id = $1 AND source_connector_id = $2 ORDER BY source_created_at ASC LIMIT 10000`,
+      [orgId, connectorId],
+    );
+    for (const comment of comments.rows) {
+      await this.ensureCommentDeliveries(orgId, comment.id, comment.source_twin_id);
+    }
+  }
+
+  /** Executes due comment writes independently of state work-order FIFO queues. */
+  private async processDueCommentDeliveries(orgId: string, counters: PollCounters): Promise<void> {
+    let processed = 0;
+    while (processed < 500) {
+      const due = await this.dbService.db.query<any>(
+        `SELECT d.*, pc.body, pc.original_author_id, pc.original_author_name, pc.source_system,
+                target.artifact_type AS target_entity_type, target.external_id AS target_external_id,
+                c.provider AS target_provider, c.config AS target_config, c.status AS target_status,
+                c.activated_at AS target_activated_at, source.config AS source_config
+         FROM integration_comment_deliveries d
+         JOIN integration_public_comments pc ON pc.id = d.comment_id AND pc.org_id = d.org_id
+         JOIN integration_canonical_twins target ON target.id = d.target_twin_id AND target.org_id = d.org_id
+         JOIN integration_connectors c ON c.id = d.target_connector_id AND c.org_id = d.org_id
+         JOIN integration_connectors source ON source.id = pc.source_connector_id AND source.org_id = d.org_id
+         WHERE d.org_id = $1
+           AND (d.status IN ('pending', 'failed') OR
+             (d.status = 'processing' AND (d.claim_expires_at IS NULL OR d.claim_expires_at <= CURRENT_TIMESTAMP)))
+           AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= CURRENT_TIMESTAMP)
+         ORDER BY d.created_at ASC, d.id ASC LIMIT 50`,
+        [orgId],
+      );
+      if (!due.rows.length) return;
+      let progressed = false;
+      for (const row of due.rows) {
+        const sourcePolicy = this.validateCommentSync(parseJson<Record<string, unknown>>(row.source_config, {}).commentSync);
+        const policy = this.validateCommentSync(parseJson<Record<string, unknown>>(row.target_config, {}).commentSync);
+        if (!row.target_activated_at || row.target_status === 'paused' || !this.commentCanWrite(policy)) continue;
+        if (!this.commentCanRead(sourcePolicy)
+          || !this.commentAuthorPermitted(sourcePolicy, row.original_author_id)
+          || !this.commentAuthorPermitted(policy, row.original_author_id)) {
+          await this.dbService.db.query(
+            `UPDATE integration_comment_deliveries
+             SET status = 'skipped', last_error = 'Current source or target comment policy does not permit this transfer',
+                 updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND org_id = $2`,
+            [row.id, orgId],
+          );
+          progressed = true;
+          processed += 1;
+          continue;
+        }
+        await this.executeCommentDelivery(orgId, row, counters);
+        progressed = true;
+        processed += 1;
+      }
+      // All due rows can legitimately be waiting for a disabled or paused target.
+      if (!progressed) return;
+    }
+  }
+
+  private async executeCommentDelivery(orgId: string, row: any, counters: PollCounters): Promise<void> {
+    const claimId = `${this.workerId}:${randomUUID()}`;
+    const claimed = await this.dbService.db.query<any>(
+      `UPDATE integration_comment_deliveries
+       SET status = 'processing', attempts = attempts + 1, claimed_by = $1, claim_expires_at = $2,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = $3 AND org_id = $4
+         AND (status IN ('pending', 'failed') OR
+           (status = 'processing' AND (claim_expires_at IS NULL OR claim_expires_at <= CURRENT_TIMESTAMP)))
+       RETURNING attempts`,
+      [claimId, new Date(Date.now() + WORK_ORDER_CLAIM_MS).toISOString(), row.id, orgId],
+    );
+    if (!claimed.rows.length) return;
+    const attempts = Number(claimed.rows[0].attempts);
+    const target = await this.getConnector(orgId, row.target_connector_id);
+    const adapter = this.getAdapter(target.provider);
+    const marker = String(row.marker).toLowerCase();
+    try {
+      if (!adapter.pushPublicComment) {
+        throw new ConnectorConfigurationError(`${target.provider} does not support public-comment writes`);
+      }
+      // A provider write may have succeeded immediately before a crash. Searching for the stable
+      // marker first makes the retry a completion, not a duplicate comment.
+      let existing: ExternalPublicComment | undefined;
+      if (adapter.fetchPublicComments) {
+        const targetComments = await adapter.fetchPublicComments(this.context(target), {
+          entityType: row.target_entity_type, externalId: row.target_external_id,
+        });
+        existing = targetComments.find((comment) => comment.originMarker?.toLowerCase() === marker);
+      }
+      const result = existing
+        ? { externalId: existing.externalId, message: 'Recovered an already-written public comment by its Cadena marker' }
+        : await adapter.pushPublicComment(
+          this.context(target),
+          { entityType: row.target_entity_type, externalId: row.target_external_id },
+          this.transferredCommentBody(row, marker),
+        );
+      await this.withEvent(async (tx) => {
+        await tx.query(
+          `UPDATE integration_comment_deliveries
+           SET status = 'executed', target_comment_id = $1, last_error = NULL, next_attempt_at = NULL,
+               claimed_by = NULL, claim_expires_at = NULL, executed_at = CURRENT_TIMESTAMP,
+               updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND org_id = $3 AND claimed_by = $4`,
+          [result.externalId, row.id, orgId, claimId],
+        );
+        return this.event(orgId, row.target_twin_id, `connector:${target.id}`, 'PublicCommentTransferred', {
+          comment_id: row.comment_id,
+          delivery_id: row.id,
+          target_connector_id: target.id,
+          target_twin_id: row.target_twin_id,
+          target_comment_id: result.externalId,
+          original_author_id: row.original_author_id,
+          source_system: row.source_system,
+        });
+      });
+      counters.commentsTransferred += 1;
+    } catch (error) {
+      const message = this.describe(error, 'Public comment write failed');
+      const retryable = (error instanceof ConnectorRemoteError && error.retryable) || error instanceof ConnectorCredentialError;
+      const status = retryable && attempts < MAX_WORK_ORDER_ATTEMPTS ? 'failed' : 'dead';
+      const retryAfterMs = error instanceof ConnectorRemoteError && error.retryAfterSeconds
+        ? error.retryAfterSeconds * 1000
+        : Math.min(WORK_ORDER_BASE_BACKOFF_MS * 2 ** (attempts - 1), WORK_ORDER_MAX_BACKOFF_MS);
+      await this.withEvent(async (tx) => {
+        await tx.query(
+          `UPDATE integration_comment_deliveries
+           SET status = $1, last_error = $2, next_attempt_at = $3, claimed_by = NULL,
+               claim_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+           WHERE id = $4 AND org_id = $5 AND claimed_by = $6`,
+          [status, message.slice(0, 500), status === 'failed' ? new Date(Date.now() + retryAfterMs).toISOString() : null, row.id, orgId, claimId],
+        );
+        return this.event(orgId, row.target_twin_id, `connector:${target.id}`, 'PublicCommentTransferFailed', {
+          comment_id: row.comment_id, delivery_id: row.id, target_connector_id: target.id,
+          target_twin_id: row.target_twin_id, attempts, retryable, final: status === 'dead', error: message,
+        });
+      });
+      counters.commentsFailed += 1;
+    }
+  }
+
+  private transferredCommentBody(row: any, marker: string): string {
+    const author = String(row.original_author_name || row.original_author_id);
+    return `${String(row.body).trim()}\n\nâ€” Originally posted by ${author} (${row.original_author_id}) in ${providerName(row.source_system)}\n[cadena-comment:${marker}]`;
+  }
+
+  private commentPolicy(connector: ConnectorRecord): ConnectorCommentSyncPolicy {
+    return this.validateCommentSync(connector.config.commentSync);
+  }
+
+  private commentCanRead(policy: ConnectorCommentSyncPolicy): boolean {
+    return policy.enabled && (policy.direction === 'from_source' || policy.direction === 'bidirectional');
+  }
+
+  private commentCanWrite(policy: ConnectorCommentSyncPolicy): boolean {
+    return policy.enabled && (policy.direction === 'to_source' || policy.direction === 'bidirectional');
+  }
+
+  private commentAuthorPermitted(policy: ConnectorCommentSyncPolicy, authorId: string): boolean {
+    const id = String(authorId || '').trim().toLowerCase();
+    const allow = new Set(policy.authorAllowList.map((value) => value.toLowerCase()));
+    const block = new Set(policy.authorBlockList.map((value) => value.toLowerCase()));
+    return Boolean(id) && !block.has(id) && (allow.size === 0 || allow.has(id));
+  }
+
   /**
    * Accepts a committed twin event from the transactional outbox. Each counterpart gets one
    * durable work order keyed by (source event, target twin), making replay idempotent. Translation
@@ -1079,6 +1401,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       const counters: PollCounters = {
         twinsCreated: 0, twinsUpdated: 0, twinsUnchanged: 0, echoesSuppressed: 0,
         workOrdersPrepared: 0, workOrdersHeld: 0, workOrdersExecuted: 0, workOrdersFailed: 0,
+        commentsFetched: 0, commentsStored: 0, commentsFiltered: 0, commentsTransferred: 0, commentsFailed: 0,
       };
       await this.processDueWorkOrders(orgId, targetConnector, counters);
     }
@@ -1828,11 +2151,37 @@ export class ConnectorService implements OnApplicationBootstrap {
        ORDER BY created_at DESC, id DESC LIMIT 25`,
       [orgId, twinId],
     );
+    const relatedTwinIds = [twinId, ...row.counterparts.map((counterpart) => counterpart.twinId).filter(Boolean)] as string[];
+    const comments = await this.listPublicComments(orgId, relatedTwinIds);
     return {
       ...row,
       fields: this.fieldPolicies(row, connector),
       workOrders: orders.rows.map((order) => this.mapWorkOrder(order)),
+      comments,
     };
+  }
+
+  private async listPublicComments(orgId: string, twinIds: string[]): Promise<TwinPublicComment[]> {
+    if (!twinIds.length) return [];
+    const result = await this.dbService.db.query<any>(
+      `SELECT * FROM integration_public_comments
+       WHERE org_id = $1 AND source_twin_id = ANY($2::uuid[])
+       ORDER BY source_created_at ASC, id ASC LIMIT 1000`,
+      [orgId, twinIds],
+    );
+    return result.rows.map((comment) => ({
+      id: comment.id,
+      sourceTwinId: comment.source_twin_id,
+      sourceConnectorId: comment.source_connector_id,
+      providerCommentId: comment.provider_comment_id,
+      body: comment.body,
+      originalAuthorId: comment.original_author_id,
+      originalAuthorName: comment.original_author_name,
+      sourceSystem: comment.source_system,
+      sourceCreatedAt: iso(comment.source_created_at)!,
+      nativeUrl: comment.native_url || undefined,
+      readOnly: true as const,
+    }));
   }
 
   /**
@@ -1935,6 +2284,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       const counters: PollCounters = {
         twinsCreated: 0, twinsUpdated: 0, twinsUnchanged: 0, echoesSuppressed: 0,
         workOrdersPrepared: 0, workOrdersHeld: 0, workOrdersExecuted: 0, workOrdersFailed: 0,
+        commentsFetched: 0, commentsStored: 0, commentsFiltered: 0, commentsTransferred: 0, commentsFailed: 0,
       };
       const emitted = await this.dbService.db.query<any>(
         `SELECT event_id FROM domain_events
@@ -2285,6 +2635,38 @@ export class ConnectorService implements OnApplicationBootstrap {
     const state = (input as Record<string, unknown>).state;
     if (state !== undefined && typeof state !== 'boolean') throw new ConnectorConfigurationError('writeBack.state must be true or false');
     return { state: state === true, fields: stringList((input as Record<string, unknown>).fields) };
+  }
+
+  private validateCommentSync(input: unknown): ConnectorCommentSyncPolicy {
+    if (input === undefined || input === null) {
+      return { enabled: false, direction: 'bidirectional', authorAllowList: [], authorBlockList: [] };
+    }
+    if (typeof input !== 'object' || Array.isArray(input)) {
+      throw new ConnectorConfigurationError('commentSync must be an object');
+    }
+    const value = input as Record<string, unknown>;
+    const unknown = Object.keys(value).filter(
+      (key) => !['enabled', 'direction', 'authorAllowList', 'authorBlockList'].includes(key),
+    );
+    if (unknown.length) throw new ConnectorConfigurationError(`commentSync does not support ${unknown.join(', ')}`);
+    if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
+      throw new ConnectorConfigurationError('commentSync.enabled must be true or false');
+    }
+    const direction = value.direction === undefined ? 'bidirectional' : String(value.direction);
+    if (!['from_source', 'to_source', 'bidirectional'].includes(direction)) {
+      throw new ConnectorConfigurationError('commentSync.direction must be from_source, to_source or bidirectional');
+    }
+    for (const key of ['authorAllowList', 'authorBlockList']) {
+      if (value[key] !== undefined && !Array.isArray(value[key])) {
+        throw new ConnectorConfigurationError(`commentSync.${key} must be an array of stable provider account ids`);
+      }
+    }
+    return {
+      enabled: value.enabled === true,
+      direction: direction as ConnectorCommentSyncPolicy['direction'],
+      authorAllowList: stringList(value.authorAllowList),
+      authorBlockList: stringList(value.authorBlockList),
+    };
   }
 
   private validateRequiredFields(input: unknown): Record<string, string[]> | undefined {

@@ -1,4 +1,4 @@
-import { BackfillPage, BackfillWindow, ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
+import { BackfillPage, BackfillWindow, ConnectorAdapter, ConnectorCommentTarget, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
 import {
   ConnectorFetch,
   ConnectorConfigurationError,
@@ -16,6 +16,7 @@ import {
   ConnectorDiscoveryResult,
   ConnectorFieldSchema,
   ConnectorProviderDescriptor,
+  ExternalPublicComment,
   ExternalRecordPayload,
   WatermarkCursor,
 } from './connector.types';
@@ -47,6 +48,8 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
     'state_discovery',
     'incremental_query',
     'state_write',
+    'comment_read',
+    'comment_write',
   ];
   public readonly descriptor: ConnectorProviderDescriptor = {
     provider: 'jira',
@@ -258,6 +261,42 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
     return { nativeKey: update.externalId, message: `Updated fields on Jira issue ${update.externalId}` };
   }
 
+  public async fetchPublicComments(ctx: ConnectorContext, target: ConnectorCommentTarget): Promise<ExternalPublicComment[]> {
+    if (target.entityType !== 'issue') throw new ConnectorConfigurationError(`Jira does not expose comments for '${target.entityType}'`);
+    const page = await this.get(ctx, `/rest/api/3/issue/${encodeURIComponent(target.externalId)}/comment?maxResults=1000&orderBy=created`);
+    const comments: any[] = Array.isArray(page?.comments) ? page.comments : [];
+    return comments.filter((comment) => {
+      // Jira restricted visibility and JSM internal comments are private at the adapter boundary.
+      const internalProperty = Array.isArray(comment?.properties) && comment.properties.some(
+        (property: any) => property?.key === 'sd.public.comment' && property?.value?.internal === true,
+      );
+      return !comment?.visibility && comment?.jsdPublic !== false && !internalProperty;
+    }).map((comment) => {
+      const body = jiraCommentText(comment?.body);
+      return {
+        externalId: String(comment.id),
+        body,
+        authorId: String(comment.author?.accountId || 'jira:unattributed'),
+        authorName: String(comment.author?.displayName || comment.author?.accountId || 'Unknown Jira author'),
+        createdAt: normalizeJiraTimestamp(comment.created),
+        originMarker: commentMarker(body),
+      } satisfies ExternalPublicComment;
+    });
+  }
+
+  public async pushPublicComment(
+    ctx: ConnectorContext,
+    target: ConnectorCommentTarget,
+    body: string,
+  ): Promise<{ externalId: string; message: string }> {
+    if (target.entityType !== 'issue') throw new ConnectorConfigurationError(`Jira does not expose comments for '${target.entityType}'`);
+    const created = await this.post(ctx, `/rest/api/3/issue/${encodeURIComponent(target.externalId)}/comment`, {
+      body: jiraCommentAdf(body),
+    });
+    if (!created?.id) throw new ConnectorRemoteError('Jira did not return an id for the created comment', null, false);
+    return { externalId: String(created.id), message: `Added a public comment to Jira issue ${target.externalId}` };
+  }
+
   /**
    * Wraps a canonical field value into the shape the Jira issue-write API expects for that field
    * id. Priority and assignee are reference-like fields Jira represents as objects even though
@@ -358,4 +397,26 @@ export function normalizeJiraTimestamp(value: unknown): string {
   if (typeof value !== 'string' || !value) return new Date(0).toISOString();
   const parsed = Date.parse(value.replace(/([+-]\d{2})(\d{2})$/, '$1:$2'));
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date(0).toISOString();
+}
+
+function jiraCommentText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  const node = value as any;
+  if (node.type === 'text') return String(node.text || '');
+  const children = Array.isArray(node.content) ? node.content.map(jiraCommentText).join('') : '';
+  return ['paragraph', 'heading', 'blockquote', 'listItem'].includes(node.type) ? `${children}\n` : children;
+}
+
+function jiraCommentAdf(value: string): Record<string, unknown> {
+  return {
+    type: 'doc', version: 1,
+    content: value.split(/\r?\n/).map((line) => ({
+      type: 'paragraph', content: line ? [{ type: 'text', text: line }] : [],
+    })),
+  };
+}
+
+function commentMarker(body: string): string | undefined {
+  return /\[cadena-comment:([0-9a-f-]{36})\]/i.exec(body)?.[1]?.toLowerCase();
 }

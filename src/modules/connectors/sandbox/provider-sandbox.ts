@@ -135,6 +135,19 @@ export interface FakeJiraIssue {
   custom?: Record<string, unknown>;
 }
 
+export interface FakeJiraComment {
+  id: string;
+  issueId: string;
+  body: string;
+  authorId: string;
+  authorName: string;
+  created: number;
+  /** Any visibility object makes this a restricted Jira comment. */
+  visibility?: Record<string, unknown>;
+  /** False represents a JSM internal comment. */
+  jsdPublic?: boolean;
+}
+
 export class FakeJiraApi extends FakeProviderApi {
   public projects = [
     { id: '10000', key: 'CAD', name: 'Cadena Delivery' },
@@ -144,7 +157,9 @@ export class FakeJiraApi extends FakeProviderApi {
   /** Target statuses that the workflow does not offer from any status. */
   public unavailableTransitions = new Set<string>();
   public issues = new Map<string, FakeJiraIssue>();
+  public comments = new Map<string, FakeJiraComment[]>();
   private nextId = 20000;
+  private nextCommentId = 50000;
 
   constructor(baseUrl = 'https://acme.atlassian.net', email = 'sync@acme.test', token: string | null = 'jira-token-value') {
     super(baseUrl, token === null ? undefined : `Basic ${Buffer.from(`${email}:${token}`).toString('base64')}`);
@@ -161,6 +176,22 @@ export class FakeJiraApi extends FakeProviderApi {
     const issue = this.issues.get(id)!;
     Object.assign(issue, changes, { updated: this.tick(60_000) });
     return issue;
+  }
+
+  public addComment(issueIdOrKey: string, input: Partial<FakeJiraComment> & { body: string }): FakeJiraComment {
+    const issue = this.findIssue(issueIdOrKey);
+    if (!issue) throw new Error(`Unknown fake Jira issue ${issueIdOrKey}`);
+    const comment: FakeJiraComment = {
+      ...input,
+      id: input.id || String(this.nextCommentId++), issueId: issue.id, body: input.body,
+      authorId: input.authorId || 'acct-agent', authorName: input.authorName || 'Jira Agent',
+      created: input.created ?? this.tick(1000),
+    } as FakeJiraComment;
+    const comments = this.comments.get(issue.id) || [];
+    comments.push(comment);
+    this.comments.set(issue.id, comments);
+    issue.updated = Math.max(issue.updated, comment.created);
+    return comment;
   }
 
   protected route(method: string, url: URL, body: any): ConnectorHttpResponse {
@@ -189,6 +220,33 @@ export class FakeJiraApi extends FakeProviderApi {
       return respond(200, this.statuses.map((name, index) => ({ id: String(index + 1), name })));
     }
     if (method === 'POST' && path === '/rest/api/3/search/jql') return this.search(body);
+
+    const commentPath = /^\/rest\/api\/3\/issue\/([^/]+)\/comment$/.exec(path);
+    if (commentPath) {
+      const issue = this.findIssue(decodeURIComponent(commentPath[1]));
+      if (!issue) return respond(404, { errorMessages: ['Issue does not exist'] });
+      if (method === 'GET') {
+        return respond(200, {
+          comments: (this.comments.get(issue.id) || []).map((comment) => ({
+            id: comment.id,
+            body: jiraAdf(comment.body),
+            author: { accountId: comment.authorId, displayName: comment.authorName },
+            created: new Date(comment.created).toISOString().replace('Z', '+0000'),
+            ...(comment.visibility ? { visibility: comment.visibility } : {}),
+            ...(comment.jsdPublic === false ? {
+              jsdPublic: false,
+              properties: [{ key: 'sd.public.comment', value: { internal: true } }],
+            } : {}),
+          })),
+        });
+      }
+      if (method === 'POST') {
+        const comment = this.addComment(issue.id, {
+          body: jiraAdfText(body?.body), authorId: 'svc-1', authorName: 'Cadena Sync',
+        });
+        return respond(201, { id: comment.id, body: body?.body, created: new Date(comment.created).toISOString() });
+      }
+    }
 
     const transitions = /^\/rest\/api\/3\/issue\/([^/]+)\/transitions$/.exec(path);
     if (transitions) {
@@ -315,6 +373,17 @@ export interface FakeServiceNowRecord {
   [extra: string]: unknown;
 }
 
+export interface FakeServiceNowJournal {
+  sys_id: string;
+  table: string;
+  element_id: string;
+  element: 'comments' | 'work_notes';
+  value: string;
+  sys_created_on: number;
+  sys_created_by: string;
+  author_name: string;
+}
+
 const INCIDENT_STATES: Array<[string, string]> = [
   ['1', 'New'], ['2', 'In Progress'], ['3', 'On Hold'], ['6', 'Resolved'], ['7', 'Closed'],
 ];
@@ -324,7 +393,9 @@ export class FakeServiceNowApi extends FakeProviderApi {
     ['incident', new Map()],
     ['change_request', new Map()],
   ]);
+  public journals: FakeServiceNowJournal[] = [];
   private sequence = 10000;
+  private journalSequence = 1;
   /**
    * Incident columns a data policy makes mandatory when the state moves to Resolved (6), as a real instance
    * does with resolution code and notes. Empty by default so existing scenarios are unaffected.
@@ -352,6 +423,25 @@ export class FakeServiceNowApi extends FakeProviderApi {
     const record = this.tables.get(table)!.get(sysId)!;
     Object.assign(record, { sys_updated_by: 'agent.smith' }, changes, { sys_updated_on: this.tick(60_000) });
     return record;
+  }
+
+  public addJournal(
+    table: string,
+    sysId: string,
+    input: { element: 'comments' | 'work_notes'; value: string; authorId?: string; authorName?: string; created?: number },
+  ): FakeServiceNowJournal {
+    const record = this.tables.get(table)?.get(sysId);
+    if (!record) throw new Error(`Unknown fake ServiceNow ${table}/${sysId}`);
+    const journal: FakeServiceNowJournal = {
+      sys_id: `journal${this.journalSequence++}`, table, element_id: sysId,
+      element: input.element, value: input.value,
+      sys_created_on: input.created ?? this.tick(1000),
+      sys_created_by: input.authorId || 'agent.smith', author_name: input.authorName || 'Agent Smith',
+    };
+    this.journals.push(journal);
+    record.sys_updated_on = Math.max(record.sys_updated_on, journal.sys_created_on);
+    record.sys_updated_by = journal.sys_created_by;
+    return journal;
   }
 
   public stateLabel(code: string): string {
@@ -389,6 +479,23 @@ export class FakeServiceNowApi extends FakeProviderApi {
     if (!match) return respond(404, { error: { message: 'No route' } });
     const [, table, sysId] = match;
     const query = url.searchParams.get('sysparm_query') || '';
+
+    if (method === 'GET' && table === 'sys_journal_field') {
+      const elementId = /(?:^|\^)element_id=([^\^]+)/.exec(query)?.[1];
+      const elements = (/(?:^|\^)elementIN([^\^]+)/.exec(query)?.[1] || '').split(',').filter(Boolean);
+      const pair = (value: string, display = value) => ({ value, display_value: display });
+      return respond(200, {
+        result: this.journals
+          .filter((journal) => (!elementId || journal.element_id === elementId) && (!elements.length || elements.includes(journal.element)))
+          .sort((a, b) => a.sys_created_on - b.sys_created_on || a.sys_id.localeCompare(b.sys_id))
+          .map((journal) => ({
+            sys_id: pair(journal.sys_id), element: pair(journal.element), element_id: pair(journal.element_id),
+            value: pair(journal.value),
+            sys_created_on: pair(new Date(journal.sys_created_on).toISOString().slice(0, 19).replace('T', ' ')),
+            sys_created_by: pair(journal.sys_created_by, journal.author_name),
+          })),
+      });
+    }
 
     if (method === 'GET' && table === 'sys_dictionary') {
       const names = (/nameIN([^^]+)/.exec(query)?.[1] || '').split(',');
@@ -445,13 +552,17 @@ export class FakeServiceNowApi extends FakeProviderApi {
           });
         }
       }
+      let publicComment: FakeServiceNowJournal | undefined;
       for (const [key, value] of Object.entries(body || {})) {
-        if (key === 'state') record.state = String(value);
+        if (key === 'comments') publicComment = this.addJournal(table, record.sys_id, {
+          element: 'comments', value: String(value), authorId: this.username, authorName: 'Cadena Sync',
+        });
+        else if (key === 'state') record.state = String(value);
         else record[key] = value;
       }
       record.sys_updated_on = this.tick(1000);
       record.sys_updated_by = this.username;
-      return respond(200, { result: { sys_id: record.sys_id, number: record.number, state: record.state } });
+      return respond(200, { result: { sys_id: record.sys_id, number: record.number, state: record.state, comment_sys_id: publicComment?.sys_id } });
     }
     if (method === 'GET') {
       const sinceMatch = /sys_updated_on>=(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(query);
@@ -493,6 +604,22 @@ export class FakeServiceNowApi extends FakeProviderApi {
 
 // ─── Local sandbox ───────────────────────────────────────────────────────────
 
+function jiraAdf(value: string): Record<string, unknown> {
+  return {
+    type: 'doc', version: 1,
+    content: value.split(/\r?\n/).map((line) => ({ type: 'paragraph', content: line ? [{ type: 'text', text: line }] : [] })),
+  };
+}
+
+function jiraAdfText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return '';
+  const node = value as any;
+  if (node.type === 'text') return String(node.text || '');
+  const children = Array.isArray(node.content) ? node.content.map(jiraAdfText).join('') : '';
+  return ['paragraph', 'heading', 'blockquote', 'listItem'].includes(node.type) ? `${children}\n` : children;
+}
+
 export const SANDBOX_JIRA_URL = 'https://jira.sandbox.cadena.local';
 export const SANDBOX_SERVICENOW_URL = 'https://servicenow.sandbox.cadena.local';
 
@@ -512,6 +639,8 @@ export function getProviderSandbox(): ProviderSandbox {
   jira.addIssue({ key: 'CAD-101', summary: 'Checkout latency regression', status: 'In Progress', priority: 'High' });
   jira.addIssue({ key: 'CAD-102', summary: 'Retry payment webhook deliveries', status: 'To Do', priority: 'Medium' });
   jira.addIssue({ key: 'CAD-103', summary: 'Publish incident runbook links', status: 'Done', priority: 'Low' });
+  jira.addComment('CAD-101', { body: 'Customer-facing update: the checkout team is investigating.', authorId: 'acct-support', authorName: 'Sandbox Support' });
+  jira.addComment('CAD-101', { body: 'Restricted diagnostic that must never synchronize.', authorId: 'acct-private', visibility: { type: 'role', value: 'Developers' } });
   servicenow.addRecord('incident', { short_description: 'Checkout pages slow for EU customers', state: '2', priority: '2' });
   servicenow.addRecord('incident', { short_description: 'Payment confirmation emails delayed', state: '1', priority: '3' });
   const fetch: ConnectorFetch = (url, init) => {

@@ -1,4 +1,4 @@
-import { BackfillPage, BackfillWindow, ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
+import { BackfillPage, BackfillWindow, ConnectorAdapter, ConnectorCommentTarget, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
 import {
   ConnectorFetch,
   ConnectorConfigurationError,
@@ -17,6 +17,7 @@ import {
   ConnectorEntitySchema,
   ConnectorFieldSchema,
   ConnectorProviderDescriptor,
+  ExternalPublicComment,
   ExternalRecordPayload,
   WatermarkCursor,
 } from './connector.types';
@@ -47,6 +48,8 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     'state_discovery',
     'incremental_query',
     'state_write',
+    'comment_read',
+    'comment_write',
   ];
   public readonly descriptor: ConnectorProviderDescriptor = {
     provider: 'servicenow',
@@ -289,6 +292,49 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     };
   }
 
+  public async fetchPublicComments(ctx: ConnectorContext, target: ConnectorCommentTarget): Promise<ExternalPublicComment[]> {
+    if (!this.entityTypes(ctx.connector.config).includes(target.entityType)) {
+      throw new ConnectorConfigurationError(`Table '${target.entityType}' is not configured on this connector`);
+    }
+    const query = `element_id=${target.externalId}^elementINcomments,work_notes^ORDERBYsys_created_on`;
+    const page = await this.get(
+      ctx,
+      `/api/now/table/sys_journal_field?sysparm_query=${encodeURIComponent(query)}`
+        + '&sysparm_display_value=all&sysparm_fields=sys_id,element,element_id,value,sys_created_on,sys_created_by&sysparm_limit=1000',
+    );
+    const rows: any[] = Array.isArray(page?.result) ? page.result : [];
+    // work_notes are deliberately discarded here. They never reach a Cadena queue or table.
+    return rows.filter((row) => fieldValue(row?.element) === 'comments').map((row) => {
+      const body = fieldDisplay(row?.value);
+      return {
+        externalId: fieldValue(row?.sys_id),
+        body,
+        authorId: fieldValue(row?.sys_created_by) || 'servicenow:unattributed',
+        authorName: fieldDisplay(row?.sys_created_by) || fieldValue(row?.sys_created_by) || 'Unknown ServiceNow author',
+        createdAt: parseServiceNowUtc(fieldValue(row?.sys_created_on)),
+        originMarker: commentMarker(body),
+      } satisfies ExternalPublicComment;
+    });
+  }
+
+  public async pushPublicComment(
+    ctx: ConnectorContext,
+    target: ConnectorCommentTarget,
+    body: string,
+  ): Promise<{ externalId: string; message: string }> {
+    if (!this.entityTypes(ctx.connector.config).includes(target.entityType)) {
+      throw new ConnectorConfigurationError(`Table '${target.entityType}' is not configured on this connector`);
+    }
+    const updated = await requestJson(
+      this.http,
+      `${trimBaseUrl(ctx.baseUrl)}/api/now/table/${target.entityType}/${encodeURIComponent(target.externalId)}`,
+      { method: 'PATCH', headers: this.headers(ctx), body: JSON.stringify({ comments: body }) },
+    );
+    const id = fieldValue(updated?.result?.comment_sys_id || updated?.result?.sys_id);
+    if (!id) throw new ConnectorRemoteError('ServiceNow did not return an id for the created public comment', null, false);
+    return { externalId: id, message: `Added a public comment to ServiceNow ${target.entityType} ${target.externalId}` };
+  }
+
   private toRecord(ctx: ConnectorContext, table: string, row: any): ExternalRecordPayload {
     const value = (field: string) => fieldValue(row?.[field]);
     const display = (field: string) => fieldDisplay(row?.[field]);
@@ -358,4 +404,8 @@ function fieldDisplay(field: unknown): string {
 export function parseServiceNowUtc(value: string): string {
   const parsed = Date.parse(value ? `${value.replace(' ', 'T')}Z` : '');
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date(0).toISOString();
+}
+
+function commentMarker(body: string): string | undefined {
+  return /\[cadena-comment:([0-9a-f-]{36})\]/i.exec(body)?.[1]?.toLowerCase();
 }

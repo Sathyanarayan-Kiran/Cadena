@@ -1,6 +1,7 @@
 import {
   ConnectorCapability,
   ConnectorDiscoveryResult,
+  ExternalPublicComment,
   ConnectorProviderDescriptor,
   ConnectorProviderType,
   ConnectorRecord,
@@ -61,6 +62,11 @@ export interface ConnectorRecordUpdate {
   fields?: Record<string, unknown>;
 }
 
+export interface ConnectorCommentTarget {
+  entityType: string;
+  externalId: string;
+}
+
 export interface ConnectorAdapter {
   readonly provider: ConnectorProviderType;
   readonly descriptor: ConnectorProviderDescriptor;
@@ -111,4 +117,14 @@ export interface ConnectorAdapter {
    * failure, and ConnectorConfigurationError if neither `targetState` nor `fields` is given.
    */
   pushUpdate(ctx: ConnectorContext, update: ConnectorRecordUpdate): Promise<{ nativeKey?: string; message: string }>;
+
+  /** Returns customer-visible comments only. Private/restricted entries must be dropped in the adapter. */
+  fetchPublicComments?(ctx: ConnectorContext, target: ConnectorCommentTarget): Promise<ExternalPublicComment[]>;
+
+  /** Adds one customer-visible comment. The supplied body already includes attribution and an echo marker. */
+  pushPublicComment?(
+    ctx: ConnectorContext,
+    target: ConnectorCommentTarget,
+    body: string,
+  ): Promise<{ externalId: string; message: string }>;
 }

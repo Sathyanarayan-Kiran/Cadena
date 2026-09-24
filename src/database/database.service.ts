@@ -794,6 +794,42 @@ export class DatabaseService {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
       );
+
+      CREATE TABLE IF NOT EXISTS integration_public_comments (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        source_twin_id UUID NOT NULL REFERENCES integration_canonical_twins(id) ON DELETE CASCADE,
+        source_connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        provider_comment_id TEXT NOT NULL,
+        body TEXT NOT NULL,
+        original_author_id TEXT NOT NULL,
+        original_author_name TEXT NOT NULL,
+        source_system TEXT NOT NULL,
+        source_created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        native_url TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (source_connector_id, provider_comment_id)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_comment_deliveries (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        comment_id UUID NOT NULL REFERENCES integration_public_comments(id) ON DELETE CASCADE,
+        target_connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        target_twin_id UUID NOT NULL REFERENCES integration_canonical_twins(id) ON DELETE CASCADE,
+        marker TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        target_comment_id TEXT,
+        last_error TEXT,
+        next_attempt_at TIMESTAMP WITH TIME ZONE,
+        claimed_by TEXT,
+        claim_expires_at TIMESTAMP WITH TIME ZONE,
+        executed_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (comment_id, target_twin_id)
+      );
     `);
 
     // Safe migration for pilot databases created before stable work-item keys existed.
@@ -915,6 +951,10 @@ export class DatabaseService {
         ON integration_connector_ingestion_queue (org_id, partition_key, queue_position, status);
       CREATE INDEX IF NOT EXISTS integration_connector_sync_leases_expiry
         ON integration_connector_sync_leases (expires_at);
+      CREATE INDEX IF NOT EXISTS integration_public_comments_twin_time
+        ON integration_public_comments (org_id, source_twin_id, source_created_at);
+      CREATE INDEX IF NOT EXISTS integration_comment_deliveries_due
+        ON integration_comment_deliveries (org_id, target_connector_id, status, next_attempt_at);
     `);
     await this.db.exec(`
       UPDATE work_items
