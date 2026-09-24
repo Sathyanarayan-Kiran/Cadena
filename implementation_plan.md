@@ -2,6 +2,37 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — US21.3 risk of waiting too long — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, in three commits (the engine and notification routing, the studio, and this ledger sync), after the user asked to proceed. The design choices below were made by Claude on stated defaults, not put to the user. It builds on US21.1 and US21.2 and supersedes nothing.
+
+**Status:** US21.3 moves from not-started to **done**. The ledger moves to **43 done / 7 partial / 27 not started** across **21 epics / 77 stories**. Verification is against local data and the provider fakes only.
+
+### What was built
+
+- **Risk (`flow-risk.ts`, pure).** No model is fitted. For an item whose current state is classified waiting or blocked, the percentile is the mid-rank share of comparable completed visits no longer than the current wait. The probability of exceeding the target is the share of visits that lasted longer than the current wait which also lasted longer than the state's SLA threshold, with an explicit basis when it cannot be estimated (`already_past_target`, `no_sla_target`, `beyond_history`). Below the minimum sample the result is `insufficient_history` with no percentile at all.
+- **Comparable history (`flow-risk.service.ts`).** One sample is one completed visit to the same state by the same team and item type, in business time on the state's calendar, within `lookback_days` (default 180). The minimum applies to distinct items (default 10, settable from 3 to 1000). History is never borrowed from another team.
+- **Evaluation and notification.** `POST /metrics/flow-risk/evaluate` and a scheduler tick (`FlowRiskScheduler`, every 5 minutes, `CADENA_FLOW_RISK_SCHEDULER=disabled` and `CADENA_FLOW_RISK_TICK_MS` control it) persist each waiting interval's latest risk in `flow_wait_risk` and claim a crossing atomically. A crossing of the percentile threshold (default 0.9) enqueues a `FlowWaitRiskCrossed` event in the same transaction as the claim, and the notification service routes it as an escalation (escalation target, then owner) without marking the item escalated. It notifies once per crossing, re-arms if the percentile falls back below the threshold, and a new waiting interval is a new crossing.
+- **Visibility.** `GET /workitems/:id/flow-risk` (live), `GET /metrics/flow-risk` (latest evaluation, `at_risk=true` and `team_id` filters), a badge on the board card (the aging heatmap), a "Waiting risk" section in the item drawer, and a "Risk of waiting too long" section in the Flow efficiency dialog with settings and an Evaluate now button. Settings (`GET`/`PUT /metrics/flow-risk/settings`) are validated and each change is audited as `FlowRiskSettingsChanged`.
+
+### Decisions and limits, stated plainly
+
+- **Only the percentile is thresholded.** The acceptance criterion says "risk crosses a configured threshold" without saying which figure. The percentile (how unusual the wait is) is thresholded; the probability of exceeding the target is shown alongside but does not trigger a notification. A state with no SLA policy therefore still gets a percentile and can notify, but shows no probability.
+- **One sample per completed visit,** so an item that visits the state twice contributes twice to the sample size but once to the minimum.
+- **The estimate is empirical.** It assumes the past distribution describes the present; it is not a forecast, the message says so, and it is not validated against real delivery data.
+- **The board badge does not change ordering or colour.** Cards are still coloured and ordered by SLA aging; the badge is an addition.
+- **Evaluation cost.** Each evaluation reads every item in the org (capped at 10,000) and its history; that is fine at pilot scale and is not indexed for large tenants.
+- Not built: cost of delay (US21.4), per-team thresholds, and role gating.
+
+### Verification
+
+- `test/us21.3.spec.ts` (13 tests): the pure maths (minimum sample, mid-rank ties, each probability basis), scored and insufficient responses, no borrowing across teams, not-waiting, 404 and tenant isolation, validated and audited settings, the lookback window, notification through the escalation routing exactly once per crossing with no escalated flag, the current-evaluation list and filters, re-arming after a drop, inactive rows once an item stops waiting, and the scheduler tick across tenants. Four behaviours (the minimum-sample guard, once-per-crossing, re-arming, team comparability) were broken on purpose and the tests failed each time before the code was restored.
+- `test/ui-smoke.spec.ts` gains a test that seeds completed visits, evaluates, and checks the board badge, the drawer and the dialog.
+
+### Primary files
+
+- `src/modules/flow/` (`flow-risk.ts`, `flow-risk.service.ts`, `flow-risk.controller.ts` new; `flow.service.ts`, `flow.module.ts` extended), `src/modules/notifications/` (new event type and message), `src/database/database.service.ts`, `public/index.html`, `test/us21.3.spec.ts`, `test/ui-smoke.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — US21.2 wait reasons and attribution — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, in three commits (the engine and API, the studio, and this ledger sync), after the user chose the reason sources (an optional reason on the transition, a per-state default and blocking links) and the link rule (a link that existed when the wait began). It builds on US21.1 and supersedes nothing.

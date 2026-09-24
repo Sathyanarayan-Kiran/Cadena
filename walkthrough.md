@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), the US20.2 connector-led management workspace, US21.1 flow efficiency (worked versus waiting time from recorded history), and US21.2 wait reasons (why the waiting happened). The canonical backlog is **21 epics / 77 stories**, with **42 done / 7 partial / 28 not started**.
-**Verification:** 296 automated tests across 52 test files, plus 27 browser smoke tests driving the real page in pilot and connector-led modes.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), the US20.2 connector-led management workspace, US21.1 flow efficiency (worked versus waiting time from recorded history), US21.2 wait reasons (why the waiting happened), and US21.3 risk of waiting too long. The canonical backlog is **21 epics / 77 stories**, with **43 done / 7 partial / 27 not started**.
+**Verification:** 309 automated tests across 53 test files, plus 28 browser smoke tests driving the real page in pilot and connector-led modes.
 
 ---
 
@@ -16,9 +16,19 @@ A product question came up: can Cadena measure non-productive time, explain why 
 - **US21.3 Risk of waiting:** estimate from history how likely an item is to overrun its state, showing the sample size and method, and producing no score when there is too little history.
 - **US21.4 Cost of delay:** configurable, versioned cost assumptions give an estimated cost per waiting interval and a ranking by cost of delay over duration. Figures are labelled as estimates from the organisation's own assumptions, and no applicable assumption gives no cost rather than zero.
 
-The canonical backlog is now **21 epics / 77 stories**; the ledger is **42 done / 7 partial / 28 not started**. `public/status.html` was regenerated with `npm run tracker`.
+The canonical backlog is now **21 epics / 77 stories**; the ledger is **43 done / 7 partial / 27 not started**. `public/status.html` was regenerated with `npm run tracker`.
 
 ---
+
+## 2026-09-24 — US21.3 risk of waiting too long (Claude)
+
+Instead of finding out after an SLA breach, Cadena can now say when an item has been waiting unusually long for its state.
+
+- **Try it.** Open **Flow efficiency** and scroll to **Risk of waiting too long**. Set the minimum number of comparable items, the percentile to warn at and the history window, then **Save risk settings** and **Evaluate now**. Waiting items then show a **Wait risk** badge on the team board, and the item drawer has a **Waiting risk** section.
+- **How it is worked out.** For an item in a waiting or blocked state, Cadena compares how long it has waited (in business time) with completed visits to that state by the same team and item type. It shows the percentile reached, the estimated chance of exceeding the state's SLA threshold, and how many comparable visits it used.
+- **No guessing.** With fewer comparable items than your minimum, no score is produced and it says history is insufficient. History is never borrowed from another team.
+- **One warning per crossing.** When the percentile reaches your threshold, the escalation target and the owner are notified once. It only warns again if the risk falls back below the threshold and crosses again, or the item starts a new wait.
+- **Know the limits.** Only the percentile triggers a warning; the probability is shown alongside. It is an estimate from your own history, not a forecast. Evaluation runs every five minutes and when you press the button. Cost of delay (US21.4) is still to do.
 
 ## 2026-09-24 — US21.2 wait reasons (Claude)
 

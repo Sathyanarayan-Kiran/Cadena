@@ -784,11 +784,11 @@
     },
     "US21.3": {
       "name": "Risk of waiting too long",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "flow-waste-2026-09-24",
-      "note": "New. Aging scores compare an item with its SLA threshold (US3.2) and US15.3 scores the risk of a change, but nothing estimates from history how likely an item is to wait too long. Depends on US21.1; it needs enough completed items to be meaningful and must not invent a score without them."
+      "note": "For an item in a state classified waiting or blocked, its current business-time wait is compared with the completed visits to that state by the same team and item type (within a configurable history window). The result is the percentile the wait has reached (mid-rank) and the estimated probability of exceeding the state's SLA threshold, taken from the comparable visits that lasted longer than the current wait, always with the sample size and method. Below a configurable minimum number of comparable items (default 10, minimum 3) no score is produced and the response says history is insufficient. An evaluation, run on a timer and on demand, persists each waiting item's latest risk and, when the percentile crosses the configured threshold (default 0.9), sends one FlowWaitRiskCrossed notification through the existing escalation routing (escalation target and owner); it re-arms only if the risk falls back below the threshold or the item enters a new waiting interval. The risk is shown as a badge on the team board (the aging heatmap), in the item drawer and in the Flow efficiency dialog, and settings changes are validated and audited. Verified against local data and the provider fakes only. Only the percentile is thresholded (the probability is shown alongside), one sample is one completed visit, and a state without an SLA policy gets a percentile but no probability."
     },
     "US21.4": {
       "name": "Cost of delay",
