@@ -765,7 +765,42 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
 
     const history = await api('/metrics/flow-classifications/history?state=In%20Review');
     expect(history).toHaveLength(1);
+
+    // The newly classified waiting state now shows in "Why work waits", unattributed until it has a default reason.
+    await page.waitForFunction(() => document.querySelector('#flowWaits')?.textContent?.includes('Unattributed') ?? false, { timeout: 10000 });
+    await page.select('#flowStates select[data-reason-state="In Review"]', 'approval');
+    await page.$eval('#saveFlowButton', (node) => node.scrollIntoView({ block: 'center' }));
+    await page.click('#saveFlowButton');
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#flowWaits table tbody tr')).some((tr) => /^Approval/.test((tr as HTMLElement).innerText.trim())), { timeout: 10000 });
+    const approvalRow = await page.evaluateHandle(() => Array.from(document.querySelectorAll('#flowWaits table tbody tr')).find((tr) => /^Approval/.test((tr as HTMLElement).innerText.trim())));
+    await (approvalRow as any).asElement()!.$eval('button', (button: Element) => (button as HTMLButtonElement).click());
+    await page.waitForFunction(() => document.querySelector('#flowDrill')?.textContent?.includes('State default') ?? false, { timeout: 10000 });
+    const drill = await page.$eval('#flowDrill', (node) => node.textContent ?? '');
+    expect(drill).toContain('In Review');
+    expect(drill).toContain('Approval');
+    expect(await page.$$eval('#transitionWaitReason option', (nodes) => nodes.length)).toBe(7);
     await closeAnyDialog();
+  });
+
+  it('records a wait reason from the transition dialog on the audit event', async () => {
+    await closeAnyDialog();
+    await page.select('#typeFilter', 'incident');
+    await page.waitForFunction(() => document.querySelectorAll('.work-card').length > 0, { timeout: 10000 });
+    const [moveButton] = await page.$$('.work-card .card-action');
+    await moveButton.evaluate((button) => (button as HTMLButtonElement).click());
+    await page.waitForSelector('#transitionDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(
+      () => ((document.querySelector('#transitionTarget') as HTMLSelectElement)?.options.length ?? 0) > 0,
+      { timeout: 10000 },
+    );
+    await page.select('#transitionWaitReason', 'third_party');
+    await page.type('#transitionWaitNote', 'Waiting on the vendor');
+    await page.click('#transitionSubmit');
+    await page.waitForFunction(() => !(document.querySelector('#transitionDialog') as HTMLDialogElement).open, { timeout: 10000 });
+    const events = await api('/events?event_type=WorkItemStateChanged&limit=200');
+    const list = Array.isArray(events) ? events : events.events ?? [];
+    expect(list.some((event: any) => event.payload?.wait_reason?.category === 'third_party' && event.payload?.wait_reason?.note === 'Waiting on the vendor')).toBe(true);
+    await page.select('#typeFilter', '');
   });
 
   it('renders without console errors and does not overflow at phone width', async () => {
