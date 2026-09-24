@@ -15,6 +15,8 @@ export interface RecordedRequest {
   path: string;
   headers: Record<string, string>;
   body?: any;
+  /** When the request reached the fake (epoch ms), so tests can assert how requests were spaced. */
+  at: number;
 }
 
 interface FailureRule {
@@ -40,6 +42,11 @@ abstract class FakeProviderApi {
   public readonly requests: RecordedRequest[] = [];
   private failures: FailureRule[] = [];
   private gate: Promise<void> | null = null;
+  /** Simulated response time. Non-zero makes requests genuinely overlap, so concurrency is observable. */
+  public latencyMs = 0;
+  private inFlight = 0;
+  /** The most requests ever in flight at once, for asserting a backfill's concurrency limit. */
+  public peakInFlight = 0;
   protected clock = Date.parse('2026-09-22T09:00:00.000Z');
 
   /** With no expected authorization, any Basic or Bearer header carrying a secret is accepted. */
@@ -53,8 +60,20 @@ abstract class FakeProviderApi {
       path: parsed.pathname,
       headers: init.headers,
       body: init.body ? JSON.parse(init.body) : undefined,
+      at: Date.now(),
     };
     this.requests.push(request);
+    this.inFlight += 1;
+    this.peakInFlight = Math.max(this.peakInFlight, this.inFlight);
+    try {
+      return await this.handle(url, init, parsed, request);
+    } finally {
+      this.inFlight -= 1;
+    }
+  };
+
+  private async handle(url: string, init: ConnectorHttpRequest, parsed: URL, request: RecordedRequest): Promise<ConnectorHttpResponse> {
+    if (this.latencyMs > 0) await new Promise((resolve) => setTimeout(resolve, this.latencyMs));
     if (this.gate) await this.gate;
     if (!url.startsWith(this.baseUrl)) return respond(404, { error: { message: 'unknown host' } });
     const authorization = init.headers.Authorization || '';
@@ -72,7 +91,7 @@ abstract class FakeProviderApi {
       return respond(failure.status, { errorMessages: [`Injected ${failure.status}`] }, failure.headers);
     }
     return this.route(init.method, parsed, request.body);
-  };
+  }
 
   /** Fail the next `count` matching requests with `status`. */
   public failNext(method: string, pathPrefix: string, status: number, count = 1, headers?: Record<string, string>): void {

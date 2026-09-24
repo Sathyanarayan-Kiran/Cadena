@@ -6,6 +6,7 @@ import { ConnectorService } from '../connector.service';
 import { validateNativeQuery } from '../native-query/native-query-validator';
 import { NativeQueryLanguage } from '../native-query/native-query.types';
 import { BackfillPlanError, DEFAULT_CHUNK_SECONDS, floorToMinute, planChunks } from './backfill-planner';
+import { toCsv } from './csv';
 import {
   BackfillChunk,
   BackfillConflictError,
@@ -231,6 +232,57 @@ export class BackfillService {
     };
   }
 
+  /**
+   * The CSV audit report: one row per record the job read (newly queued or already known, with what
+   * became of its queue entry and the twin it is linked to), plus one row per failed chunk with the
+   * reason, so a migration lead can see exactly what did and did not happen. Exporting is itself audited.
+   */
+  public async report(orgId: string, id: string, actorId: string): Promise<{ csv: string; rows: number; filename: string }> {
+    const job = await this.get(orgId, id);
+    const records = await this.dbService.db.query<any>(
+      `SELECT r.chunk_seq, c.window_start, c.window_end, r.external_id, t.native_key, t.id AS twin_id,
+              r.record_updated_at, r.outcome, q.status AS queue_status, q.attempts, q.last_error, r.recorded_at
+       FROM integration_backfill_records r
+       JOIN integration_backfill_chunks c ON c.job_id = r.job_id AND c.seq = r.chunk_seq
+       LEFT JOIN integration_connector_ingestion_queue q ON q.id = r.queue_entry_id
+       LEFT JOIN integration_canonical_twins t
+         ON t.org_id = r.org_id AND t.connector_id = $3 AND t.external_id = r.external_id
+       WHERE r.org_id = $1 AND r.job_id = $2
+       ORDER BY r.id ASC`,
+      [orgId, id, job.connector_id],
+    );
+    const failed = await this.dbService.db.query<any>(
+      `SELECT seq, window_start, window_end, attempts, last_error, updated_at
+       FROM integration_backfill_chunks WHERE org_id = $1 AND job_id = $2 AND status = 'failed' ORDER BY seq`,
+      [orgId, id],
+    );
+    const rows: unknown[][] = [
+      ...records.rows.map((row: any) => [
+        job.id, job.name, row.chunk_seq, iso(row.window_start), iso(row.window_end), row.external_id, row.native_key ?? '',
+        row.twin_id ?? '', iso(row.record_updated_at), row.outcome, row.queue_status ?? '', row.attempts ?? '', row.last_error ?? '', iso(row.recorded_at),
+      ]),
+      ...failed.rows.map((row: any) => [
+        job.id, job.name, row.seq, iso(row.window_start), iso(row.window_end), '', '', '', '', 'chunk_failed', '', row.attempts, row.last_error ?? '', iso(row.updated_at),
+      ]),
+    ];
+    const csv = toCsv([
+      'job_id', 'job_name', 'chunk', 'window_start', 'window_end', 'external_id', 'native_key', 'twin_id', 'record_updated_at',
+      'outcome', 'queue_status', 'attempts', 'error', 'recorded_at',
+    ], rows);
+    let event: Awaited<ReturnType<EventOutboxService['enqueue']>> | null = null;
+    await this.dbService.db.transaction(async (tx) => {
+      event = await this.outbox.enqueue(tx, {
+        event_type: 'BackfillReportExported',
+        work_item_id: id,
+        org_id: orgId,
+        actor: { type: 'user', id: actorId },
+        payload: { ...this.eventPayload(job), rows: rows.length },
+      });
+    });
+    if (event) await this.outbox.dispatch(event);
+    return { csv, rows: rows.length, filename: `backfill-${job.id}.csv` };
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
   private async activate(orgId: string, id: string, actorId: string, from: BackfillJobStatus[], eventType: string, refusal: string): Promise<BackfillJob> {
@@ -262,8 +314,8 @@ export class BackfillService {
          SET status = $3,
              started_at = CASE WHEN $3 = 'running' THEN COALESCE(started_at, CURRENT_TIMESTAMP) ELSE started_at END,
              finished_at = CASE WHEN $3 = 'cancelled' THEN CURRENT_TIMESTAMP ELSE finished_at END,
-             lease_owner = CASE WHEN $3 = 'running' THEN lease_owner ELSE NULL END,
-             lease_expires_at = CASE WHEN $3 = 'running' THEN lease_expires_at ELSE NULL END
+             lease_owner = CASE WHEN $3 IN ('running', 'paused') THEN lease_owner ELSE NULL END,
+             lease_expires_at = CASE WHEN $3 IN ('running', 'paused') THEN lease_expires_at ELSE NULL END
          WHERE org_id = $1 AND id = $2 AND status = ANY($4::text[])
          RETURNING *`,
         [orgId, id, to, from],

@@ -10,6 +10,7 @@ import { JiraConnectorAdapter } from '../src/modules/connectors/jira-connector.a
 import { ServiceNowConnectorAdapter } from '../src/modules/connectors/servicenow-connector.adapter';
 import { FakeJiraApi, FakeServiceNowApi } from '../src/modules/connectors/sandbox/provider-sandbox';
 import { MAX_CHUNKS_PER_JOB, planChunks } from '../src/modules/connectors/backfill/backfill-planner';
+import { BackfillScheduler } from '../src/modules/connectors/backfill/backfill.scheduler';
 import {
   AdaptiveLimiter,
   MAX_DELAY_MS,
@@ -449,6 +450,386 @@ describe('US17.4 — backfill paging, lifecycle and runs', () => {
       await connectors.enqueueBackfillRecords(orgId, connector, 'issue', [version('Newer title', base + 20 * MINUTE)], randomUUID(), async () => undefined);
       await connectors.drainIngestionQueue(orgId, jiraId);
       expect((await twinOf()).title).toBe('Newer title');
+    });
+  });
+  describe('runs', () => {
+    const act = (orgId: string, id: string, action: string, body: Record<string, unknown> = {}) =>
+      http().post(`/integrations/backfill-jobs/${id}/${action}`).set(headers(orgId)).send(body);
+    const getJob = async (orgId: string, id: string) => (await http().get(`/integrations/backfill-jobs/${id}`).set(headers(orgId)).expect(200)).body;
+    const searches = (api: FakeJiraApi) => api.requests.filter((entry) => entry.path === '/rest/api/3/search/jql');
+    const twinCount = async (connectorId: string) =>
+      Number((await database.db.query<any>(`SELECT COUNT(*)::int AS n FROM integration_canonical_twins WHERE connector_id = $1`, [connectorId])).rows[0].n);
+
+    /** Three daily chunks holding 3, 2 and 4 issues: nine records in all. */
+    const seedNine = (api: FakeJiraApi, base: number) => {
+      const perDay = [3, 2, 4];
+      let key = 1;
+      perDay.forEach((count, day) => {
+        for (let index = 0; index < count; index++) {
+          api.addIssue({ key: `CAD-${key++}`, summary: `Day ${day} issue ${index}`, status: 'To Do', issueType: 'Bug', updated: base + day * DAY + (index + 1) * HOUR });
+        }
+      });
+    };
+    const startJob = async (orgId: string, connectorId: string, base: number, overrides: Record<string, unknown> = {}) => {
+      const id = (await createJob(orgId, jobBody(connectorId, base, overrides)).expect(201)).body.id as string;
+      await act(orgId, id, 'start').expect(201);
+      return id;
+    };
+    const parseCsv = (text: string): string[][] => {
+      const rows: string[][] = [];
+      let row: string[] = [];
+      let cell = '';
+      let quoted = false;
+      for (let index = 0; index < text.length; index++) {
+        const char = text[index];
+        if (quoted) {
+          if (char === '"' && text[index + 1] === '"') { cell += '"'; index++; } else if (char === '"') quoted = false; else cell += char;
+        } else if (char === '"') quoted = true;
+        else if (char === ',') { row.push(cell); cell = ''; }
+        else if (char === '\r') { /* row ends at the following \n */ }
+        else if (char === '\n') { row.push(cell); rows.push(row); row = []; cell = ''; }
+        else cell += char;
+      }
+      return rows;
+    };
+
+    it('works every chunk, links the records to twins, and reports processed, queued and failed counts', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      // Records outside the range and outside the connector's project must never be read.
+      jiraApi.addIssue({ key: 'CAD-90', summary: 'Before the range', status: 'To Do', updated: base - HOUR });
+      jiraApi.addIssue({ key: 'CAD-91', summary: 'After the range', status: 'To Do', updated: base + 3 * DAY });
+      jiraApi.addIssue({ key: 'OPS-1', summary: 'Other project', status: 'To Do', updated: base + HOUR });
+
+      const id = await startJob(orgId, jiraId, base);
+      const result = (await act(orgId, id, 'run').expect(201)).body;
+      expect(result).toMatchObject({ status: 'completed', chunks_run: 3, pages: 3, enqueued: 9 });
+
+      const job = await getJob(orgId, id);
+      expect(job.status).toBe('completed');
+      expect(job.finished_at).toBeTruthy();
+      expect(job.counts).toEqual({
+        chunks: { total: 3, pending: 0, running: 0, done: 3, failed: 0 },
+        records: { fetched: 9, enqueued: 9, duplicates: 0 },
+        queue: { queued: 0, processed: 9, failed: 0 },
+      });
+      expect(await twinCount(jiraId)).toBe(9);
+      expect(searches(jiraApi)).toHaveLength(3);
+      for (const request of searches(jiraApi)) {
+        expect(request.body.jql).toContain('project in ("CAD") AND updated >= "');
+        expect(request.body.jql).toContain(' AND updated < "');
+      }
+      const chunks = (await http().get(`/integrations/backfill-jobs/${id}/chunks`).set(headers(orgId)).expect(200)).body;
+      expect(chunks.map((chunk: any) => [chunk.status, chunk.fetched, chunk.enqueued, chunk.pages])).toEqual([['done', 3, 3, 1], ['done', 2, 2, 1], ['done', 4, 4, 1]]);
+
+      // Only a running job can be worked.
+      await act(orgId, id, 'run').expect(409);
+    });
+
+    it('recognises records it already brought in, so a second pass over the same range adds nothing', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const first = await startJob(orgId, jiraId, base);
+      await act(orgId, first, 'run').expect(201);
+      const second = await startJob(orgId, jiraId, base, { name: 'Same range again' });
+      await act(orgId, second, 'run').expect(201);
+
+      const job = await getJob(orgId, second);
+      expect(job.counts.records).toEqual({ fetched: 9, enqueued: 0, duplicates: 9 });
+      expect(job.counts.queue).toEqual({ queued: 0, processed: 0, failed: 0 });
+      expect(await twinCount(jiraId)).toBe(9);
+    });
+
+    it('resumes across runs: a slice that ends early leaves the rest for the next one, reading nothing twice', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base);
+
+      const partial = (await act(orgId, id, 'run', { max_ms: 1 }).expect(201)).body;
+      expect(partial.status).toBe('running');
+      const midway = await getJob(orgId, id);
+      expect(midway.counts.chunks.done).toBeGreaterThanOrEqual(1);
+      expect(midway.counts.chunks.done).toBeLessThan(3);
+
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+      const done = await getJob(orgId, id);
+      expect(done.counts.records).toEqual({ fetched: 9, enqueued: 9, duplicates: 0 });
+      expect(searches(jiraApi)).toHaveLength(3);
+    });
+
+    it('takes over a job from a worker that died, without redoing finished chunks', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base);
+      await act(orgId, id, 'run', { max_ms: 1 }).expect(201);
+      const finishedBefore = (await getJob(orgId, id)).counts.chunks.done;
+      // The dead worker left a chunk mid-flight and a lease that has since expired.
+      await database.db.query(`UPDATE integration_backfill_chunks SET status = 'running' WHERE job_id = $1 AND status = 'pending' AND seq = $2`, [id, finishedBefore]);
+      await database.db.query(`UPDATE integration_backfill_jobs SET lease_owner = 'dead-worker', lease_expires_at = CURRENT_TIMESTAMP - interval '1 minute' WHERE id = $1`, [id]);
+
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+      expect((await getJob(orgId, id)).counts.records).toEqual({ fetched: 9, enqueued: 9, duplicates: 0 });
+      expect(searches(jiraApi)).toHaveLength(3);
+    });
+
+    it('resumes a chunk from its saved page after a mid-window failure, without re-reading earlier pages', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      for (let index = 1; index <= 230; index++) {
+        jiraApi.addIssue({ key: `CAD-${index}`, summary: `Issue ${index}`, status: 'To Do', updated: base + index * 10_000 });
+      }
+      const id = await startJob(orgId, jiraId, base, { to: new Date(base + DAY).toISOString() });
+
+      // Let the first page through, then fail the second permanently.
+      const originalFetch = jiraApi.fetch;
+      let seen = 0;
+      const guarded: typeof jiraApi.fetch = async (url, init) => {
+        if (init.method === 'POST' && new URL(url).pathname === '/rest/api/3/search/jql' && ++seen === 2) jiraApi.failNext('POST', '/rest/api/3/search/jql', 400, 1);
+        return originalFetch(url, init);
+      };
+      connectors.registerAdapter(new JiraConnectorAdapter(guarded));
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed_with_errors');
+      const failed = await getJob(orgId, id);
+      expect(failed.counts.chunks).toMatchObject({ done: 0, failed: 1 });
+      expect(failed.counts.records.enqueued).toBe(100);
+
+      await act(orgId, id, 'retry-failed').expect(201);
+      const before = searches(jiraApi).length;
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+      const retried = searches(jiraApi).slice(before);
+      // The retry starts at page two (Jira's token for the first 100), not at the beginning.
+      expect(retried[0].body.nextPageToken).toBe('100');
+      const done = await getJob(orgId, id);
+      expect(done.counts.records).toEqual({ fetched: 230, enqueued: 230, duplicates: 0 });
+      expect(await twinCount(jiraId)).toBe(230);
+    });
+
+    it('isolates a failing chunk, finishes the rest, and lets the failure be retried', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base);
+      jiraApi.failNext('POST', '/rest/api/3/search/jql', 400, 1);
+
+      const result = (await act(orgId, id, 'run').expect(201)).body;
+      expect(result.status).toBe('completed_with_errors');
+      const job = await getJob(orgId, id);
+      expect(job.status).toBe('completed_with_errors');
+      expect(job.last_error).toContain('1 chunk(s) failed');
+      expect(job.counts.chunks).toEqual({ total: 3, pending: 0, running: 0, done: 2, failed: 1 });
+      const chunks = (await http().get(`/integrations/backfill-jobs/${id}/chunks`).set(headers(orgId)).expect(200)).body;
+      const bad = chunks.find((chunk: any) => chunk.status === 'failed');
+      expect(bad.last_error).toContain('Provider responded 400');
+
+      const failedReport = parseCsv((await http().get(`/integrations/backfill-jobs/${id}/report.csv`).set(headers(orgId)).expect(200)).text);
+      const failedRow = failedReport.find((row) => row[9] === 'chunk_failed')!;
+      expect(failedRow[2]).toBe(String(bad.seq));
+      expect(failedRow[12]).toContain('Provider responded 400');
+
+      await act(orgId, id, 'retry-failed').expect(201);
+      expect((await getJob(orgId, id)).status).toBe('running');
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+      const done = await getJob(orgId, id);
+      expect(done.counts.chunks).toMatchObject({ done: 3, failed: 0 });
+      expect(done.counts.records.enqueued).toBe(9);
+      expect(done.last_error).toBeNull();
+    });
+
+    it('shrinks concurrency and honours Retry-After when the provider throttles, then finishes', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base, { max_concurrency: 4, max_requests_per_minute: 6000 });
+      await database.db.query(`UPDATE integration_backfill_jobs SET concurrency = 4 WHERE id = $1`, [id]);
+      jiraApi.failNext('POST', '/rest/api/3/search/jql', 429, 1, { 'Retry-After': '1' });
+
+      const started = Date.now();
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+      const job = await getJob(orgId, id);
+      expect(job.limiter.throttle_events).toBe(1);
+      // Four chunks at once became at most three after one halving and a partial recovery.
+      expect(job.limiter.concurrency).toBeLessThan(4);
+      // The throttled chunk waited out Retry-After before its second attempt.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+      expect(searches(jiraApi)).toHaveLength(4);
+      expect(job.counts.records).toEqual({ fetched: 9, enqueued: 9, duplicates: 0 });
+      expect(job.counts.chunks.failed).toBe(0);
+    });
+
+    it('grows concurrency while the provider keeps up, and never exceeds the job maximum', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      for (let day = 0; day < 8; day++) jiraApi.addIssue({ key: `CAD-${day + 1}`, summary: `Day ${day}`, status: 'To Do', updated: base + day * DAY + HOUR });
+      const id = await startJob(orgId, jiraId, base, { to: new Date(base + 8 * DAY).toISOString(), max_concurrency: 3, max_requests_per_minute: 6000 });
+      jiraApi.latencyMs = 30;
+      jiraApi.peakInFlight = 0;
+
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+      expect(jiraApi.peakInFlight).toBeGreaterThanOrEqual(2);
+      expect(jiraApi.peakInFlight).toBeLessThanOrEqual(3);
+      expect((await getJob(orgId, id)).limiter.concurrency).toBeGreaterThanOrEqual(2);
+      expect((await getJob(orgId, id)).limiter.throttle_events).toBe(0);
+    });
+
+    it('spaces request starts to the job rate limit, even across concurrent workers', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      for (let day = 0; day < 6; day++) jiraApi.addIssue({ key: `CAD-${day + 1}`, summary: `Day ${day}`, status: 'To Do', updated: base + day * DAY + HOUR });
+      // 600 requests a minute is one every 100ms. Three workers would otherwise start together.
+      const id = await startJob(orgId, jiraId, base, { to: new Date(base + 6 * DAY).toISOString(), max_concurrency: 3, max_requests_per_minute: 600 });
+      await database.db.query(`UPDATE integration_backfill_jobs SET concurrency = 3 WHERE id = $1`, [id]);
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+
+      const starts = searches(jiraApi).map((entry) => entry.at).sort((a, b) => a - b);
+      expect(starts).toHaveLength(6);
+      for (let index = 1; index < starts.length; index++) expect(starts[index] - starts[index - 1]).toBeGreaterThanOrEqual(90);
+    });
+
+    it('commits an in-flight page when paused, and a resume finishes exactly once', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base);
+
+      const release = jiraApi.hold();
+      const inFlight = act(orgId, id, 'run').then((response) => response);
+      for (let attempt = 0; attempt < 100 && searches(jiraApi).length === 0; attempt++) await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(searches(jiraApi)).toHaveLength(1);
+      await act(orgId, id, 'pause').expect(201);
+      release();
+
+      const paused = (await inFlight).body;
+      expect(paused.status).toBe('paused');
+      const midway = await getJob(orgId, id);
+      expect(midway.counts.chunks.done).toBe(1);
+      expect(midway.counts.records.enqueued).toBe(3);
+
+      await act(orgId, id, 'resume').expect(201);
+      expect((await act(orgId, id, 'run').expect(201)).body.status).toBe('completed');
+      const done = await getJob(orgId, id);
+      expect(done.counts.records).toEqual({ fetched: 9, enqueued: 9, duplicates: 0 });
+      expect(searches(jiraApi)).toHaveLength(3);
+    });
+
+    it('commits nothing from a page that returns after the job is cancelled', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base);
+
+      const release = jiraApi.hold();
+      const inFlight = act(orgId, id, 'run').then((response) => response);
+      for (let attempt = 0; attempt < 100 && searches(jiraApi).length === 0; attempt++) await new Promise((resolve) => setTimeout(resolve, 20));
+      await act(orgId, id, 'cancel').expect(201);
+      release();
+      expect((await inFlight).body.status).toBe('cancelled');
+
+      const job = await getJob(orgId, id);
+      expect(job.status).toBe('cancelled');
+      expect(job.counts.records).toEqual({ fetched: 0, enqueued: 0, duplicates: 0 });
+      expect(job.counts.queue).toEqual({ queued: 0, processed: 0, failed: 0 });
+      expect(await twinCount(jiraId)).toBe(0);
+    });
+
+    it('waits, without failing, while its connector is paused', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base);
+      await http().post(`/integrations/connectors/${jiraId}/pause`).set(headers(orgId)).send({}).expect(201);
+
+      const waiting = (await act(orgId, id, 'run').expect(201)).body;
+      expect(waiting).toMatchObject({ status: 'waiting', message: 'The connector is paused' });
+      expect(searches(jiraApi)).toHaveLength(0);
+      expect((await getJob(orgId, id)).status).toBe('running');
+    });
+
+    it('reads queued and failed counts from the real ingestion queue', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      // Hold the connector's sync lease so the queue is not drained while the job runs.
+      await database.db.query(
+        `INSERT INTO integration_connector_sync_leases (connector_id, org_id, lease_owner, expires_at)
+         VALUES ($1, $2, 'busy-sync', CURRENT_TIMESTAMP + interval '10 minutes')`, [jiraId, orgId],
+      );
+      const id = await startJob(orgId, jiraId, base);
+      await act(orgId, id, 'run').expect(201);
+      expect((await getJob(orgId, id)).counts.queue).toEqual({ queued: 9, processed: 0, failed: 0 });
+      expect(await twinCount(jiraId)).toBe(0);
+
+      await database.db.query(`DELETE FROM integration_connector_sync_leases WHERE connector_id = $1`, [jiraId]);
+      expect(await connectors.drainIngestionQueue(orgId, jiraId)).toBe(true);
+      expect((await getJob(orgId, id)).counts.queue).toEqual({ queued: 0, processed: 9, failed: 0 });
+
+      await database.db.query(
+        `UPDATE integration_connector_ingestion_queue SET status = 'dead', last_error = 'Needs operator review'
+         WHERE id = (SELECT id FROM integration_connector_ingestion_queue WHERE backfill_job_id = $1 ORDER BY queue_position LIMIT 1)`, [id],
+      );
+      expect((await getJob(orgId, id)).counts.queue).toEqual({ queued: 0, processed: 8, failed: 1 });
+      const report = parseCsv((await http().get(`/integrations/backfill-jobs/${id}/report.csv`).set(headers(orgId)).expect(200)).text);
+      expect(report.filter((row) => row[10] === 'dead')).toHaveLength(1);
+      expect(report.find((row) => row[10] === 'dead')![12]).toBe('Needs operator review');
+    });
+
+    it('exports a CSV audit report with one row per record, linked twins, and safe cells', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const first = await startJob(orgId, jiraId, base, { name: 'First pass' });
+      await act(orgId, first, 'run').expect(201);
+      const name = '=HYPERLINK("http://example.test"), "quoted"';
+      const second = await startJob(orgId, jiraId, base, { name });
+      await act(orgId, second, 'run').expect(201);
+
+      const response = await http().get(`/integrations/backfill-jobs/${first}/report.csv`).set(headers(orgId, 'auditor')).expect(200);
+      expect(response.headers['content-type']).toContain('text/csv');
+      expect(response.headers['content-disposition']).toBe(`attachment; filename="backfill-${first}.csv"`);
+      expect(response.headers['x-report-rows']).toBe('9');
+      const rows = parseCsv(response.text);
+      expect(rows[0]).toEqual([
+        'job_id', 'job_name', 'chunk', 'window_start', 'window_end', 'external_id', 'native_key', 'twin_id', 'record_updated_at',
+        'outcome', 'queue_status', 'attempts', 'error', 'recorded_at',
+      ]);
+      expect(rows).toHaveLength(10);
+      const data = rows.slice(1);
+      expect(new Set(data.map((row) => row[0]))).toEqual(new Set([first]));
+      expect(data.every((row) => row[9] === 'enqueued' && row[10] === 'completed' && /^CAD-\d+$/.test(row[6]) && row[7].length === 36)).toBe(true);
+      expect(new Set(data.map((row) => row[5])).size).toBe(9);
+
+      const dup = parseCsv((await http().get(`/integrations/backfill-jobs/${second}/report.csv`).set(headers(orgId)).expect(200)).text).slice(1);
+      expect(dup).toHaveLength(9);
+      expect(dup.every((row) => row[9] === 'duplicate')).toBe(true);
+      // A spreadsheet would run a leading "=" as a formula, so it is neutralised; quotes and commas survive.
+      expect(dup[0][1]).toBe(`'${name}`);
+      expect(response.text).not.toMatch(/(^|,)=/m);
+
+      const exported = await database.db.query<any>(
+        `SELECT actor_id, payload FROM domain_events WHERE event_type = 'BackfillReportExported' AND work_item_id = $1`, [first],
+      );
+      expect(exported.rows).toHaveLength(1);
+      expect(exported.rows[0].actor_id).toBe('auditor');
+      expect(Number(exported.rows[0].payload.rows)).toBe(9);
+    });
+
+    it('is driven by the scheduler and refuses cross-tenant access', async () => {
+      const { orgId, jiraId, jiraApi } = await tenant();
+      const base = minuteBase();
+      seedNine(jiraApi, base);
+      const id = await startJob(orgId, jiraId, base);
+      const other = randomUUID();
+      await act(other, id, 'run').expect(404);
+      await http().get(`/integrations/backfill-jobs/${id}/report.csv`).set(headers(other)).expect(404);
+
+      const results = (await app.get(BackfillScheduler).tick()).filter((result) => result.job_id === id);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('completed');
+      expect((await getJob(orgId, id)).counts.records.enqueued).toBe(9);
+      expect((await app.get(BackfillScheduler).tick()).filter((result) => result.job_id === id)).toHaveLength(0);
     });
   });
 });
