@@ -606,11 +606,11 @@
     },
     "US16.1": {
       "name": "Adaptive rate governance",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "expandedIn": "master-2026-09-21",
-      "note": "Expanded by the master backlog: quota shaping and Retry-After now include jittered exponential backoff plus backlog, quota and retry telemetry."
+      "note": "A tenant and provider target share one durable quota window across connection tests, discovery, polling, scheduled queries, backfills, state/field writes and public comments. Configurable requests-per-minute, reserved headroom and maximum concurrency shape calls before the provider boundary. Retry-After supports both delta-seconds and HTTP dates; without it, retryable throttling or semaphore pressure produces bounded jittered exponential delay which the durable work-order, scheduled-query and backfill schedulers persist before retrying. A drain attempts a queue item at most once. GET /integrations/connectors/rate-governance exports tenant-scoped quota, concurrency, backlog, throttle, pressure, retry and request metrics grouped by target, and the connector studio exposes policy and live metrics. Verified by test/us16.1.spec.ts and the connector regression/browser suites against local provider fakes only; live quotas and provider-specific rate headers remain unobserved."
     },
     "US16.2": {
       "name": "Indexed-query safety",

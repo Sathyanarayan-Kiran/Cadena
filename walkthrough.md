@@ -2,8 +2,22 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** The Phase 0 pilot and Phase 1 operational slice include workflow/SLA governance, traceability, durable event delivery, Git/CI and monitoring ingestion, notification/escalation, audit evidence, immutable connector correlation, echo suppression, provider-neutral state and field mappings, durable per-twin queues, scheduled native queries, governed backfill, twin projection, the connector-led workspace, flow-efficiency analytics, waiting risk, cost of delay, US13.4 public-comment privacy/synchronization and US13.5 resolution write-back. The canonical backlog is **21 epics / 77 stories**, with **46 done / 7 partial / 24 not started**. Jira/ServiceNow connector behaviour is verified against deterministic API fakes only; US13.1 and US17.1 remain partial pending explicit live-sandbox validation, and US17.3 remains partial because Azure DevOps has no adapter.
-**Verification:** 333 automated tests across 56 test files pass. The 7 connector-led browser tests pass against the built server. A full 29-test browser run also exposed one unrelated, time-sensitive US21.4 assertion (`By state` was absent because that run left 2.5 minutes unpriced); the three connector failures in that same run were from a stale pre-seed build and disappeared after rebuilding. No US13.4 browser test remains failing.
+**Current state:** The Phase 0 pilot and Phase 1 operational slice include workflow/SLA governance, traceability, durable event delivery, Git/CI and monitoring ingestion, notification/escalation, audit evidence, immutable connector correlation, echo suppression, provider-neutral state and field mappings, durable per-twin queues, scheduled native queries, governed backfill, target-wide adaptive rate governance, twin projection, the connector-led workspace, flow-efficiency analytics, waiting risk, cost of delay, US13.4 public-comment privacy/synchronization and US13.5 resolution write-back. The canonical backlog is **21 epics / 77 stories**, with **47 done / 7 partial / 23 not started**. Jira/ServiceNow connector behaviour is verified against deterministic API fakes only; US13.1 and US17.1 remain partial pending explicit live-sandbox validation, and US17.3 remains partial because Azure DevOps has no adapter.
+**Verification:** 339 non-browser tests across 57 files and all 29 browser scenarios pass. US16.1's six acceptance tests, the 98-test affected connector set and the two changed connector-led browser scenarios also pass in focused runs. No live provider was contacted.
+
+---
+
+## 2026-09-24 — US16.1 adaptive rate governance (Codex)
+
+Every Jira or ServiceNow call now passes one target-wide admission boundary, so polling, scheduled queries, backfills and write-backs cannot each spend the same quota independently.
+
+- **Set the budget.** Open **Manage connectors**, expand **Request budget**, and set requests per minute, the percentage Cadena may use, maximum concurrent requests and the retry range/jitter. Ten percent headroom is reserved by default. Connectors in the same tenant that point at the same host share the stricter budget.
+- **Before the provider, not after failure.** The usable one-minute allowance is counted durably and transactionally. Once used, later calls wait for the next window. A separate in-process gate limits active sockets.
+- **Provider feedback survives.** A 429 honours `Retry-After` whether it is seconds or an HTTP date. Without one, throttling or overload produces exponential delay with jitter. Work orders, scheduled queries and backfill chunks persist that delay and resume later with their payload and FIFO position intact; the HTTP request itself is not held open.
+- **See the pressure.** Connector cards show quota remaining, live active/waiting calls, durable target backlog, retries, throttles and semaphore-pressure events. The same tenant-scoped data is at `GET /integrations/connectors/rate-governance`.
+- **No double attempt.** One queue drain tries one work order at most once, even when a short delay expires while other work is still being handled.
+
+Six focused acceptance tests cover quota headroom, concurrency, both `Retry-After` forms, jittered exponential backoff, audit/tenant isolation and a 429-failed durable write that succeeds exactly once on its second attempt. Removing the headroom calculation on purpose made the focused test fail. Verification remains fake-only: no real Jira or ServiceNow quota or rate-limit header has been observed.
 
 ---
 

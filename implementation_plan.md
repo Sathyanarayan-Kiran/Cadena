@@ -2,6 +2,40 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Codex — US16.1 adaptive rate governance — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-24 after the user asked to continue with local-only features and explicitly said to go ahead on US16.1. It extends Claude's US17.4 backfill limiter into a target-wide connector boundary without changing that job's chunk-level AIMD controller. No live provider was contacted.
+
+**Status:** US16.1 moves from not-started to **done**. The ledger moves to **47 done / 7 partial / 23 not started** across **21 epics / 77 stories**. Verification is against deterministic Jira and ServiceNow provider fakes only.
+
+### What was built
+
+- **One boundary for every provider call.** Both native adapters run connection tests, discovery, ordinary polls, scheduled native queries, backfill pages, record writes and public-comment reads/writes through the same governor. The key is tenant plus normalized target origin, so two connectors to one host share its allowance while another tenant does not.
+- **Quota shaping before the wire.** Each connector stores a validated `rateGovernance` policy: requests per minute (default 600), usable quota percentage (90%, reserving 10% headroom), maximum concurrent requests (4), base/max backoff (1 second/60 seconds) and jitter ratio (0.2). The durable one-minute counter is admitted transactionally before transport; reaching the usable limit queues the caller into the next window rather than testing the provider boundary.
+- **Adaptive retry signals.** `Retry-After` accepts delta-seconds and HTTP-date values. A retryable response without it receives bounded exponential backoff with symmetric jitter. HTTP 429 is counted as throttling; HTTP 503 and overload/semaphore messages are counted as pressure. The calculated delay is returned to the durable caller, so work orders, scheduled queries and backfill chunks persist their next attempt instead of sleeping inside an HTTP request.
+- **No same-turn replay.** A connector work-order drain now fixes a cycle boundary. An item that fails and becomes due quickly cannot be claimed a second time inside the same drain; it waits for the next scheduler or synchronization turn. The original FIFO position and payload remain unchanged.
+- **Operational telemetry.** `GET /integrations/connectors/rate-governance` groups by target and exports quota used/remaining/reset, concurrency and in-process waiters, durable ingestion/write/comment/backfill backlog, blocked-until and last delay, throttle/pressure/retry counts, total/success/failed requests and accumulated shaping delay. It is tenant-scoped and exposes no credentials. `POST /integrations/connectors/:id/rate-governance` validates, stores and audits policy changes.
+- **Studio visibility.** New-connector controls set the request budget, headroom, concurrency and base retry delay. Existing connector cards provide the full policy editor plus quota, active/waiting request, backlog, throttle, pressure and retry figures. Connector-led source cards show request allowance and target backlog at a glance.
+
+### Decisions and limits, stated plainly
+
+- The quota window and counters are database-backed, while active sockets and their immediate waiters are process-local. In a multi-instance deployment the quota is coordinated across instances; each process enforces its own socket ceiling. A distributed semaphore is not claimed.
+- The target key is a SHA-256 digest of the normalized origin. The operator response also names that origin so the metric is actionable; URL paths, query strings and credentials are not included.
+- Backfill retains its job-specific adaptive concurrency and per-minute ceiling. The target governor is an additional shared ceiling, so a backfill cannot consume allowance reserved for the rest of the connector workload.
+- Retry delay is never an in-request sleep. Durable jobs keep it in `next_attempt_at`; an operator-triggered connection test or ordinary poll fails promptly and can be retried later. This avoids pinning a web request or replaying a queue item twice in one drain.
+- Provider quota headers other than `Retry-After` are not interpreted. Real Jira and ServiceNow limits, HTTP-date clock skew and rate-limit header shapes remain unobserved until the separately authorized live-sandbox phase.
+
+### Verification
+
+- `test/us16.1.spec.ts` (6 tests): reserved headroom shapes the third request into the next window; the socket ceiling queues and releases all calls without loss; explicit `Retry-After` and no-header jittered exponential backoff are recorded; both wire formats parse; configuration is validated, audited, grouped by target and tenant-isolated; a 429-failed durable write succeeds on its second attempt with exactly two provider requests.
+- The affected connector regression set (`us16.1`, `us17.1`, `us17.3`, `us17.4`, `us13.4`, `us13.5`, `us16.4-16.5`) passes 98 tests. The connector-led browser subset covering onboarding and source health passes against the built server.
+- The complete non-browser suite passes 339 tests across 57 files (the first run had one 30-second worker-start hook timeout; that file passed alone, and the complete rerun passed with a 60-second hook allowance). The complete built-server browser suite passes all 29 scenarios.
+- Quota headroom was deliberately removed and the focused test failed because the third request was no longer delayed. Restoring the calculation made it pass.
+
+### Primary files
+
+- `src/modules/connectors/rate-governor.ts`, `connector-http.ts`, `connector.types.ts`, `connector.controller.ts`, `connector.service.ts`, both native adapters, `native-query/native-query.service.ts`, `src/database/database.service.ts`, `public/index.html`, `test/us16.1.spec.ts`, `test/ui-smoke.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — review of US13.4 and provider-side privacy hardening — 2026-09-24
 
 > **Attribution boundary:** This short section was written by **Claude (Claude Sonnet 5)** on 2026-09-24. It reviews the Codex US13.4 increment below (three commits, `3912445`, `902da33`, `a3d389c`), which Claude did not write, and records one small change Claude made to it. Nothing in the Codex section is withdrawn.
