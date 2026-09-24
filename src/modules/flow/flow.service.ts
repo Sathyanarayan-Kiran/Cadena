@@ -33,7 +33,7 @@ const WAIT_METHOD =
 export class FlowNotFoundError extends Error {}
 export class InvalidFlowRangeError extends Error {}
 
-interface ItemRow {
+export interface ItemRow {
   id: string;
   item_key: string | null;
   type: string;
@@ -59,7 +59,7 @@ export interface BlockingItem {
   team_name: string | null;
 }
 
-interface Scored {
+export interface Scored {
   state: string;
   classification: FlowBucket;
   classification_version: number | null;
@@ -235,6 +235,17 @@ export class FlowService {
       calendar_note: CALENDAR_NOTE,
       method: 'Flow efficiency is active business time divided by total elapsed business time, from recorded state changes. '
         + 'Unclassified states count as elapsed time and are never assumed to be active.',
+    };
+  }
+
+  /** Every non-terminal-or-complete visit of every item in an org, unclipped, for history-based analysis (US21.3). */
+  public async scoreOrg(orgId: string, now = new Date()) {
+    await this.dbService.initialize();
+    const { items, truncated } = await this.loadItems(orgId, now, {});
+    const context = await this.context(orgId, items);
+    return {
+      truncated,
+      items: items.map((item) => ({ item, ...this.score(item, context, null, null, now) })),
     };
   }
 

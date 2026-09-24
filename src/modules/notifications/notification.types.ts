@@ -9,7 +9,7 @@ export const FALLBACK_CHANNEL: NotificationChannel = 'email';
 
 export const DEFAULT_ESCALATION_THRESHOLD_PERCENT = 150;
 
-export type NotificationEventType = 'SLAWarning' | 'SLABreached' | 'SLAEscalated';
+export type NotificationEventType = 'SLAWarning' | 'SLABreached' | 'SLAEscalated' | 'FlowWaitRiskCrossed';
 
 /** Why this person is on the notification: drives routing and the audit trail. */
 export type RecipientRole = 'owner' | 'team_lead' | 'escalation_target';

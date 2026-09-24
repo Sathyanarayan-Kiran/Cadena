@@ -624,6 +624,40 @@ export class DatabaseService {
       CREATE UNIQUE INDEX IF NOT EXISTS flow_state_classifications_version_idx
         ON flow_state_classifications (org_id, COALESCE(team_id, '00000000-0000-0000-0000-000000000000'::uuid), state, version);
 
+      -- US21.3: per-org thresholds, and the latest risk evaluation of each item's current waiting interval.
+      CREATE TABLE IF NOT EXISTS flow_risk_settings (
+        org_id UUID PRIMARY KEY REFERENCES orgs(id),
+        min_sample INT NOT NULL DEFAULT 10,
+        percentile_threshold NUMERIC NOT NULL DEFAULT 0.9,
+        lookback_days INT NOT NULL DEFAULT 180,
+        updated_by TEXT,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE TABLE IF NOT EXISTS flow_wait_risk (
+        work_item_id UUID NOT NULL,
+        state TEXT NOT NULL,
+        entered_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        org_id UUID NOT NULL,
+        team_id UUID,
+        item_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_wait_minutes NUMERIC,
+        percentile NUMERIC,
+        probability_exceed_target NUMERIC,
+        probability_basis TEXT,
+        sample_size INT,
+        sample_items INT,
+        min_sample INT,
+        threshold NUMERIC,
+        above BOOLEAN NOT NULL DEFAULT FALSE,
+        notified_count INT NOT NULL DEFAULT 0,
+        last_notified_at TIMESTAMP WITH TIME ZONE,
+        active BOOLEAN NOT NULL DEFAULT TRUE,
+        evaluated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        PRIMARY KEY (work_item_id, state, entered_at)
+      );
+      CREATE INDEX IF NOT EXISTS flow_wait_risk_org_idx ON flow_wait_risk (org_id, active);
+
       CREATE TABLE IF NOT EXISTS integration_connectors (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,

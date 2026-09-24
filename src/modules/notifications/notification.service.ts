@@ -29,7 +29,7 @@ interface ResolvedRecipient {
   email: string;
 }
 
-const SUBSCRIBED_EVENTS: NotificationEventType[] = ['SLAWarning', 'SLABreached', 'SLAEscalated'];
+const SUBSCRIBED_EVENTS: NotificationEventType[] = ['SLAWarning', 'SLABreached', 'SLAEscalated', 'FlowWaitRiskCrossed'];
 
 /**
  * Epic 8 — notification and escalation routing.
@@ -449,6 +449,18 @@ export class NotificationService implements OnModuleInit {
         subject: `[SLA breached] ${key} is past its ${state} SLA`,
         body: `${recipient.name}, ${key} "${title}" has breached its ${state} SLA at ${score}% `
           + `of a ${payload.threshold_minutes} minute threshold.`,
+      };
+    }
+    if (eventType === 'FlowWaitRiskCrossed') {
+      const percentile = Math.round(Number(payload.percentile || 0) * 100);
+      const wait = Math.round(Number(payload.current_wait_minutes || 0));
+      const overrun = payload.probability_exceed_target === null || payload.probability_exceed_target === undefined
+        ? ''
+        : ` Estimated chance of exceeding its ${payload.target_minutes} minute target: ${Math.round(Number(payload.probability_exceed_target) * 100)}%.`;
+      return {
+        subject: `[Waiting risk] ${key} has waited longer than ${percentile}% of comparable items in ${state}`,
+        body: `${recipient.name}, ${key} "${title}" has been in ${state} for ${wait} business minutes, longer than ${percentile}% of `
+          + `${payload.sample_size} comparable completed visits.${overrun} This is an estimate from history, not a breach.`,
       };
     }
     return {
