@@ -125,6 +125,8 @@ export interface FakeJiraIssue {
   summary: string;
   status: string;
   priority?: string;
+  /** The Jira resolution name (for example `Done`, `Won't Do`) once the issue is resolved. */
+  resolution?: string;
   updated: number;
   created?: number;
   issueType?: string;
@@ -177,6 +179,8 @@ export class FakeJiraApi extends FakeProviderApi {
         { id: 'priority', name: 'Priority', custom: false, schema: { type: 'priority' } },
         { id: 'assignee', name: 'Assignee', custom: false, schema: { type: 'user' } },
         { id: 'updated', name: 'Updated', custom: false, schema: { type: 'datetime' } },
+        { id: 'resolution', name: 'Resolution', custom: false, schema: { type: 'resolution' } },
+        { id: 'customfield_10500', name: 'Resolution notes', custom: true, schema: { type: 'string' } },
         { id: 'customfield_10014', name: 'Epic Link', custom: true, schema: { type: 'string' } },
         { id: 'customfield_10020', name: 'Sprint', custom: true, schema: { type: 'array' } },
       ]);
@@ -280,6 +284,7 @@ export class FakeJiraApi extends FakeProviderApi {
             ? { displayName: null, accountId: issue.assigneeAccountId ?? null, emailAddress: issue.assigneeEmail ?? null }
             : null,
           issuetype: { name: issue.issueType || 'Story' },
+          resolution: issue.resolution ? { name: issue.resolution } : null,
           project: { key: issue.key.split('-')[0] },
           description: null,
           created: new Date(issue.created ?? issue.updated).toISOString().replace('Z', '+0000'),
@@ -320,6 +325,11 @@ export class FakeServiceNowApi extends FakeProviderApi {
     ['change_request', new Map()],
   ]);
   private sequence = 10000;
+  /**
+   * Incident columns a data policy makes mandatory when the state moves to Resolved (6), as a real instance
+   * does with resolution code and notes. Empty by default so existing scenarios are unaffected.
+   */
+  public mandatoryOnResolve: string[] = [];
 
   constructor(baseUrl = 'https://acme.service-now.com', private readonly username = 'svc.cadena', password: string | null = 'snow-password-value') {
     super(baseUrl, password === null ? undefined : `Basic ${Buffer.from(`${username}:${password}`).toString('base64')}`);
@@ -400,7 +410,12 @@ export class FakeServiceNowApi extends FakeProviderApi {
           { name, element: 'short_description', column_label: 'Short description', internal_type: 'string', mandatory: 'true' },
           { name, element: 'u_business_service', column_label: 'Business service', internal_type: 'reference', mandatory: 'false' },
         );
-        if (name === 'incident') rows.push({ name, element: 'close_code', column_label: 'Resolution code', internal_type: 'string', mandatory: 'false' });
+        if (name === 'incident') {
+          rows.push(
+            { name, element: 'close_code', column_label: 'Resolution code', internal_type: 'string', mandatory: 'false' },
+            { name, element: 'close_notes', column_label: 'Resolution notes', internal_type: 'string', mandatory: 'false' },
+          );
+        }
       }
       return respond(200, { result: rows });
     }
@@ -419,6 +434,17 @@ export class FakeServiceNowApi extends FakeProviderApi {
       if (!record) return respond(404, { error: { message: 'No Record found' } });
       // Any governed field write (e.g. priority, assignment_group) round-trips as a flat value,
       // matching the real Table API's PATCH contract; `state` alone gets its usual special case.
+      if (table === 'incident' && String(body?.state) === '6' && this.mandatoryOnResolve.length) {
+        const labels: Record<string, string> = { close_code: 'Resolution code', close_notes: 'Resolution notes' };
+        const empty = (value: unknown) => value === undefined || value === null || String(value).trim() === '';
+        const missing = this.mandatoryOnResolve.filter((column) => empty(column in (body || {}) ? body[column] : record[column]));
+        if (missing.length) {
+          return respond(403, {
+            error: { message: 'Operation Failed', detail: `Data Policy Exception: ${missing.map((column) => labels[column] || column).join(', ')} ${missing.length === 1 ? 'is' : 'are'} mandatory` },
+            status: 'failure',
+          });
+        }
+      }
       for (const [key, value] of Object.entries(body || {})) {
         if (key === 'state') record.state = String(value);
         else record[key] = value;

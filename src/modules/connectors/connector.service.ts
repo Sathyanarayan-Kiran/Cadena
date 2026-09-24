@@ -1229,19 +1229,35 @@ export class ConnectorService implements OnApplicationBootstrap {
         let holdReason: string | null = null;
         let holdMessage: string | null = null;
 
+        // Evaluated first (it is read-only) so a state rule's required target fields, such as a ServiceNow
+        // resolution code and notes, are satisfied by what a field mapping will actually write, not only by
+        // fields the source happens to carry under the same name (US13.5).
+        const fieldTranslation = await this.fieldMappingService.translate(orgId, sourceIdentity, targetIdentity, {
+          sourceFields,
+          sourceState: sourcePayload.state || null,
+          targetState: twin.effective_status || null,
+        });
+
         if (sourcePayload.stateChanged && sourcePayload.state) {
           const translation = await this.stateMappingService.translate(orgId, {
             source_identity: sourceIdentity,
             target_identity: targetIdentity,
             source_state: sourcePayload.state,
             current_target_state: twin.effective_status || null,
-            target_fields: sourceFields,
+            target_fields: {
+              ...sourceFields,
+              ...(fieldTranslation && fieldTranslation.status !== 'held' ? fieldTranslation.fields : {}),
+            },
             dry_run: false,
           }, `connector:${work.source_connector_id || target.id}`);
           transactionId = translation.transaction_id;
           if (translation.status !== 'ready' || !transactionId || !translation.mapped_target_state) {
             holdReason = translation.reason;
             holdMessage = translation.message || 'State translation requires operator review';
+            if (translation.reason === 'missing_required_fields') {
+              // The record is left exactly as it was: closing it incomplete is the failure this guards against.
+              holdMessage += `. The ${target.provider} record was not changed. Supply the field(s), either by adding a published field mapping that provides them or by re-injecting this held entry from the twin dead-letter queue with a corrected sourcePayload.`;
+            }
           } else {
             const required = await this.dbService.db.query<any>(
               `SELECT required_target_fields FROM integration_state_sync_transactions WHERE id = $1 AND org_id = $2`,
@@ -1254,11 +1270,6 @@ export class ConnectorService implements OnApplicationBootstrap {
         }
 
         if (!holdReason) {
-          const fieldTranslation = await this.fieldMappingService.translate(orgId, sourceIdentity, targetIdentity, {
-            sourceFields,
-            sourceState: sourcePayload.state || null,
-            targetState: twin.effective_status || null,
-          });
           if (fieldTranslation) {
             if (fieldTranslation.status === 'held') {
               const first = fieldTranslation.outcomes.find((outcome) => outcome.status === 'held');

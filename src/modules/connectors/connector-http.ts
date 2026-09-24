@@ -119,6 +119,8 @@ function summarizeErrorBody(text: string): string {
       ...(Array.isArray(body?.errorMessages) ? body.errorMessages : []),
       ...(body?.errors && typeof body.errors === 'object' ? Object.values(body.errors).map(String) : []),
       ...(typeof body?.error?.message === 'string' ? [body.error.message] : []),
+      // ServiceNow puts the actionable part (for example a data policy naming a mandatory field) in `detail`.
+      ...(typeof body?.error?.detail === 'string' ? [body.error.detail] : []),
     ];
     return messages.join('; ').slice(0, 300);
   } catch {
