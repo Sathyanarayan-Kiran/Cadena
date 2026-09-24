@@ -614,10 +614,10 @@
     },
     "US16.2": {
       "name": "Indexed-query safety",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
-      "note": "Reject queries against unindexed fields at configuration time; shed load rather than retrying into semaphore exhaustion."
+      "note": "Scheduled JQL and encoded queries are checked field by field against a per-connector index catalog: Jira fields discovery reports as searchable (by id, name, clause name or cf[n]), ServiceNow platform-indexed and reference columns, and fields an administrator declares through the audited POST /integrations/connectors/:id/query-indexes. An unindexed or unknown field is named in the draft's findings, publish is refused with 422, and every run re-checks before any provider call. In the shared rate governor, a run of consecutive semaphore-pressure responses (shedAfterPressureResponses, default 2) opens a target-wide shedding window (Retry-After or jittered exponential delay) in which calls are refused before sending; queued writes, comments, ingestion, scheduled queries and backfill chunks defer without spending attempts, a sync reports loadShedding and marks the connector degraded, and one probe decides recovery. Start and end are domain events and loadShedding is exported with the rate-governance metrics. Verified by test/us16.2.spec.ts and the connector regression/browser suites against local provider fakes only; ServiceNow index metadata is not read from the instance and real semaphore-exhaustion responses remain unobserved."
     },
     "US16.3": {
       "name": "Zero-inbound-port connectivity",

@@ -2,6 +2,46 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — US16.2 indexed-query safety and load shedding — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude** on 2026-09-24 after the user asked to fix the failing US5.4 test first and then take US16.2. It builds on Codex's US16.1 governor and Claude's US17.3 query validator. No live provider was contacted.
+
+**Status:** US16.2 moves from not-started to **done**. The ledger moves to **48 done / 7 partial / 22 not started** across **21 epics / 77 stories**. Verification is against deterministic Jira and ServiceNow provider fakes only.
+
+### What was built
+
+- **An index catalog per connector entity** (`native-query/query-index-catalog.ts`). Jira discovery now records each field's `searchable` flag and `clauseNames`, and ServiceNow discovery records reference columns. A lookup resolves a field reference as written in the query and says which source vouched for it: `discovered`, `platform` or `declared`.
+- **Field-level validation.** The JQL and encoded-query validators collect every filtered field (every leaf of the AND/OR/NOT tree, every `^`, `^OR` and `^NQ` term). Given a catalog, they report `unindexed_field` or `unknown_field` with the field named. They report `index_catalog_unavailable` for a Jira schema discovered before searchability was recorded. Drafts store the findings, publish is refused with HTTP 422 naming the field, and each run re-checks, so a withdrawn declaration or a schema change stops the query before any provider call. The ad-hoc validate endpoint takes an optional connector and entity type, and warns `indexes_not_checked` without them.
+- **Administrator-declared indexes.** `queryIndexes` connector configuration (at creation, or replaced through `POST /integrations/connectors/:id/query-indexes`) is validated against the connector's entity types and audited as `ConnectorQueryIndexesConfigured`. The connector studio has a **Query indexes** editor.
+- **Load shedding in the shared governor.** A durable per-target `pressure_streak` counts consecutive semaphore-pressure responses. Reaching `shedAfterPressureResponses` (default 2) opens a shedding window lasting the provider's `Retry-After` or the US16.1 jittered exponential delay. During it, `execute` throws `ConnectorLoadShedError` before any request. Afterwards exactly one probe is admitted under a 30-second lease: success closes the window, pressure reopens it for longer, and any other failure releases the probe. Transitions emit `ConnectorLoadSheddingStarted`/`Ended` through the outbox, and metrics gain a `loadShedding` block.
+- **Durable callers defer without losing attempts.** Work orders, comment deliveries, ingestion records, scheduled-query runs and backfill chunks treat a shed as a deferral to the end of the window. The claimed attempt is given back, no failure event is emitted and the query's failure streak is unchanged. Queue drains stop while the target sheds. A sync against a shedding target sends nothing, reports `loadShedding`, and marks the connector `degraded` without counting a failure. Operator-facing calls map a shed to HTTP 503.
+
+### Decisions and limits, stated plainly
+
+- **ServiceNow's index metadata is not read from the instance.** The Table API route to the database index definitions was not verified, so Cadena vouches only for platform-indexed columns and reference columns, plus what an administrator declares. This is deliberately conservative: a legitimately indexed custom column needs a one-line declaration.
+- **"Rejected when registered" is enforced at publish (and at every run), not at draft creation.** Drafts keep the existing US17.3 behaviour of being saved with their findings, so the studio can show the problem next to the text. Only a published query can run.
+- **One overloaded response does not shed.** The first implementation shed on the first 503. That turned one transient failure on one twin into a target-wide pause, and it broke two existing US17.1/US20.2 write-back scenarios that rely on a single 503 being an ordinary per-item retry. Shedding now requires a sustained run (default 2, configurable 1–20; connectors sharing a target use the lower value).
+- **Detection still uses the US16.1 pressure heuristic** (HTTP 503, or a body mentioning semaphore, "too many requests" or "temporarily unavailable"). Real Jira and ServiceNow semaphore-exhaustion responses have not been observed.
+- **While a target sheds, locally queued ingestion records also wait,** because processing can fetch comments from the same target. This trades a little latency for sending the target nothing.
+
+### Verification
+
+- `test/us16.2.spec.ts` (12 tests) covers:
+  - Jira id, clause-name and `cf[n]` resolution, and unindexed/unknown fields anywhere in the expression
+  - A legacy catalog, and ServiceNow reference/platform/dot-walk/declared rules with declaration validation
+  - Discovery recording searchability, refusal at publish with no provider call, and ad-hoc checks with and without a connector
+  - The audited declaration enabling publish, and its withdrawal failing the next run before any provider call
+  - Shedding with a single probe and both events
+  - The sustained-pressure threshold, the Retry-After window and a longer reopen, with non-pressure failures ignored
+  - Three queued writes and a scheduled query deferred without spending attempts, a degraded connector, and recovery that completes every write exactly once
+- Existing specs were adjusted where US16.2 intentionally tightens behaviour: US17.3's ServiceNow tenants declare `category` as indexed, the provider fakes return realistic `searchable`/`clauseNames` and a `category` column, and the browser suite asserts the new check messages.
+- Disabling the admission refusal on purpose made both shedding tests fail. Restoring it made them pass.
+- The complete non-browser suite passes 351 tests across 58 files, and the built-server browser suite passes all 29 scenarios. Two earlier browser runs failed only the time-sensitive US21.4 `By state` assertion already recorded in `walkthrough.md`, and it failed identically on the preceding commit (`b9e758e`), before any US16.2 change.
+
+### Primary files
+
+- `src/modules/connectors/native-query/query-index-catalog.ts` (new), `native-query-validator.ts`, `native-query.service.ts`, `native-query.controller.ts`, `native-query.types.ts`, `rate-governor.ts`, `connector-http.ts`, `connector.service.ts`, `connector.controller.ts`, `connector.types.ts`, both native adapters, `backfill/backfill-runner.service.ts`, `sandbox/provider-sandbox.ts`, `src/database/database.service.ts`, `public/index.html`, `test/us16.2.spec.ts` (new), `test/us17.3.spec.ts`, `test/ui-smoke.spec.ts`, plus this ledger sync.
+
 ## Codex — US16.1 adaptive rate governance — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-24 after the user asked to continue with local-only features and explicitly said to go ahead on US16.1. It extends Claude's US17.4 backfill limiter into a target-wide connector boundary without changing that job's chunk-level AIMD controller. No live provider was contacted.

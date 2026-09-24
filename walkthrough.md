@@ -2,8 +2,28 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** The Phase 0 pilot and Phase 1 operational slice include workflow/SLA governance, traceability, durable event delivery, Git/CI and monitoring ingestion, notification/escalation, audit evidence, immutable connector correlation, echo suppression, provider-neutral state and field mappings, durable per-twin queues, scheduled native queries, governed backfill, target-wide adaptive rate governance, twin projection, the connector-led workspace, flow-efficiency analytics, waiting risk, cost of delay, US13.4 public-comment privacy/synchronization and US13.5 resolution write-back. The canonical backlog is **21 epics / 77 stories**, with **47 done / 7 partial / 23 not started**. Jira/ServiceNow connector behaviour is verified against deterministic API fakes only; US13.1 and US17.1 remain partial pending explicit live-sandbox validation, and US17.3 remains partial because Azure DevOps has no adapter.
-**Verification:** 339 non-browser tests across 57 files and all 29 browser scenarios pass. US16.1's six acceptance tests, the 98-test affected connector set and the two changed connector-led browser scenarios also pass in focused runs. No live provider was contacted.
+**Current state:** The Phase 0 pilot and Phase 1 operational slice include workflow/SLA governance, traceability, durable event delivery, Git/CI and monitoring ingestion, notification/escalation, audit evidence, immutable connector correlation, echo suppression, provider-neutral state and field mappings, durable per-twin queues, scheduled native queries, governed backfill, target-wide adaptive rate governance, indexed-query safety with load shedding, twin projection, the connector-led workspace, flow-efficiency analytics, waiting risk, cost of delay, US13.4 public-comment privacy/synchronization and US13.5 resolution write-back. The canonical backlog is **21 epics / 77 stories**, with **48 done / 7 partial / 22 not started**. Jira/ServiceNow connector behaviour is verified against deterministic API fakes only; US13.1 and US17.1 remain partial pending explicit live-sandbox validation, and US17.3 remains partial because Azure DevOps has no adapter.
+**Verification:** 351 non-browser tests across 58 files and all 29 browser scenarios pass. In two earlier browser runs the time-sensitive US21.4 `By state` assertion failed, and it failed the same way on the commit before US16.2. No live provider was contacted.
+
+---
+
+## 2026-09-24 — US16.2 indexed-query safety and load shedding (Claude)
+
+Scheduled queries can no longer make a target scan an unindexed column, and a target that keeps reporting database semaphore pressure stops receiving work until it recovers.
+
+- **Named before it runs.** In **Scheduled queries**, choose a connector and press **Check**. A filter on a field the target has not indexed is named, for example `'Vendor ticket' is not indexed on Jira issue: Jira reports it as not searchable`. **Publish** is refused until the query changes, and every run re-checks it.
+- **What counts as indexed.** For Jira, any field discovery reports as searchable. For ServiceNow, `sys_id`, `number`, `sys_class_name`, the audit timestamps and reference columns. Anything else counts only once an administrator confirms it under **Manage connectors → Query indexes** (for example `incident: category`). The declaration is audited, and removing a field stops any query that relies on it.
+- **Shed, don't retry.** One overloaded response is retried per item as before. Two in a row (configurable as **Shed load after pressure responses**) stop all traffic to that target until its `Retry-After` or the backoff delay has passed. Queued writes, comments, ingestion, scheduled queries and backfill chunks wait without spending retry attempts. Then a single probe decides whether traffic resumes or the window reopens for longer.
+- **See it.** The **Request budget** panel shows `Shedding load until …`, the calls shed and the episodes. The connector turns `degraded` with a `Load shedding:` message, and the start and end of each episode are recorded as domain events.
+
+Twelve focused acceptance tests cover these cases:
+- Jira searchability and ServiceNow reference/platform/declared indexes
+- Dot-walk refusal and unknown fields
+- Ad-hoc checks and refusal at publish and at run
+- The sustained-pressure threshold, the single probe and a longer reopen
+- Deferral without attempt loss, and recovery that completes every write exactly once
+
+Disabling the admission refusal on purpose made both shedding tests fail. Verification is fake-only: real provider semaphore responses have not been observed.
 
 ---
 

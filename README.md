@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex and Claude updates, 2026-09-24):** The canonical backlog contains **21 epics and 77 stories**, with **47 done / 7 partial / 23 not started**. The implemented pilot includes the workflow/SLA, traceability, durable event delivery, notification, audit, connector-led workspace, Jira/ServiceNow canonical-twin ingestion, governed state and field mapping, per-twin queues, scheduled queries, backfill, target-wide adaptive rate governance, projection, flow-efficiency analytics, wait risk and cost of delay described below. US16.1 now gives every provider request a shared tenant-and-target quota, headroom and concurrency boundary, propagates `Retry-After` or jittered exponential delay to durable workers, and exports quota/backlog/retry telemetry. US13.4 public-comment synchronization and US13.5 resolution metadata write-back are also done. Connector behaviour is verified only against deterministic provider fakes; no live Jira or ServiceNow tenant was contacted. The cloud staging foundation exists in the repository but is not activated in a cloud account, US13.1/US17.1 still await live-tenant validation, US17.3 still lacks an Azure DevOps runner, and no compliance certification is claimed. See `implementation_plan.md` for attributed delivery records and `status.html` for the generated ledger.
+> **Current status (Codex and Claude updates, 2026-09-24):** The canonical backlog contains **21 epics and 77 stories**, with **48 done / 7 partial / 22 not started**. The implemented pilot includes the workflow/SLA, traceability, durable event delivery, notification, audit, connector-led workspace, Jira/ServiceNow canonical-twin ingestion, governed state and field mapping, per-twin queues, scheduled queries, backfill, target-wide adaptive rate governance, indexed-query safety with load shedding, projection, flow-efficiency analytics, wait risk and cost of delay described below. US16.1 now gives every provider request a shared tenant-and-target quota, headroom and concurrency boundary, propagates `Retry-After` or jittered exponential delay to durable workers, and exports quota/backlog/retry telemetry. US16.2 refuses a scheduled query that filters on a field the target has not indexed, naming the field, and stops all traffic to a target that keeps reporting database semaphore pressure until a single probe shows it has recovered. US13.4 public-comment synchronization and US13.5 resolution metadata write-back are also done. Connector behaviour is verified only against deterministic provider fakes; no live Jira or ServiceNow tenant was contacted. The cloud staging foundation exists in the repository but is not activated in a cloud account, US13.1/US17.1 still await live-tenant validation, US17.3 still lacks an Azure DevOps runner, and no compliance certification is claimed. See `implementation_plan.md` for attributed delivery records and `status.html` for the generated ledger.
 
 ## Product Interaction Model
 
@@ -32,14 +32,14 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 - **Aging & SLA**: 60-second recalculation, 5×8 and 24×7 calendars, persisted aging score/bucket, warning/breach events, and durable pause/resume semantics for configured hold states.
 - **Git/CI Gateway**: Idempotent normalized webhooks, commit/PR/deployment artifacts, work-item key matching, external links, and workflow-safe automation.
 - **Monitoring/APM Gateway**: Idempotent alert ingestion, SEV1–SEV4 severity mapping, auto-created `Triaged` Incidents, a configurable dedupe window, and mitigation proposed for human confirmation.
-- **Cross-system Synchronization Safety**: Tenant-scoped immutable provider identities, typed one-to-many/many-to-one dependency links, exact-id graph resolution, versioned bidirectional state matrices with guarded target fields/transitions, transactional-outbox propagation, per-twin durable FIFO intake/write queues, twin-scoped DLQ correction/re-injection, expiring database sync leases, target-wide durable quota shaping and adaptive retry feedback, metadata-only rename/move updates, a dedicated counterpart write-back contract, and actor-plus-hash echo suppression with durable content fallback after restart.
+- **Cross-system Synchronization Safety**: Tenant-scoped immutable provider identities, typed one-to-many/many-to-one dependency links, exact-id graph resolution, versioned bidirectional state matrices with guarded target fields/transitions, transactional-outbox propagation, per-twin durable FIFO intake/write queues, twin-scoped DLQ correction/re-injection, expiring database sync leases, target-wide durable quota shaping and adaptive retry feedback, indexed-field query validation, load shedding under sustained semaphore pressure, metadata-only rename/move updates, a dedicated counterpart write-back contract, and actor-plus-hash echo suppression with durable content fallback after restart.
 - **Service/Asset Registry**: Tenant-scoped lightweight CMDB entries (Spec §3.3) joined to Incidents by the §3.2 `affects` edge — a supporting entity, not a WorkItem.
 - **Transactional Event Backbone**: Canonical work-item creation, transitions and typed links commit their immutable event and outbox marker atomically; inbound webhooks persist before returning HTTP 202 and process from a queryable queue; pending envelopes recover on bootstrap with the same event id, and every consumer runs behind idempotency, retry and a dead-letter queue with operator replay.
 - **Event History & Metrics**: Every domain event is persisted to `domain_events`, with DORA/ITIL flow metrics and tenant-scoped executive rollups computed from recorded artefacts rather than hand entry.
 - **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, source-connector onboarding and health, a connector-led landing view and synchronized-twin workspace with governed write-back, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. Local creation appears only in pilot (under Pilot actions) and standalone modes.
-- **Testing**: Vitest + NestJS Testing + Supertest running 339 non-browser tests across 57 files, plus a 29-scenario headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 351 non-browser tests across 58 files, plus a 29-scenario headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -55,8 +55,8 @@ npm test
 
 Expected summary:
 ```
- Test Files  57 passed (57)
-      Tests  339 passed (339)
+ Test Files  58 passed (58)
+      Tests  351 passed (351)
 ```
 
 ### 2. Run the Server
@@ -468,6 +468,27 @@ Configure it at connector creation as `rateGovernance`, or update it through `PO
 - The connector studio exposes policy controls and the same metrics. Backfill's job-level AIMD controller remains in place under this additional target-wide ceiling.
 
 This is verified against deterministic provider fakes only. Real Jira and ServiceNow quotas, their non-`Retry-After` rate headers and multi-node socket limits have not been observed. The quota window is shared across application instances through the database; active-socket counts are per process, not a distributed semaphore.
+
+### Indexed-query safety and load shedding (US16.2)
+
+**Queries may filter only on indexed fields.** A scheduled query (US17.3) is checked against its connector's index catalog when it is saved, when it is published and before every run. A field the target has not indexed, or one Cadena has never discovered, is named in an `unindexed_field` or `unknown_field` finding, and publishing is refused (HTTP 422) until the query changes. A draft may still be saved so the finding stays visible next to the text.
+
+| Provider | Indexed, as far as Cadena will vouch |
+|---|---|
+| Jira | Every field `/rest/api/3/field` reports as `searchable`, by id, display name, clause name or `cf[n]`. Discovery now records this; a schema discovered before US16.2 must be discovered again. |
+| ServiceNow | `sys_id`, `number`, `sys_class_name`, `sys_created_on`, `sys_updated_on` and every reference column. The Table API does not expose an instance's other database indexes, so no other column is assumed indexed. A dot-walk (`caller_id.department`) filters the joined table and is refused. |
+| Either | Fields an administrator has confirmed through `POST /integrations/connectors/:id/query-indexes`, for example `{ "incident": ["category"] }`. The whole declaration is replaced and audited as `ConnectorQueryIndexesConfigured`; withdrawing a field makes the next run of a query that uses it fail before any provider call. |
+
+`POST /integrations/native-queries/validate` accepts `connector_id` and `entity_type` to run the same check ad hoc; without them it adds an `indexes_not_checked` warning. The connector studio's **Query indexes** panel edits the declaration, and the query studio's **Check** button names the offending field.
+
+**Sustained semaphore pressure sheds load instead of retrying into it.** US16.1 already counts HTTP 503 and overload/semaphore responses as pressure. One such response is still retried per item. After `shedAfterPressureResponses` consecutive ones (default 2, a `rateGovernance` setting), the target enters a shedding window:
+
+- Every call to that tenant-and-target is refused before it is sent, with `ConnectorLoadShedError`, until the window ends. The window is the target's `Retry-After`, or the US16.1 jittered exponential delay.
+- Queued work orders, public-comment deliveries, ingestion records, scheduled queries and backfill chunks are deferred to the end of the window. The attempt they had claimed is given back, because the target never saw it. Shedding can delay work but can never dead-letter it. A sync against a shedding target sends nothing, returns `loadShedding: { until, reason }`, and marks the connector `degraded` with a `Load shedding:` message, without counting a failure. An operator call such as a connection test gets HTTP 503.
+- When the window ends, exactly one call is admitted as a probe (other callers are refused while it is out). Success ends shedding. Renewed pressure reopens the window for longer.
+- `ConnectorLoadSheddingStarted` and `ConnectorLoadSheddingEnded` domain events record each episode. `GET /integrations/connectors/rate-governance` adds `loadShedding: { state, since, until, reason, episodes, shedRequests }`, where `state` is `normal`, `shedding` or `probing`. The request-budget panel shows the same information.
+
+This is verified against deterministic provider fakes only. What real Jira and ServiceNow semaphore exhaustion looks like on the wire (status, body, headers) has not been observed. Detection therefore still relies on the US16.1 pressure heuristic (HTTP 503, or a body mentioning semaphore, "too many requests" or "temporarily unavailable").
 
 ### Public-comment privacy and synchronization (US13.4)
 
