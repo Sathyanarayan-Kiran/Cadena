@@ -2,6 +2,36 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — US21.2 wait reasons and attribution — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, in three commits (the engine and API, the studio, and this ledger sync), after the user chose the reason sources (an optional reason on the transition, a per-state default and blocking links) and the link rule (a link that existed when the wait began). It builds on US21.1 and supersedes nothing.
+
+**Status:** US21.2 moves from not-started to **done**. The ledger moves to **42 done / 7 partial / 28 not started** across **21 epics / 77 stories**. Verification is against local data and the provider fakes only.
+
+### What was built
+
+- **Reasons on transitions.** `POST /workitems/:id/transitions` accepts an optional `wait_reason: { category, note? }` (customer, third_party, dependency, approval, capacity or other). An invalid category is a 422 and changes nothing. The reason is stored on the `WorkItemStateChanged` audit and domain events, never on the item, so history is not edited.
+- **State defaults.** A classification row now also carries an optional `default_reason`, versioned and audited with the classification (`FlowClassificationChanged` carries the before and after). Omitting it keeps the current default; `null` clears it. A team row overrides the org row as a whole.
+- **Attribution (`flow.service.ts`).** For each waiting or blocked interval the category is, in order: the reason on the transition that entered the state, `dependency` if a blocking link applies, the state's default, otherwise `unattributed`. The blocking item is separate from the category: the first-created `blocked_by`, `blocks` or `caused_by` link that existed when the wait began and whose blocker had not already reached a terminal state. A blocker in another tenant is ignored, several live blockers are flagged (`ambiguous_blockers`), and a report window never changes attribution.
+- **Reports.** `GET /metrics/wait-reasons` groups waiting and blocked time by reason, waiting team, blocking item and blocking team, each with its share, and reports unattributed share and the unclassified time excluded. `GET /metrics/wait-reasons/intervals` returns the intervals behind any figure (filter by reason, team, blocking item or blocking team), capped at 1,000 with a `truncated` flag. The item flow profile now shows the reason and blocker on each waiting interval.
+- **Studio.** The transition dialog has an optional reason and note. The Flow efficiency dialog gains a "Why work waits" section with per-row **Show intervals**, and a default-reason selector per state.
+
+### Decisions and limits, stated plainly
+
+- **Source-system reason fields are not captured.** The acceptance criteria allow the reason to come from "the source system's own reason field"; nothing in the connector path ingests one (for example ServiceNow `hold_reason`), so a synced twin gets a reason only from a link, a state default or a transition made in Cadena. This was agreed as out of scope for this increment, and the story is marked done on the strength of the other two sources the criterion names.
+- The blocking item's team is its *current* team, not its team when the wait began. `caused_by` is read as "the item is held up by its cause", and `blocked_by`, `blocks` and `caused_by` are the only link types that count.
+- Links are never deleted in this codebase, so "existed when the wait began" is judged from the link's creation time.
+- Not built: risk of waiting (US21.3), cost of delay (US21.4), and role gating of classification and reasons.
+
+### Verification
+
+- `test/us21.2.spec.ts` (11 tests): reason validation, reason carried through interval building and clipping, grouping and shares, every link direction, a closed blocker and a cross-tenant blocker being ignored, explicit reason beating a link while the blocker is still named, drill-down sums equal to each figure, window independence, versioned default reasons, the real transition endpoint (audit and domain event, 422 without a state change) and tenant isolation. Three behaviours (ignoring closed blockers, the tenant filter on blockers, explicit-reason precedence) were broken on purpose and the tests failed each time before the code was restored.
+- `test/ui-smoke.spec.ts` gains a default-reason and drill-down test and a test that submits a transition with a reason from the dialog.
+
+### Primary files
+
+- `src/modules/flow/` (`wait-reason.ts` new; `flow.service.ts`, `flow-classification.service.ts`, `flow-profile.ts`, `flow.controller.ts` extended), `src/modules/workflow/workflow.service.ts`, `src/modules/work-items/work-item.controller.ts`, `src/database/database.service.ts`, `public/index.html`, `test/us21.2.spec.ts`, `test/ui-smoke.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — US21.1 flow efficiency: active versus waiting time — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, after the user approved the plan (classification per team with an org default, business time from existing calendars, a classification dialog and report table in the studio). Nothing in an earlier section is superseded. The work is uncommitted at the time of writing.

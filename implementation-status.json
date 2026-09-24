@@ -776,11 +776,11 @@
     },
     "US21.2": {
       "name": "Wait reasons and attribution",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "flow-waste-2026-09-24",
-      "note": "New. Hold states pause the SLA clock and typed links record blocking relationships (US3.4, US4.1), but no reason is captured for a wait and no report attributes waiting time to a cause. Depends on US21.1's state classification."
+      "note": "Every waiting or blocked interval is attributed to a reason category (customer, third_party, dependency, approval, capacity or other), or to `unattributed` when nothing explains it. In order, the reason is the optional wait_reason supplied on the transition that entered the state (kept on the audit and domain event), a blocking link (dependency), the state's default reason (versioned with its classification), otherwise unattributed. The blocking item is the first-created blocked_by, blocks or caused_by link that existed when the wait began and whose blocker had not already closed; blockers in another tenant are never attributed, and several live blockers are flagged as ambiguous. GET /metrics/wait-reasons groups waiting and blocked time by reason, waiting team, blocking item and blocking team with each group's share, and GET /metrics/wait-reasons/intervals drills every figure down to the underlying state intervals; the item flow profile and the studio's Flow efficiency dialog show the same attribution. Verified against local data and the provider fakes only. A twin's own source-system reason field (for example ServiceNow hold_reason) is not yet ingested, so a synced twin gets a reason only from a link, a state default or a transition made in Cadena. The blocking item's team is its current team, and reason attribution is not role-gated."
     },
     "US21.3": {
       "name": "Risk of waiting too long",

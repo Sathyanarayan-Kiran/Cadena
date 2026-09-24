@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), the US20.2 connector-led management workspace, and US21.1 flow efficiency (worked versus waiting time from recorded history). The canonical backlog is **21 epics / 77 stories**, with **41 done / 7 partial / 29 not started**.
-**Verification:** 285 automated tests across 51 test files, plus 26 browser smoke tests driving the real page in pilot and connector-led modes.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), the US20.2 connector-led management workspace, US21.1 flow efficiency (worked versus waiting time from recorded history), and US21.2 wait reasons (why the waiting happened). The canonical backlog is **21 epics / 77 stories**, with **42 done / 7 partial / 28 not started**.
+**Verification:** 296 automated tests across 52 test files, plus 27 browser smoke tests driving the real page in pilot and connector-led modes.
 
 ---
 
@@ -16,9 +16,18 @@ A product question came up: can Cadena measure non-productive time, explain why 
 - **US21.3 Risk of waiting:** estimate from history how likely an item is to overrun its state, showing the sample size and method, and producing no score when there is too little history.
 - **US21.4 Cost of delay:** configurable, versioned cost assumptions give an estimated cost per waiting interval and a ranking by cost of delay over duration. Figures are labelled as estimates from the organisation's own assumptions, and no applicable assumption gives no cost rather than zero.
 
-The canonical backlog is now **21 epics / 77 stories**; the ledger is **41 done / 7 partial / 29 not started**. `public/status.html` was regenerated with `npm run tracker`.
+The canonical backlog is now **21 epics / 77 stories**; the ledger is **42 done / 7 partial / 28 not started**. `public/status.html` was regenerated with `npm run tracker`.
 
 ---
+
+## 2026-09-24 — US21.2 wait reasons (Claude)
+
+Knowing that work waited is half the answer; this adds why.
+
+- **Try it.** When you move an item into a waiting or blocked state, the transition dialog now asks for an optional **Reason for waiting** (customer, third party, dependency, approval, capacity or other) and a note. Open **Flow efficiency** and scroll to **Why work waits**: waiting time by reason, by the team that is waiting and by the item that is holding it up, each with its share and a **Show intervals** button that lists the exact items and intervals behind the figure.
+- **Where a reason comes from.** The reason given on the transition if there is one; otherwise a blocking link (`blocked_by`, `blocks` or `caused_by`) makes it a dependency; otherwise the state's default reason, which you set beside its classification; otherwise it is reported as **Unattributed**, never guessed.
+- **Who is blocking.** A wait is attributed to the first-created blocking link that existed when the wait began, unless that item had already closed. If several items were blocking, the first is named and the row says how many more.
+- **Know the limits.** A reason recorded in Jira or ServiceNow themselves (for example ServiceNow `hold_reason`) is not read yet, so a synced item gets a reason only from a link, a state default or a move made in Cadena. The blocking item's team is its current team. Risk of waiting and cost of delay (US21.3, US21.4) are still to do.
 
 ## 2026-09-24 — US21.1 flow efficiency (Claude)
 
