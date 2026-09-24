@@ -1,3 +1,4 @@
+import { InvalidWaitReasonError, parseWaitReason, WaitReason } from '../flow/wait-reason';
 import { workspaceConfig } from '../workspace/workspace-config';
 import {
   Body,
@@ -141,12 +142,21 @@ export class WorkItemController {
   @Post(':id/transitions')
   async transitionWorkItem(
     @Param('id') id: string,
-    @Body() body: { to_state: string; fields?: Record<string, any> },
+    @Body() body: { to_state: string; fields?: Record<string, any>; wait_reason?: unknown },
     @Headers('x-actor-id') actorId?: string,
     @Headers('x-actor-role') headerRole?: string,
     @Headers('x-org-id') headerOrgId?: string,
   ) {
     try {
+      let waitReason: WaitReason | null;
+      try {
+        waitReason = parseWaitReason(body?.wait_reason);
+      } catch (err) {
+        if (err instanceof InvalidWaitReasonError) {
+          throw new HttpException({ statusCode: 422, error: 'invalid_wait_reason', message: err.message }, HttpStatus.UNPROCESSABLE_ENTITY);
+        }
+        throw err;
+      }
       const resolvedActorId = actorId || '00000000-0000-0000-0000-000000000001';
       const actorRole = await this.rbacService.resolveActorRole(resolvedActorId, headerRole);
 
@@ -159,6 +169,7 @@ export class WorkItemController {
           actorId: resolvedActorId,
           actorRole,
           fields: body.fields,
+          waitReason,
         });
       } catch (err) {
         // A twin-backed item's state belongs to its source: route the request through the

@@ -772,6 +772,8 @@ export class DatabaseService {
     // US17.2: a field-only propagation (no state change) has no target state to record.
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ALTER COLUMN target_state DROP NOT NULL;`);
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claimed_by TEXT;`);
+    // US21.2: a state's default wait reason travels with its classification version.
+    await this.db.exec(`ALTER TABLE flow_state_classifications ADD COLUMN IF NOT EXISTS default_reason TEXT;`);
     // US17.4: rows queued by a backfill job carry the job id, so its counts come from the real queue.
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS backfill_job_id UUID;`);
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMP WITH TIME ZONE;`);

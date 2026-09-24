@@ -1,4 +1,5 @@
 import type { SlaCalendar } from '../sla/sla-calculator.service';
+import type { WaitReason } from './wait-reason';
 
 /**
  * Pure flow calculations (US21.1): no database, no clock. Everything here is derived from recorded
@@ -13,6 +14,8 @@ export interface StateChange {
   at: Date;
   from: string | null;
   to: string;
+  /** The reason supplied with the transition that entered `to`, if any. */
+  reason?: WaitReason | null;
 }
 
 export interface StateInterval {
@@ -21,6 +24,8 @@ export interface StateInterval {
   end: Date;
   /** True for the interval still running at `now`; it grows until the item changes state. */
   open: boolean;
+  /** The reason recorded on the transition that entered this state. */
+  reason?: WaitReason | null;
 }
 
 export interface BuiltHistory {
@@ -54,9 +59,10 @@ export function buildIntervals(input: {
   let anomalies = 0;
   let cursor = input.createdAt;
   let state = events[0]?.from ?? input.currentState;
+  let entryReason: WaitReason | null = null;
 
   const close = (end: Date, open: boolean) => {
-    if (end.getTime() > cursor.getTime() && !terminal.has(state)) intervals.push({ state, start: cursor, end, open });
+    if (end.getTime() > cursor.getTime() && !terminal.has(state)) intervals.push({ state, start: cursor, end, open, reason: entryReason });
   };
 
   for (const event of events) {
@@ -65,11 +71,13 @@ export function buildIntervals(input: {
       // Predates creation (or a prior event): the state change still counts, with no time in the earlier state.
       anomalies += 1;
       state = event.to;
+      entryReason = event.reason ?? null;
       continue;
     }
     close(event.at, false);
     cursor = event.at;
     state = event.to;
+    entryReason = event.reason ?? null;
   }
   close(input.now, true);
   return { intervals, anomalies };
@@ -82,7 +90,7 @@ export function clipIntervals(intervals: StateInterval[], from: Date | null, to:
     const start = from && from.getTime() > interval.start.getTime() ? from : interval.start;
     const clippedEnd = to && to.getTime() < interval.end.getTime();
     const end = clippedEnd ? to! : interval.end;
-    if (end.getTime() > start.getTime()) out.push({ state: interval.state, start, end, open: interval.open && !clippedEnd });
+    if (end.getTime() > start.getTime()) out.push({ ...interval, start, end, open: interval.open && !clippedEnd });
   }
   return out;
 }

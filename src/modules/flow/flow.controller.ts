@@ -41,7 +41,7 @@ export class FlowController {
   /** Body: `{ team_id?: string | null, states: [{ state, classification }] }`. Omitting `team_id` sets the org default. */
   @Put('metrics/flow-classifications')
   async set(
-    @Body() body: { team_id?: string | null; states?: Array<{ state?: unknown; classification?: unknown }> },
+    @Body() body: { team_id?: string | null; states?: Array<{ state?: unknown; classification?: unknown; default_reason?: unknown }> },
     @Headers('x-org-id') orgId?: string,
     @Headers('x-actor-id') actorId?: string,
   ) {
@@ -57,6 +57,39 @@ export class FlowController {
     @Query('item_type') itemType?: string,
   ) {
     return guard(() => this.flow.report(requireOrg(orgId), { from, to }, { teamId: teamId || undefined, itemType: itemType || undefined }));
+  }
+
+  /** Waiting and blocked time grouped by reason, team and blocking item. */
+  @Get('metrics/wait-reasons')
+  async waitReasons(
+    @Headers('x-org-id') orgId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('team_id') teamId?: string,
+    @Query('item_type') itemType?: string,
+  ) {
+    return guard(() => this.flow.waitReasons(requireOrg(orgId), { from, to }, { teamId: teamId || undefined, itemType: itemType || undefined }));
+  }
+
+  /** The state intervals behind a figure in the wait-reason report. */
+  @Get('metrics/wait-reasons/intervals')
+  async waitIntervals(
+    @Headers('x-org-id') orgId?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+    @Query('team_id') teamId?: string,
+    @Query('item_type') itemType?: string,
+    @Query('reason') reason?: string,
+    @Query('blocking_item_id') blockingItemId?: string,
+    @Query('blocking_team_id') blockingTeamId?: string,
+  ) {
+    return guard(() => this.flow.waitIntervals(requireOrg(orgId), { from, to }, {
+      teamId: teamId || undefined,
+      itemType: itemType || undefined,
+      reason: reason || undefined,
+      blockingItemId: blockingItemId || undefined,
+      blockingTeamId: blockingTeamId || undefined,
+    }));
   }
 
   @Get('workitems/:id/flow-profile')

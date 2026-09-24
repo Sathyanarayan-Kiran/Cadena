@@ -5,6 +5,7 @@ import { SlaCalculatorService, SlaCalendar } from '../sla/sla-calculator.service
 import { PublishedWorkflowRecord, WorkflowDefinition } from './workflow.types';
 import { appendAuditIntegrityEntry } from '../audit/audit-integrity';
 import { ExternallyOwnedWorkItemError } from '../work-items/work-item-ownership';
+import type { WaitReason } from '../flow/wait-reason';
 
 const BUILT_IN_WORKFLOWS: Record<string, WorkflowDefinition> = {
   epic: {
@@ -109,6 +110,8 @@ export interface TransitionContext {
   actorRole: string;
   actorType?: 'user' | 'system' | 'integration';
   fields?: Record<string, any>;
+  /** US21.2: why the item is entering a waiting or blocked state; kept on the audit event, never on the item. */
+  waitReason?: WaitReason | null;
 }
 
 export class WorkflowService {
@@ -348,6 +351,7 @@ export class WorkflowService {
       suppliedFields,
       currentCustomFields,
       mergedFields,
+      ...(ctx.waitReason ? { extraAudit: { wait_reason: ctx.waitReason } } : {}),
     });
 
     // Publication is deliberately after commit. A stop in this gap is recovered from the

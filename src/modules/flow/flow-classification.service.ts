@@ -3,6 +3,7 @@ import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
 import { EventOutboxService } from '../events/event-outbox.service';
 import type { FlowBucket } from './flow-profile';
+import { WAIT_REASON_CATEGORIES, WaitReasonCategory, isWaitReasonCategory } from './wait-reason';
 
 export const CLASSIFICATIONS = ['active', 'waiting', 'blocked', 'unclassified'] as const;
 const NIL_UUID = '00000000-0000-0000-0000-000000000000';
@@ -15,6 +16,7 @@ export interface ClassificationRow {
   team_id: string | null;
   state: string;
   classification: FlowBucket;
+  default_reason: WaitReasonCategory | null;
   version: number;
   changed_by: string;
   created_at: string;
@@ -22,6 +24,7 @@ export interface ClassificationRow {
 
 export interface ResolvedClassification {
   classification: FlowBucket;
+  default_reason: WaitReasonCategory | null;
   version: number | null;
   scope: 'team' | 'org' | 'none';
 }
@@ -33,6 +36,7 @@ const toRow = (row: any): ClassificationRow => ({
   team_id: row.team_id ?? null,
   state: row.state,
   classification: row.classification,
+  default_reason: row.default_reason ?? null,
   version: Number(row.version),
   changed_by: row.changed_by,
   created_at: new Date(row.created_at).toISOString(),
@@ -94,13 +98,13 @@ export class FlowClassificationService {
     orgId: string,
     actorId: string,
     teamId: string | null,
-    states: Array<{ state?: unknown; classification?: unknown }>,
+    states: Array<{ state?: unknown; classification?: unknown; default_reason?: unknown }>,
   ): Promise<{ changed: ClassificationRow[]; unchanged: number }> {
     await this.dbService.initialize();
     if (!Array.isArray(states) || states.length === 0) throw new InvalidClassificationError('states must be a non-empty array');
     if (states.length > 200) throw new InvalidClassificationError('at most 200 states can be classified per request');
 
-    const parsed = new Map<string, FlowBucket>();
+    const parsed = new Map<string, { classification: FlowBucket; reason: WaitReasonCategory | null | undefined }>();
     for (const entry of states) {
       const state = typeof entry?.state === 'string' ? entry.state.trim() : '';
       if (!state) throw new InvalidClassificationError('every entry needs a non-empty state');
@@ -108,7 +112,16 @@ export class FlowClassificationService {
         throw new InvalidClassificationError(`classification for '${state}' must be one of: ${CLASSIFICATIONS.join(', ')}`);
       }
       if (parsed.has(state)) throw new InvalidClassificationError(`state '${state}' is listed more than once`);
-      parsed.set(state, entry.classification as FlowBucket);
+      // `default_reason` omitted keeps the current default; null clears it.
+      let reason: WaitReasonCategory | null | undefined;
+      if (entry.default_reason === null) reason = null;
+      else if (entry.default_reason !== undefined) {
+        if (!isWaitReasonCategory(entry.default_reason)) {
+          throw new InvalidClassificationError(`default_reason for '${state}' must be one of: ${WAIT_REASON_CATEGORIES.join(', ')}`);
+        }
+        reason = entry.default_reason;
+      }
+      parsed.set(state, { classification: entry.classification as FlowBucket, reason });
     }
     if (teamId !== null) {
       this.requireUuid(teamId, 'team_id');
@@ -123,19 +136,22 @@ export class FlowClassificationService {
     let unchanged = 0;
 
     await this.dbService.db.transaction(async (tx) => {
-      for (const [state, classification] of parsed) {
+      for (const [state, { classification, reason }] of parsed) {
         const previous = current.get(state);
+        const defaultReason = reason === undefined ? previous?.default_reason ?? null : reason;
         // A first "unclassified" on a scope with nothing to override records nothing worth versioning.
-        if (previous ? previous.classification === classification : classification === 'unclassified' && teamId === null) {
+        if (previous
+          ? previous.classification === classification && previous.default_reason === defaultReason
+          : classification === 'unclassified' && defaultReason === null && teamId === null) {
           unchanged += 1;
           continue;
         }
         const id = randomUUID();
         const version = (previous?.version ?? 0) + 1;
         const inserted = await tx.query<any>(
-          `INSERT INTO flow_state_classifications (id, org_id, team_id, state, classification, version, changed_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-          [id, orgId, teamId, state, classification, version, actorId],
+          `INSERT INTO flow_state_classifications (id, org_id, team_id, state, classification, default_reason, version, changed_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+          [id, orgId, teamId, state, classification, defaultReason, version, actorId],
         );
         const row = toRow(inserted.rows[0]);
         changed.push(row);
@@ -148,8 +164,8 @@ export class FlowClassificationService {
             org_id: orgId,
             team_id: teamId,
             state,
-            before: previous ? { classification: previous.classification, version: previous.version } : null,
-            after: { classification, version },
+            before: previous ? { classification: previous.classification, default_reason: previous.default_reason, version: previous.version } : null,
+            after: { classification, default_reason: defaultReason, version },
           },
         }));
       }
@@ -165,8 +181,8 @@ export class FlowClassificationService {
     return (teamId, state) => {
       const team = teamId ? byKey.get(`${teamId}|${state}`) : undefined;
       const hit = team ?? byKey.get(`|${state}`);
-      if (!hit) return { classification: 'unclassified', version: null, scope: 'none' };
-      return { classification: hit.classification, version: hit.version, scope: hit.team_id ? 'team' : 'org' };
+      if (!hit) return { classification: 'unclassified', default_reason: null, version: null, scope: 'none' };
+      return { classification: hit.classification, default_reason: hit.default_reason, version: hit.version, scope: hit.team_id ? 'team' : 'org' };
     };
   }
 
