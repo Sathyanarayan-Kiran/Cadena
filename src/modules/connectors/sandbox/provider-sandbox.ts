@@ -204,16 +204,26 @@ export class FakeJiraApi extends FakeProviderApi {
       return respond(200, { values: this.projects.filter((project) => keys.includes(project.key)), isLast: true });
     }
     if (method === 'GET' && path === '/rest/api/3/field') {
+      // Like the real endpoint, each field says whether the search index covers it (`searchable`)
+      // and which names JQL accepts for it (`clauseNames`).
+      const field = (id: string, name: string, type: string, clauseNames: string[], custom = false, searchable = true) => (
+        { id, name, custom, searchable, clauseNames, schema: { type } });
       return respond(200, [
-        { id: 'summary', name: 'Summary', custom: false, schema: { type: 'string' } },
-        { id: 'status', name: 'Status', custom: false, schema: { type: 'status' } },
-        { id: 'priority', name: 'Priority', custom: false, schema: { type: 'priority' } },
-        { id: 'assignee', name: 'Assignee', custom: false, schema: { type: 'user' } },
-        { id: 'updated', name: 'Updated', custom: false, schema: { type: 'datetime' } },
-        { id: 'resolution', name: 'Resolution', custom: false, schema: { type: 'resolution' } },
-        { id: 'customfield_10500', name: 'Resolution notes', custom: true, schema: { type: 'string' } },
-        { id: 'customfield_10014', name: 'Epic Link', custom: true, schema: { type: 'string' } },
-        { id: 'customfield_10020', name: 'Sprint', custom: true, schema: { type: 'array' } },
+        field('summary', 'Summary', 'string', ['summary']),
+        field('status', 'Status', 'status', ['status']),
+        field('priority', 'Priority', 'priority', ['priority']),
+        field('assignee', 'Assignee', 'user', ['assignee']),
+        field('updated', 'Updated', 'datetime', ['updated', 'updatedDate']),
+        field('resolution', 'Resolution', 'resolution', ['resolution']),
+        field('project', 'Project', 'project', ['project']),
+        field('issuetype', 'Issue Type', 'issuetype', ['issuetype', 'type']),
+        field('issuekey', 'Key', 'string', ['id', 'issue', 'issuekey', 'key']),
+        field('labels', 'Labels', 'array', ['labels']),
+        field('customfield_10500', 'Resolution notes', 'string', ['Resolution notes', 'cf[10500]'], true),
+        field('customfield_10014', 'Epic Link', 'string', ['Epic Link', 'cf[10014]'], true),
+        field('customfield_10020', 'Sprint', 'array', ['Sprint', 'cf[10020]'], true),
+        // A custom field configured with no search template: Jira keeps no index for it.
+        field('customfield_10600', 'Vendor ticket', 'string', [], true, false),
       ]);
     }
     if (method === 'GET' && path === '/rest/api/3/status') {
@@ -519,6 +529,7 @@ export class FakeServiceNowApi extends FakeProviderApi {
         );
         if (name === 'incident') {
           rows.push(
+            { name, element: 'category', column_label: 'Category', internal_type: 'string', mandatory: 'false' },
             { name, element: 'close_code', column_label: 'Resolution code', internal_type: 'string', mandatory: 'false' },
             { name, element: 'close_notes', column_label: 'Resolution notes', internal_type: 'string', mandatory: 'false' },
           );

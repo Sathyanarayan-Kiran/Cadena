@@ -36,6 +36,23 @@ export class ConnectorRemoteError extends Error {
   }
 }
 
+/**
+ * Refused before any request was sent: the target is under database semaphore pressure and Cadena
+ * is shedding load until `until` (US16.2). Durable callers defer the work to that instant without
+ * spending a retry attempt, since the target never saw it.
+ */
+export class ConnectorLoadShedError extends ConnectorRemoteError {
+  constructor(public readonly targetOrigin: string, public readonly until: Date, reason: string | null, now = Date.now()) {
+    super(
+      `${targetOrigin} is under database semaphore pressure; Cadena is shedding load until ${until.toISOString()}`
+        + (reason ? ` (last response: ${reason.slice(0, 160)})` : ''),
+      null,
+      true,
+      Math.max(0.001, (until.getTime() - now) / 1000),
+    );
+  }
+}
+
 /** A configured value cannot be resolved or is not a secret reference. Never includes the value. */
 export class ConnectorCredentialError extends Error {}
 

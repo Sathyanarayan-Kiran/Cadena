@@ -1,7 +1,9 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { DatabaseService } from '../../database/database.service';
+import { DatabaseQueryable } from '../../database/database-adapter';
+import { EventOutboxService } from '../events/event-outbox.service';
 import { ConnectorContext } from './connector.interface';
-import { ConnectorConfigurationError, ConnectorRemoteError } from './connector-http';
+import { ConnectorConfigurationError, ConnectorLoadShedError, ConnectorRemoteError } from './connector-http';
 import {
   ConnectorRateGovernanceMetrics,
   ConnectorRateGovernancePolicy,
@@ -15,7 +17,13 @@ export const DEFAULT_RATE_GOVERNANCE: ConnectorRateGovernancePolicy = {
   baseBackoffMs: 1_000,
   maxBackoffMs: 60_000,
   jitterRatio: 0.2,
+  shedAfterPressureResponses: 2,
 };
+
+/** A recovery probe that never reports back (a crashed worker) stops blocking other probes after this. */
+const PROBE_LEASE_MS = 30_000;
+
+type SheddingState = ConnectorRateGovernanceMetrics['loadShedding']['state'];
 
 interface GateState {
   inFlight: number;
@@ -42,7 +50,7 @@ export function validateRateGovernance(input: unknown): ConnectorRateGovernanceP
     throw new ConnectorConfigurationError('rateGovernance must be an object');
   }
   const value = input as Record<string, unknown>;
-  const allowed = ['requestsPerMinute', 'headroomPercentage', 'maxConcurrent', 'baseBackoffMs', 'maxBackoffMs', 'jitterRatio'];
+  const allowed = ['requestsPerMinute', 'headroomPercentage', 'maxConcurrent', 'baseBackoffMs', 'maxBackoffMs', 'jitterRatio', 'shedAfterPressureResponses'];
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length) throw new ConnectorConfigurationError(`rateGovernance does not support ${unknown.join(', ')}`);
 
@@ -64,6 +72,7 @@ export function validateRateGovernance(input: unknown): ConnectorRateGovernanceP
     baseBackoffMs: integer('baseBackoffMs', DEFAULT_RATE_GOVERNANCE.baseBackoffMs, 1, 60_000),
     maxBackoffMs: integer('maxBackoffMs', DEFAULT_RATE_GOVERNANCE.maxBackoffMs, 1, 3_600_000),
     jitterRatio: jitter,
+    shedAfterPressureResponses: integer('shedAfterPressureResponses', DEFAULT_RATE_GOVERNANCE.shedAfterPressureResponses, 1, 20),
   };
   if (policy.maxBackoffMs < policy.baseBackoffMs) {
     throw new ConnectorConfigurationError('rateGovernance.maxBackoffMs must be at least baseBackoffMs');
@@ -74,9 +83,18 @@ export function validateRateGovernance(input: unknown): ConnectorRateGovernanceP
 /**
  * Process-wide admission control backed by a durable quota window and retry gate.
  * The database row coordinates every worker; the in-process gate bounds simultaneous sockets.
+ *
+ * Load shedding (US16.2): when the target keeps answering with database semaphore pressure,
+ * retrying each queued item against it only deepens the exhaustion. Once `shedAfterPressureResponses`
+ * consecutive calls have met pressure (one blip is retried per item as before), a
+ * target-wide shedding window opens (the target's Retry-After, or the jittered exponential delay), and
+ * every call in it is refused before a request is sent. When the window ends one call is admitted
+ * as a probe: success closes the window, renewed pressure reopens it for longer. Opening and
+ * closing are recorded as domain events so the condition is visible, not just survived.
  */
 export class ConnectorRateGovernor {
   private readonly dbService = DatabaseService.getInstance();
+  private readonly outbox = new EventOutboxService();
   private readonly gates = new Map<string, GateState>();
   private readonly policies = new Map<string, ConnectorRateGovernancePolicy>();
   private readonly now: () => number;
@@ -146,17 +164,31 @@ export class ConnectorRateGovernor {
     const gateKey = `${ctx.connector.orgId}:${target.targetKey}`;
     const release = await this.acquireConcurrency(gateKey, target.policy.maxConcurrent);
     try {
-      await this.acquireQuota(ctx.connector.orgId, target);
+      // Throws ConnectorLoadShedError, without calling the target, while the target is shedding.
+      const probe = await this.acquireQuota(ctx.connector.orgId, target);
       try {
         const result = await operation();
-        await this.recordSuccess(ctx.connector.orgId, target);
+        await this.recordSuccess(ctx.connector, target, probe);
         return result;
       } catch (error) {
-        throw await this.recordFailure(ctx.connector.orgId, target, error);
+        throw await this.recordFailure(ctx.connector, target, error, probe);
       }
     } finally {
       release();
     }
+  }
+
+  /** Whether calls to this connector's target are currently refused, for callers that can skip work up front. */
+  public async sheddingStatus(connector: ConnectorRecord): Promise<{ state: SheddingState; until: string | null; reason: string | null }> {
+    await this.dbService.initialize();
+    const target = this.describe(connector);
+    const result = await this.dbService.db.query<any>(
+      `SELECT shedding_since, shed_until, shed_reason FROM integration_rate_governance WHERE org_id = $1 AND target_key = $2`,
+      [connector.orgId, target.targetKey],
+    );
+    const row = result.rows[0];
+    const state = this.sheddingState(row);
+    return { state, until: state === 'normal' ? null : isoOrNull(row?.shed_until), reason: state === 'normal' ? null : row?.shed_reason || null };
   }
 
   public async listStoredMetrics(orgId: string): Promise<Array<Omit<ConnectorRateGovernanceMetrics, 'connectors' | 'backlog'>>> {
@@ -185,6 +217,7 @@ export class ConnectorRateGovernor {
       },
       concurrency: live,
       backoff: { blockedUntil: null, consecutiveFailures: 0, lastDelayMs: 0, throttleEvents: 0, semaphorePressureEvents: 0, retryEvents: 0 },
+      loadShedding: { state: 'normal', since: null, until: null, reason: null, episodes: 0, shedRequests: 0 },
       requests: { total: 0, succeeded: 0, failed: 0, shapedWaitMs: 0 },
     };
   }
@@ -209,11 +242,12 @@ export class ConnectorRateGovernor {
     };
   }
 
-  private async acquireQuota(orgId: string, target: TargetDescriptor): Promise<void> {
+  /** Admits one call against the durable quota. Returns a probe token when this call tests recovery from shedding. */
+  private async acquireQuota(orgId: string, target: TargetDescriptor): Promise<string | undefined> {
     await this.dbService.initialize();
     for (;;) {
       const nowMs = this.now();
-      const waitMs = await this.dbService.db.transaction(async (tx) => {
+      const admission = await this.dbService.db.transaction(async (tx): Promise<{ wait: number; shed?: { until: number; reason: string | null }; probe?: string }> => {
         const nowIso = new Date(nowMs).toISOString();
         await tx.query(
           `INSERT INTO integration_rate_governance
@@ -228,6 +262,20 @@ export class ConnectorRateGovernor {
           [orgId, target.targetKey],
         );
         const row = selected.rows[0];
+        const shedding = this.sheddingState(row, nowMs);
+        const probeHeld = row.probe_owner && row.probe_expires_at && epoch(row.probe_expires_at) > nowMs;
+        if (shedding === 'shedding' || (shedding === 'probing' && probeHeld)) {
+          await tx.query(
+            `UPDATE integration_rate_governance SET shed_requests = shed_requests + 1, updated_at = $3
+             WHERE org_id = $1 AND target_key = $2`,
+            [orgId, target.targetKey, nowIso],
+          );
+          // While another call probes, check back shortly rather than at the probe's lease expiry.
+          const until = shedding === 'shedding'
+            ? epoch(row.shed_until)
+            : Math.min(epoch(row.probe_expires_at), nowMs + target.policy.baseBackoffMs);
+          return { wait: 0, shed: { until, reason: row.shed_reason || null } };
+        }
         const windowStart = epoch(row.window_started_at);
         const expired = nowMs >= windowStart + 60_000;
         const used = expired ? 0 : Number(row.used_requests || 0);
@@ -258,34 +306,90 @@ export class ConnectorRateGovernor {
              WHERE org_id = $1 AND target_key = $2`, [orgId, target.targetKey],
           );
         }
-        return wait;
+        if (!wait && shedding === 'probing') {
+          const probe = randomUUID();
+          await tx.query(
+            `UPDATE integration_rate_governance SET probe_owner = $3, probe_expires_at = $4
+             WHERE org_id = $1 AND target_key = $2`,
+            [orgId, target.targetKey, probe, new Date(nowMs + PROBE_LEASE_MS).toISOString()],
+          );
+          return { wait, probe };
+        }
+        return { wait };
       });
-      if (!waitMs) return;
-      await this.sleep(waitMs);
+      if (admission.shed) {
+        throw new ConnectorLoadShedError(target.targetOrigin, new Date(admission.shed.until), admission.shed.reason, nowMs);
+      }
+      if (!admission.wait) return admission.probe;
+      await this.sleep(admission.wait);
     }
   }
 
-  private async recordSuccess(orgId: string, target: TargetDescriptor): Promise<void> {
+  private async recordSuccess(connector: ConnectorRecord, target: TargetDescriptor, probe?: string): Promise<void> {
+    const orgId = connector.orgId;
+    const nowIso = new Date(this.now()).toISOString();
     await this.dbService.db.query(
       `UPDATE integration_rate_governance
-       SET succeeded_requests = succeeded_requests + 1, consecutive_failures = 0,
+       SET succeeded_requests = succeeded_requests + 1, consecutive_failures = 0, pressure_streak = 0,
            retry_not_before = CASE WHEN retry_not_before <= $3 THEN NULL ELSE retry_not_before END,
            last_status = 200, updated_at = $3
        WHERE org_id = $1 AND target_key = $2`,
-      [orgId, target.targetKey, new Date(this.now()).toISOString()],
+      [orgId, target.targetKey, nowIso],
     );
+    if (!probe) return;
+    // Only the admitted probe can end shedding: a call sent before the window opened proves nothing.
+    const event = await this.dbService.db.transaction(async (tx) => {
+      const selected = await tx.query<any>(
+        `SELECT shedding_since, shed_requests FROM integration_rate_governance
+         WHERE org_id = $1 AND target_key = $2 AND probe_owner = $3 FOR UPDATE`,
+        [orgId, target.targetKey, probe],
+      );
+      const row = selected.rows[0];
+      if (!row?.shedding_since) return null;
+      await tx.query(
+        `UPDATE integration_rate_governance
+         SET shedding_since = NULL, shed_until = NULL, shed_reason = NULL, probe_owner = NULL, probe_expires_at = NULL
+         WHERE org_id = $1 AND target_key = $2`,
+        [orgId, target.targetKey],
+      );
+      const since = isoOrNull(row.shedding_since)!;
+      return this.enqueueSheddingEvent(tx, connector, target, 'ConnectorLoadSheddingEnded', {
+        shedding_since: since,
+        recovered_at: nowIso,
+        duration_ms: Math.max(0, Date.parse(nowIso) - Date.parse(since)),
+        shed_requests_total: Number(row.shed_requests || 0),
+      });
+    });
+    if (event) await this.outbox.dispatch(event);
   }
 
-  private async recordFailure(orgId: string, target: TargetDescriptor, error: unknown): Promise<unknown> {
+  private enqueueSheddingEvent(
+    tx: DatabaseQueryable,
+    connector: ConnectorRecord,
+    target: TargetDescriptor,
+    eventType: 'ConnectorLoadSheddingStarted' | 'ConnectorLoadSheddingEnded',
+    payload: Record<string, unknown>,
+  ) {
+    return this.outbox.enqueue(tx, {
+      event_type: eventType,
+      work_item_id: connector.id,
+      org_id: connector.orgId,
+      actor: { type: 'system', id: 'rate-governor' },
+      payload: { connector_id: connector.id, provider: connector.provider, target_origin: target.targetOrigin, ...payload },
+    });
+  }
+
+  private async recordFailure(connector: ConnectorRecord, target: TargetDescriptor, error: unknown, probe?: string): Promise<unknown> {
+    const orgId = connector.orgId;
     const remote = error instanceof ConnectorRemoteError ? error : null;
     const retryable = Boolean(remote?.retryable);
     const throttle = remote?.status === 429;
     const pressure = remote?.status === 503 || /semaphore|too many requests|temporarily unavailable/i.test(remote?.message || '');
     let delayMs = 0;
     const nowMs = this.now();
-    await this.dbService.db.transaction(async (tx) => {
+    const event = await this.dbService.db.transaction(async (tx) => {
       const selected = await tx.query<any>(
-        `SELECT consecutive_failures FROM integration_rate_governance
+        `SELECT consecutive_failures, shedding_since, pressure_streak FROM integration_rate_governance
          WHERE org_id = $1 AND target_key = $2 FOR UPDATE`,
         [orgId, target.targetKey],
       );
@@ -314,7 +418,43 @@ export class ConnectorRateGovernor {
         [orgId, target.targetKey, failures, blockedUntil, delayMs, throttle ? 1 : 0, pressure ? 1 : 0,
           retryable ? 1 : 0, remote?.status, new Date(nowMs).toISOString()],
       );
+      const underPressure = Boolean(pressure && retryable && blockedUntil);
+      const streak = underPressure ? Number(selected.rows[0]?.pressure_streak || 0) + 1 : 0;
+      await tx.query(
+        `UPDATE integration_rate_governance SET pressure_streak = $3 WHERE org_id = $1 AND target_key = $2`,
+        [orgId, target.targetKey, streak],
+      );
+      const alreadyShedding = Boolean(selected.rows[0]?.shedding_since);
+      if (!underPressure || (!alreadyShedding && streak < target.policy.shedAfterPressureResponses)) {
+        // A probe that failed for another reason proves nothing either way; the next call probes again.
+        if (probe) {
+          await tx.query(
+            `UPDATE integration_rate_governance SET probe_owner = NULL, probe_expires_at = NULL
+             WHERE org_id = $1 AND target_key = $2 AND probe_owner = $3`,
+            [orgId, target.targetKey, probe],
+          );
+        }
+        return null;
+      }
+      const opening = !alreadyShedding;
+      const reason = (remote?.message || 'semaphore pressure').slice(0, 300);
+      await tx.query(
+        `UPDATE integration_rate_governance
+         SET shedding_since = COALESCE(shedding_since, $3),
+             shed_until = CASE WHEN shed_until IS NULL OR shed_until < $4 THEN $4 ELSE shed_until END,
+             shed_reason = $5, shed_episodes = shed_episodes + $6, probe_owner = NULL, probe_expires_at = NULL
+         WHERE org_id = $1 AND target_key = $2`,
+        [orgId, target.targetKey, new Date(nowMs).toISOString(), blockedUntil, reason, opening ? 1 : 0],
+      );
+      if (!opening) return null;
+      return this.enqueueSheddingEvent(tx, connector, target, 'ConnectorLoadSheddingStarted', {
+        shedding_until: blockedUntil,
+        status: remote?.status ?? null,
+        consecutive_pressure_responses: streak,
+        reason,
+      });
     });
+    if (event) await this.outbox.dispatch(event);
     if (remote && retryable && !remote.retryAfterSeconds) {
       return new ConnectorRemoteError(remote.message, remote.status, true, delayMs / 1000);
     }
@@ -346,12 +486,30 @@ export class ConnectorRateGovernor {
         semaphorePressureEvents: Number(row.semaphore_pressure_events),
         retryEvents: Number(row.retry_events),
       },
+      loadShedding: this.mapShedding(row),
       requests: {
         total: Number(row.total_requests),
         succeeded: Number(row.succeeded_requests),
         failed: Number(row.failed_requests),
         shapedWaitMs: Number(row.shaped_wait_ms),
       },
+    };
+  }
+
+  private sheddingState(row: any, nowMs = this.now()): SheddingState {
+    if (!row?.shedding_since) return 'normal';
+    return row.shed_until && epoch(row.shed_until) > nowMs ? 'shedding' : 'probing';
+  }
+
+  private mapShedding(row: any): ConnectorRateGovernanceMetrics['loadShedding'] {
+    const state = this.sheddingState(row);
+    return {
+      state,
+      since: state === 'normal' ? null : isoOrNull(row.shedding_since),
+      until: state === 'normal' ? null : isoOrNull(row.shed_until),
+      reason: state === 'normal' ? null : row.shed_reason || null,
+      episodes: Number(row.shed_episodes || 0),
+      shedRequests: Number(row.shed_requests || 0),
     };
   }
 
@@ -378,8 +536,14 @@ export class ConnectorRateGovernor {
       baseBackoffMs: Math.max(current.baseBackoffMs, candidate.baseBackoffMs),
       maxBackoffMs: Math.max(current.maxBackoffMs, candidate.maxBackoffMs),
       jitterRatio: Math.min(current.jitterRatio, candidate.jitterRatio),
+      shedAfterPressureResponses: Math.min(current.shedAfterPressureResponses, candidate.shedAfterPressureResponses),
     };
   }
+}
+
+function isoOrNull(value: unknown): string | null {
+  if (!value) return null;
+  return new Date(value instanceof Date ? value.getTime() : String(value)).toISOString();
 }
 
 function epoch(value: unknown): number {

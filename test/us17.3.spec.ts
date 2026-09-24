@@ -179,6 +179,8 @@ describe('US17.3 — native query definitions', () => {
     const snowId = await onboard(orgId, {
       name: 'ServiceNow ITSM', provider: 'servicenow', baseUrl: 'https://acme.service-now.com',
       credentials: { password: 'env:US173_SNOW_PASSWORD' }, options: { username: 'svc.cadena' }, tableNames: ['incident'],
+      // category is not a reference column; this instance's administrator has indexed it (US16.2).
+      queryIndexes: { incident: ['category'] },
     });
     return { orgId, jiraId, snowId, jiraApi, snowApi };
   };
@@ -372,6 +374,8 @@ describe('US17.3 — scheduled native query runs', () => {
     const snowId = await onboard(orgId, {
       name: 'ServiceNow ITSM', provider: 'servicenow', baseUrl: 'https://acme.service-now.com',
       credentials: { password: 'env:US173_SNOW_PASSWORD' }, options: { username: 'svc.cadena' }, tableNames: ['incident'],
+      // category is not a reference column; this instance's administrator has indexed it (US16.2).
+      queryIndexes: { incident: ['category'] },
     });
     return { orgId, jiraId, snowId, jiraApi, snowApi };
   };

@@ -6,6 +6,7 @@ import {
   Injectable,
   NotFoundException,
   OnApplicationBootstrap,
+  ServiceUnavailableException,
   UnprocessableEntityException,
 } from '@nestjs/common';
 import { createHash, randomUUID } from 'crypto';
@@ -29,6 +30,7 @@ import {
 } from './connector.interface';
 import {
   ConnectorConfigurationError,
+  ConnectorLoadShedError,
   ConnectorCredentialError,
   ConnectorRemoteError,
 } from './connector-http';
@@ -72,6 +74,7 @@ import { FieldMappingService } from './mapping/field-mapping.service';
 import { TwinProjectionConfig, TwinProjectionService } from './twin-projection.service';
 import { loadRuntimeConfig } from '../../config/runtime-config';
 import { getConnectorRateGovernor, validateRateGovernance } from './rate-governor';
+import { validateQueryIndexes } from './native-query/query-index-catalog';
 
 const MAX_WORK_ORDER_ATTEMPTS = 5;
 const WORK_ORDER_BASE_BACKOFF_MS = 30_000;
@@ -210,9 +213,11 @@ export class ConnectorService implements OnApplicationBootstrap {
       writeBack: this.validateWriteBack(dto.writeBack),
       commentSync: this.validateCommentSync(dto.commentSync),
       rateGovernance: validateRateGovernance(dto.rateGovernance),
+      queryIndexes: validateQueryIndexes(dto.queryIndexes),
       projection: TwinProjectionService.validateConfig(dto.projection),
     }));
     this.guard(() => adapter.validateConfig(config));
+    this.guard(() => this.assertQueryIndexEntities(adapter.entityTypes(config), config.queryIndexes));
 
     const duplicate = await this.dbService.db.query<any>(
       `SELECT id FROM integration_connectors WHERE org_id = $1 AND provider = $2 AND name = $3`,
@@ -453,6 +458,44 @@ export class ConnectorService implements OnApplicationBootstrap {
   }
 
   /**
+   * Records the instance-specific indexes an administrator has confirmed (US16.2). The whole
+   * declaration is replaced, so removing a field withdraws Cadena's permission to filter on it;
+   * published queries re-check it on their next run.
+   */
+  public async configureQueryIndexes(
+    orgId: string,
+    connectorId: string,
+    input: unknown,
+    actorId = 'system',
+  ): Promise<ConnectorRecord> {
+    const connector = await this.getConnector(orgId, connectorId);
+    const declared = this.guard(() => validateQueryIndexes(input));
+    this.guard(() => this.assertQueryIndexEntities(this.getAdapter(connector.provider).entityTypes(connector.config), declared));
+    await this.withEvent(async (tx) => {
+      await tx.query(
+        `UPDATE integration_connectors SET config = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND org_id = $3`,
+        [JSON.stringify({ ...connector.config, queryIndexes: declared }), connectorId, orgId],
+      );
+      return this.event(orgId, connectorId, actorId, 'ConnectorQueryIndexesConfigured', {
+        connector_id: connectorId,
+        provider: connector.provider,
+        before: connector.config.queryIndexes || {},
+        after: declared,
+      });
+    });
+    return this.getConnector(orgId, connectorId);
+  }
+
+  private assertQueryIndexEntities(entityTypes: string[], declared: Record<string, string[]>): void {
+    const unknown = Object.keys(declared).filter((entityType) => !entityTypes.includes(entityType));
+    if (unknown.length) {
+      throw new ConnectorConfigurationError(
+        `queryIndexes names entity types this connector does not synchronize: ${unknown.join(', ')} (available: ${entityTypes.join(', ')})`,
+      );
+    }
+  }
+
+  /**
    * Sets how this connector's twins are projected as WorkItems (owning team, type and owner
    * mapping) and re-projects its existing twins. Source fields stay owned by the provider.
    */
@@ -532,19 +575,23 @@ export class ConnectorService implements OnApplicationBootstrap {
         commentsTransferred: 0,
         commentsFailed: 0,
       };
-      await this.processDueWorkOrders(orgId, connector, counters);
-      await this.processDueCommentDeliveries(orgId, counters);
-
+      // A target shedding load (US16.2) is not sent any work: queued items keep their place and
+      // their attempts, and the next sync after the window resumes them.
+      let shed: IngestionPollResult['loadShedding'] = await this.sheddingNotice(connector);
       const recordErrors: IngestionPollResult['recordErrors'] = [];
-      await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
-      await this.ensureConnectorCommentDeliveries(orgId, connector.id);
-      await this.processDueCommentDeliveries(orgId, counters);
+      if (!shed) {
+        await this.processDueWorkOrders(orgId, connector, counters);
+        await this.processDueCommentDeliveries(orgId, counters);
+        await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
+        await this.ensureConnectorCommentDeliveries(orgId, connector.id);
+        await this.processDueCommentDeliveries(orgId, counters);
+      }
       const nextCursors: WatermarkCursor[] = [];
       let fetchedCount = 0;
       let hasMore = false;
       let oldestPending: number | null = null;
 
-      for (const entityType of adapter.entityTypes(connector.config)) {
+      for (const entityType of shed ? [] : adapter.entityTypes(connector.config)) {
         const stored = await this.dbService.db.query<any>(
           `SELECT cursor_value FROM integration_connector_cursors WHERE connector_id = $1 AND entity_type = $2`,
           [connectorId, entityType],
@@ -557,6 +604,10 @@ export class ConnectorService implements OnApplicationBootstrap {
         try {
           page = await adapter.fetchChanges(ctx, entityType, cursor);
         } catch (error) {
+          if (error instanceof ConnectorLoadShedError) {
+            shed = { until: error.until.toISOString(), reason: error.message };
+            break;
+          }
           const message = this.describe(error, 'Change query failed');
           await this.recordPollFailure(orgId, connectorId, `${entityType}: ${message}`);
           throw this.toHttp(error, `Synchronization failed for ${entityType}: ${message}`);
@@ -576,8 +627,10 @@ export class ConnectorService implements OnApplicationBootstrap {
         }
       }
 
-      await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
-      await this.processDueCommentDeliveries(orgId, counters);
+      if (!shed) {
+        await this.processDueIngestionRecords(orgId, connector, counters, recordErrors);
+        await this.processDueCommentDeliveries(orgId, counters);
+      }
       const queued = await this.dbService.db.query<any>(
         `SELECT MIN((payload::jsonb ->> 'updatedAt')::timestamptz) AS oldest,
                 COUNT(*) FILTER (WHERE status IN ('retry', 'dead'))::int AS failures,
@@ -594,8 +647,10 @@ export class ConnectorService implements OnApplicationBootstrap {
       const now = Date.now();
       const lagSeconds = oldestPending === null ? 0 : Math.max(0, Math.round((now - oldestPending) / 1000));
       const queuedFailures = Number(queued.rows[0]?.failures || 0);
-      const status: ConnectorStatus = recordErrors.length || queuedFailures ? 'degraded' : 'active';
-      const errorMessage = recordErrors.length
+      const status: ConnectorStatus = shed || recordErrors.length || queuedFailures ? 'degraded' : 'active';
+      const errorMessage = shed
+        ? `Load shedding: ${shed.reason}`.slice(0, 500)
+        : recordErrors.length
         ? `${recordErrors.length} record(s) failed; first: ${recordErrors[0].message}`.slice(0, 500)
         : queuedFailures
           ? `${queuedFailures} twin queue record(s) require retry or operator review; latest: ${queued.rows[0]?.last_error || 'processing failed'}`.slice(0, 500)
@@ -609,15 +664,18 @@ export class ConnectorService implements OnApplicationBootstrap {
         hasMore,
         nextCursors,
         durationMs: now - startTime,
+        ...(shed ? { loadShedding: shed } : {}),
       };
 
       await this.withEvent(async (tx) => {
+        // A shed sync is neither a success nor a failure of the target: it was not contacted.
         await tx.query(
           `UPDATE integration_connectors
-           SET status = $1, last_synced_at = $2, last_success_at = $2, sync_lag_seconds = $3,
-               consecutive_failures = 0, error_message = $4, updated_at = CURRENT_TIMESTAMP
+           SET status = $1, last_synced_at = $2, last_success_at = CASE WHEN $7 THEN last_success_at ELSE $2 END,
+               sync_lag_seconds = $3, consecutive_failures = CASE WHEN $7 THEN consecutive_failures ELSE 0 END,
+               error_message = $4, updated_at = CURRENT_TIMESTAMP
            WHERE id = $5 AND org_id = $6`,
-          [status, new Date(now).toISOString(), lagSeconds, errorMessage, connectorId, orgId],
+          [status, new Date(now).toISOString(), lagSeconds, errorMessage, connectorId, orgId, Boolean(shed)],
         );
         return this.event(orgId, connectorId, actorId, 'ConnectorSyncCompleted', {
           connector_id: connectorId,
@@ -627,6 +685,7 @@ export class ConnectorService implements OnApplicationBootstrap {
           record_errors: recordErrors.length,
           has_more: hasMore,
           lag_seconds: lagSeconds,
+          ...(shed ? { load_shedding_until: shed.until } : {}),
         });
       });
       return result;
@@ -801,6 +860,53 @@ export class ConnectorService implements OnApplicationBootstrap {
     return { inserted: insertedCount, duplicateDeliveries, outcomes };
   }
 
+  private async sheddingNotice(connector: ConnectorRecord): Promise<IngestionPollResult['loadShedding']> {
+    try {
+      const status = await this.rateGovernor.sheddingStatus(connector);
+      if (status.state !== 'shedding' || !status.until) return undefined;
+      return {
+        until: status.until,
+        reason: `${this.rateGovernor.describe(connector).targetOrigin} is under database semaphore pressure; Cadena is shedding load until ${status.until}`
+          + (status.reason ? ` (last response: ${status.reason.slice(0, 160)})` : ''),
+      };
+    } catch (error) {
+      if (error instanceof ConnectorConfigurationError) return undefined;
+      throw error;
+    }
+  }
+
+  /** True while the connector's target refuses calls (US16.2); a drain stops rather than refusing item by item. */
+  private async isShedding(connector: ConnectorRecord): Promise<boolean> {
+    try {
+      return (await this.rateGovernor.sheddingStatus(connector)).state === 'shedding';
+    } catch (error) {
+      if (error instanceof ConnectorConfigurationError) return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Returns a claimed queue item to its queue until the target stops shedding load. The target
+   * never saw the request, so the attempt the claim counted is given back: shedding can delay work
+   * but can never dead-letter it.
+   */
+  private async deferShedWork(
+    table: 'integration_connector_work_orders' | 'integration_comment_deliveries' | 'integration_connector_ingestion_queue',
+    status: 'pending' | 'retry',
+    orgId: string,
+    id: string,
+    claimId: string,
+    error: ConnectorLoadShedError,
+  ): Promise<void> {
+    await this.dbService.db.query(
+      `UPDATE ${table}
+       SET status = $1, attempts = GREATEST(attempts - 1, 0), last_error = $2, next_attempt_at = $3,
+           claimed_by = NULL, claim_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $4 AND org_id = $5 AND claimed_by = $6`,
+      [status, `Deferred: ${error.message}`.slice(0, 500), error.until.toISOString(), id, orgId, claimId],
+    );
+  }
+
   private async processDueIngestionRecords(
     orgId: string,
     connector: ConnectorRecord,
@@ -809,6 +915,7 @@ export class ConnectorService implements OnApplicationBootstrap {
   ): Promise<void> {
     let processed = 0;
     while (processed < 1000) {
+      if (await this.isShedding(connector)) return;
       const due = await this.dbService.db.query<any>(
         `SELECT q.*
          FROM integration_connector_ingestion_queue q
@@ -843,6 +950,7 @@ export class ConnectorService implements OnApplicationBootstrap {
     counters: PollCounters,
     recordErrors: IngestionPollResult['recordErrors'],
   ): Promise<void> {
+    const claimId = `${this.workerId}:${randomUUID()}`;
     const claimed = await this.dbService.db.query<any>(
       `UPDATE integration_connector_ingestion_queue
        SET status = 'processing', attempts = attempts + 1, claimed_by = $3,
@@ -852,10 +960,7 @@ export class ConnectorService implements OnApplicationBootstrap {
            OR (status = 'processing'
              AND (claim_expires_at IS NULL OR claim_expires_at <= CURRENT_TIMESTAMP)))
        RETURNING *`,
-      [
-        row.id, orgId, `${this.workerId}:${randomUUID()}`,
-        new Date(Date.now() + WORK_ORDER_CLAIM_MS).toISOString(),
-      ],
+      [row.id, orgId, claimId, new Date(Date.now() + WORK_ORDER_CLAIM_MS).toISOString()],
     );
     if (!claimed.rows.length) return;
     const job = claimed.rows[0];
@@ -887,6 +992,10 @@ export class ConnectorService implements OnApplicationBootstrap {
         [twin.rows[0]?.id || null, JSON.stringify(history), job.id, orgId],
       );
     } catch (error) {
+      if (error instanceof ConnectorLoadShedError) {
+        await this.deferShedWork('integration_connector_ingestion_queue', 'retry', orgId, job.id, claimId, error);
+        return;
+      }
       const message = this.describe(error, 'Record processing failed');
       const status = attempt < MAX_WORK_ORDER_ATTEMPTS ? 'retry' : 'dead';
       const retryAfterMs = Math.min(WORK_ORDER_BASE_BACKOFF_MS * 2 ** (attempt - 1), WORK_ORDER_MAX_BACKOFF_MS);
@@ -1276,6 +1385,10 @@ export class ConnectorService implements OnApplicationBootstrap {
       });
       counters.commentsTransferred += 1;
     } catch (error) {
+      if (error instanceof ConnectorLoadShedError) {
+        await this.deferShedWork('integration_comment_deliveries', 'pending', orgId, row.id, claimId, error);
+        return;
+      }
       const message = this.describe(error, 'Public comment write failed');
       const retryable = (error instanceof ConnectorRemoteError && error.retryable) || error instanceof ConnectorCredentialError;
       const status = retryable && attempts < MAX_WORK_ORDER_ATTEMPTS ? 'failed' : 'dead';
@@ -1489,6 +1602,7 @@ export class ConnectorService implements OnApplicationBootstrap {
     // turn is still handling other targets and then replay inside the same call.
     const cycleStartedAt = new Date().toISOString();
     while (processed < 500) {
+      if (await this.isShedding(connector)) return;
       const due = await this.dbService.db.query<any>(
         `SELECT w.id FROM integration_connector_work_orders w
          WHERE w.org_id = $1 AND w.target_connector_id = $2
@@ -1775,6 +1889,10 @@ export class ConnectorService implements OnApplicationBootstrap {
       });
       return 'executed';
     } catch (error) {
+      if (error instanceof ConnectorLoadShedError) {
+        await this.deferShedWork('integration_connector_work_orders', 'pending', orgId, workOrderId, claimId, error);
+        return 'pending';
+      }
       const message = this.describe(error, 'Connector write failed');
       const retryable = translationInProgress
         || (error instanceof ConnectorRemoteError && error.retryable)
@@ -2887,6 +3005,8 @@ export class ConnectorService implements OnApplicationBootstrap {
 
   private toHttp(error: unknown, message: string): HttpException {
     if (error instanceof HttpException) return error;
+    // The target is overloaded and Cadena did not call it; say so rather than report a bad gateway.
+    if (error instanceof ConnectorLoadShedError) return new ServiceUnavailableException(error.message);
     if (error instanceof ConnectorCredentialError || error instanceof ConnectorConfigurationError) {
       return new UnprocessableEntityException(message);
     }

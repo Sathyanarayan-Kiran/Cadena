@@ -135,6 +135,7 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
           type: this.fieldType(String(row.internal_type || '')),
           required: String(row.mandatory) === 'true',
           custom: element.startsWith('u_'),
+          ...(String(row.internal_type || '') === 'reference' ? { reference: true } : {}),
         };
         if (element === 'state' && stateChoices.length) {
           field.allowedValues = stateChoices.map((choice) => String(choice.label));

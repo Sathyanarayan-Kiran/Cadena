@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto';
 import { DatabaseService } from '../../../database/database.service';
 import { EventOutboxService } from '../../events/event-outbox.service';
 import { ConnectorService } from '../connector.service';
-import { ConnectorRemoteError } from '../connector-http';
+import { ConnectorLoadShedError, ConnectorRemoteError } from '../connector-http';
 import { ConnectorRecord } from '../connector.types';
 import { AdaptiveLimiter, RequestPacer } from './adaptive-limiter';
 import { BackfillService } from './backfill.service';
@@ -250,6 +250,17 @@ export class BackfillRunnerService {
    */
   private async recordChunkFailure(job: ClaimedJob, chunk: ChunkRow, error: unknown, limiter: AdaptiveLimiter): Promise<void> {
     const message = this.message(error).slice(0, 500);
+    if (error instanceof ConnectorLoadShedError) {
+      // Refused before any request (US16.2): wait out the window without spending an attempt or
+      // shrinking the limiter, since the target never answered this chunk.
+      await this.dbService.db.query(
+        `UPDATE integration_backfill_chunks
+         SET status = 'pending', last_error = $2, next_attempt_at = $3, updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [chunk.id, `Deferred: ${message}`.slice(0, 500), error.until.toISOString()],
+      );
+      return;
+    }
     const transient = error instanceof ConnectorRemoteError && error.retryable;
     const attempts = chunk.attempts + 1;
     if (transient) limiter.onThrottle((error as ConnectorRemoteError).retryAfterSeconds);

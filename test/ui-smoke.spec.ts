@@ -1216,6 +1216,14 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     // Chromium logs the deliberately refused publish as a network error; nothing else is excused.
     consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((message) => !/Failed to load resource.*422/.test(message)));
 
+    // A filter on a field the connector's target does not index is named before it is saved (US16.2).
+    await page.$eval('#nativeQueryText', (node) => { (node as HTMLTextAreaElement).value = ''; });
+    await page.type('#nativeQueryText', 'project = CAD AND "Vendor ticket" ~ "V-1"');
+    await centeredClick('#checkNativeQueryButton');
+    await page.waitForFunction(() => (document.querySelector('#nativeQueryCheck')?.textContent ?? '').includes('is not indexed'), { timeout: 10000 });
+    expect(await textOf('#nativeQueryCheck')).toContain("'Vendor ticket' is not indexed");
+    await page.$eval('#nativeQueryName', (node) => { (node as HTMLInputElement).value = ''; });
+
     // A bounded query checks clean, saves, publishes, runs and can be disabled. The sandbox's seeded
     // records are timestamped 2026-09-22, so the run starts from the day before.
     await page.type('#nativeQueryName', 'UI CAD watch');
@@ -1224,6 +1232,7 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     await page.$eval('#nativeQueryStart', (node) => { (node as HTMLInputElement).value = '2026-09-21T00:00'; });
     await centeredClick('#checkNativeQueryButton');
     await page.waitForFunction(() => (document.querySelector('#nativeQueryCheck')?.textContent ?? '').includes('Valid'), { timeout: 10000 });
+    expect(await textOf('#nativeQueryCheck')).toContain('filters only on indexed fields');
     await page.click('#saveNativeQueryButton');
     await page.waitForFunction(() => (document.querySelector('#nativeQueryList')?.textContent ?? '').includes('UI CAD watch'), { timeout: 10000 });
     expect(await cardButton('UI CAD watch', 'Publish')).toBe(true);

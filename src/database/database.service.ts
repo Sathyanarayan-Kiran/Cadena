@@ -909,6 +909,17 @@ export class DatabaseService {
     await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS work_item_id UUID;`);
     await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS projection_status TEXT NOT NULL DEFAULT 'pending';`);
     await this.db.exec(`ALTER TABLE integration_canonical_twins ADD COLUMN IF NOT EXISTS projection_reason TEXT;`);
+    // US16.2: target-wide load shedding under database semaphore pressure.
+    await this.db.exec(`
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS shedding_since TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS shed_until TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS shed_reason TEXT;
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS shed_episodes BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS shed_requests BIGINT NOT NULL DEFAULT 0;
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS probe_owner TEXT;
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS probe_expires_at TIMESTAMP WITH TIME ZONE;
+      ALTER TABLE integration_rate_governance ADD COLUMN IF NOT EXISTS pressure_streak INT NOT NULL DEFAULT 0;
+    `);
     await this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS integration_connector_work_orders_event_twin ON integration_connector_work_orders (source_event_id, target_twin_id) WHERE source_event_id IS NOT NULL;`);
     await this.db.exec(`
       UPDATE audit_events SET actor_type = 'integration'

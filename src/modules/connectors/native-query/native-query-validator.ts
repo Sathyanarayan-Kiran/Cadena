@@ -1,4 +1,5 @@
 import { NativeQueryIssue, NativeQueryLanguage, NativeQueryValidation } from './native-query.types';
+import { QueryIndexCatalog } from './query-index-catalog';
 
 /**
  * Static validation of scheduled native queries (US17.3).
@@ -8,9 +9,10 @@ import { NativeQueryIssue, NativeQueryLanguage, NativeQueryValidation } from './
  * would read *every record of the source* inside that window: no selective scope means each run
  * walks the whole instance's recent changes, and a lost watermark degrades to a full scan.
  *
- * This is a static heuristic. It cannot see which fields a given instance has indexed, so it
- * requires a positive scope predicate (a project, a key, a stable reference) on every branch of
- * the query and says exactly which clause to add when one is missing.
+ * The scope rule is a static heuristic: it requires a positive scope predicate (a project, a key,
+ * a stable reference) on every branch of the query and says exactly which clause to add when one
+ * is missing. When the connector's index catalog is supplied (US16.2), every field the query
+ * filters on must also be indexed on the target, and each offending field is named.
  */
 
 export const MAX_NATIVE_QUERY_LENGTH = 4000;
@@ -107,7 +109,63 @@ function isScoped(expression: string, isSelective: (predicate: string) => boolea
   return isSelective(stripped);
 }
 
+/** Every leaf predicate of an AND/OR/NOT expression, in order. */
+function leafPredicates(expression: string, brackets: boolean): string[] {
+  const stripped = stripOuterParens(expression);
+  const negated = /^not\s+/i.exec(stripped);
+  if (negated) return leafPredicates(stripped.slice(negated[0].length), brackets);
+  const branches = splitTopLevel(stripped, 'or', brackets);
+  if (branches.length > 1) return branches.flatMap((branch) => leafPredicates(branch, brackets));
+  const conjuncts = splitTopLevel(stripped, 'and', brackets);
+  if (conjuncts.length > 1) return conjuncts.flatMap((part) => leafPredicates(part, brackets));
+  return stripped ? [stripped] : [];
+}
+
 const issue = (code: NativeQueryIssue['code'], message: string, hint: string): NativeQueryIssue => ({ code, message, hint });
+
+/**
+ * Names every referenced field the target cannot serve from an index (US16.2). A field the
+ * catalog does not know is refused too: Cadena cannot vouch for an index it has never seen.
+ */
+function indexProblems(references: string[], catalog: QueryIndexCatalog | undefined): NativeQueryIssue[] {
+  if (!catalog) return [];
+  const target = `${catalog.provider === 'jira' ? 'Jira' : 'ServiceNow'} ${catalog.entityType}`;
+  if (catalog.unavailable) {
+    return [issue('index_catalog_unavailable', catalog.unavailable, 'Run discovery on the connector, then validate the query again.')];
+  }
+  const suggestions = catalog.indexedFields().slice(0, 8).join(', ');
+  const alternative = suggestions ? `Filter on an indexed field instead (for example ${suggestions})` : 'Filter on an indexed field instead';
+  const problems: NativeQueryIssue[] = [];
+  const seen = new Set<string>();
+  for (const reference of references) {
+    const key = reference.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const hit = catalog.lookup(reference);
+    if (hit?.indexed) continue;
+    const declare = catalog.provider === 'servicenow'
+      ? `, or, if an administrator has indexed '${hit?.field || reference}' on this instance, declare it in the connector's query indexes`
+      : '';
+    problems.push(hit
+      ? {
+        ...issue(
+          'unindexed_field',
+          `The field '${reference}' is not indexed on ${target}: ${hit.reason || 'the target reports no index for it'}. Filtering on it makes the target scan the table while holding a database query semaphore.`,
+          `${alternative}${declare}.`,
+        ),
+        field: hit.field,
+      }
+      : {
+        ...issue(
+          'unknown_field',
+          `The field '${reference}' is not a discovered ${target} field, so Cadena cannot confirm it is indexed.`,
+          `Check the spelling against the discovered schema, or run discovery again if the field is new. ${alternative}${declare}.`,
+        ),
+        field: reference,
+      });
+  }
+  return problems;
+}
 
 function finish(language: NativeQueryLanguage, errors: NativeQueryIssue[], warnings: NativeQueryIssue[] = []): NativeQueryValidation {
   return { valid: errors.length === 0, language, errors, warnings };
@@ -135,7 +193,17 @@ function jqlSelective(predicate: string): boolean {
   return JQL_SCOPE_FIELDS.has(match[1].replace(/^["']|["']$/g, '').toLowerCase());
 }
 
-export function validateJql(text: string): NativeQueryValidation {
+const JQL_FIELD = /^("[^"]+"|'[^']+'|cf\[\d+\]|[A-Za-z][\w.]*)\s*(?:!?=|!?~|>=|<=|>|<|not\s+in\b|in\b|is\b|was\b|changed\b)/i;
+
+/** The field each JQL predicate filters on, as written (quotes removed). */
+function jqlFieldReferences(body: string): string[] {
+  return leafPredicates(body, false)
+    .map((predicate) => JQL_FIELD.exec(predicate)?.[1])
+    .filter((field): field is string => Boolean(field))
+    .map((field) => field.replace(/^["']|["']$/g, ''));
+}
+
+export function validateJql(text: string, catalog?: QueryIndexCatalog): NativeQueryValidation {
   const errors = basicProblems(text);
   if (errors.length) return finish('jql', errors);
   const unbalanced = balanceProblem(text, false);
@@ -158,8 +226,8 @@ export function validateJql(text: string): NativeQueryValidation {
       'Remove the "updated" clause. Cadena adds "updated >= <watermark>"; set start_from to control where the first run begins.',
     ));
   }
+  const body = splitTopLevel(text, 'order\\s+by', false)[0];
   if (!errors.length) {
-    const body = splitTopLevel(text, 'order\\s+by', false)[0];
     if (!isScoped(body, jqlSelective, false)) {
       errors.push(issue(
         'unbounded_scan',
@@ -168,6 +236,7 @@ export function validateJql(text: string): NativeQueryValidation {
       ));
     }
   }
+  errors.push(...indexProblems(jqlFieldReferences(body), catalog));
   return finish('jql', errors);
 }
 
@@ -184,7 +253,7 @@ const ENCODED_SELECTIVE = new Set(['=', 'IN', 'STARTSWITH', 'BETWEEN', 'SAMEAS']
 
 interface EncodedTerm { field: string; operator: string; value: string; or: boolean }
 
-export function validateEncodedQuery(text: string): NativeQueryValidation {
+export function validateEncodedQuery(text: string, catalog?: QueryIndexCatalog): NativeQueryValidation {
   const errors = basicProblems(text);
   if (errors.length) return finish('encoded', errors);
 
@@ -242,10 +311,14 @@ export function validateEncodedQuery(text: string): NativeQueryValidation {
         groups.length > 1
           ? `Query part ${groupIndex + 1} has no selective condition, so it would read every record in the table.`
           : 'The query has no selective condition, so each run would read every record changed in the table.',
-        'Add an equality or IN condition on an indexed field that is not an OR-alternative to an unconstrained term, for example assignment_group=<sys_id> or category=network. Boolean flags such as active=true, ranges, negations and LIKE/CONTAINS do not count.',
+        'Add an equality or IN condition on an indexed field that is not an OR-alternative to an unconstrained term, for example assignment_group=<sys_id> or cmdb_ci=<sys_id>. Boolean flags such as active=true, ranges, negations and LIKE/CONTAINS do not count.',
       ));
     }
   });
+  errors.push(...indexProblems(
+    groups.flatMap((group) => group.map((term) => term.field)).filter((field) => field !== 'sys_updated_on'),
+    catalog,
+  ));
   return finish('encoded', errors);
 }
 
@@ -305,8 +378,20 @@ export function validateWiql(text: string): NativeQueryValidation {
   return finish('wiql', errors, warnings);
 }
 
-export function validateNativeQuery(language: NativeQueryLanguage, text: string): NativeQueryValidation {
-  if (language === 'jql') return validateJql(text);
-  if (language === 'encoded') return validateEncodedQuery(text);
-  return validateWiql(text);
+/**
+ * Validates a query in its native language. With a catalog, fields are also checked against the
+ * target's indexes; without one (an ad-hoc check that names no connector) a warning says so.
+ */
+export function validateNativeQuery(language: NativeQueryLanguage, text: string, catalog?: QueryIndexCatalog): NativeQueryValidation {
+  const result = language === 'jql' ? validateJql(text, catalog)
+    : language === 'encoded' ? validateEncodedQuery(text, catalog)
+      : validateWiql(text);
+  if (!catalog && language !== 'wiql') {
+    result.warnings.push(issue(
+      'indexes_not_checked',
+      'Field indexes were not checked because no connector entity was named.',
+      'Pass connector_id and entity_type to check every filtered field against that target\'s indexes.',
+    ));
+  }
+  return result;
 }

@@ -10,9 +10,15 @@ export interface NativeQueryIssue {
     | 'order_by_not_allowed'
     | 'watermark_conflict'
     | 'unbounded_scan'
+    | 'unindexed_field'
+    | 'unknown_field'
+    | 'index_catalog_unavailable'
+    | 'indexes_not_checked'
     | 'no_runner';
   message: string;
   hint: string;
+  /** The offending field, for index findings. */
+  field?: string;
 }
 
 export interface NativeQueryValidation {

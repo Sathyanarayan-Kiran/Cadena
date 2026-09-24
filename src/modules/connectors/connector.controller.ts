@@ -137,6 +137,17 @@ export class ConnectorController {
     return this.service.configureRateGovernance(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
   }
 
+  /** Replaces the administrator-confirmed index declaration scheduled queries may rely on (US16.2). */
+  @Post(':id/query-indexes')
+  public async configureQueryIndexes(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.service.configureQueryIndexes(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
+  }
+
   @Post(':id/sync')
   public async syncConnector(
     @Param('id') id: string,

@@ -3,9 +3,10 @@ import { createHash, randomUUID } from 'crypto';
 import { DatabaseService } from '../../../database/database.service';
 import { EventOutboxService } from '../../events/event-outbox.service';
 import { ConnectorService } from '../connector.service';
-import { ConnectorRemoteError } from '../connector-http';
+import { ConnectorLoadShedError, ConnectorRemoteError } from '../connector-http';
 import { ConnectorProviderType, ConnectorRecord } from '../connector.types';
 import { validateNativeQuery } from './native-query-validator';
+import { buildQueryIndexCatalog } from './query-index-catalog';
 import {
   CreateNativeQueryDto,
   InvalidNativeQueryError,
@@ -45,8 +46,8 @@ const iso = (value: unknown): string | null => (value ? new Date(value as string
  * Definitions and lifecycle of scheduled native-query triggers (US17.3).
  *
  * A query is bound to one connector, written in that provider's native language, and starts as a
- * draft. Publishing re-runs validation and is refused while the query could scan without bound;
- * the watermark it starts from is fixed at publication, so a run can never reach older history.
+ * draft. Publishing re-runs validation and is refused while the query could scan without bound
+ * or filters on a field the target has not indexed (US16.2), naming each such field; the watermark it starts from is fixed at publication, so a run can never reach older history.
  */
 @Injectable()
 export class NativeQueryService {
@@ -56,12 +57,23 @@ export class NativeQueryService {
 
   constructor(@Inject(ConnectorService) private readonly connectors: ConnectorService) {}
 
-  public validateAdHoc(language: unknown, query: unknown): NativeQueryValidation {
+  public async validateAdHoc(
+    orgId: string,
+    language: unknown,
+    query: unknown,
+    connectorId?: unknown,
+    entityType?: unknown,
+  ): Promise<NativeQueryValidation> {
     if (language !== 'jql' && language !== 'wiql' && language !== 'encoded') {
       throw new InvalidNativeQueryError("language must be 'jql', 'wiql' or 'encoded'");
     }
     if (typeof query !== 'string') throw new InvalidNativeQueryError('query must be a string');
-    return validateNativeQuery(language, query);
+    if (connectorId === undefined && entityType === undefined) return validateNativeQuery(language, query);
+    const target = await this.resolveTarget(orgId, connectorId, this.requiredText(entityType, 'entity_type', 80));
+    if (target.language !== language) {
+      throw new InvalidNativeQueryError(`This connector's queries are written in ${target.language}, not ${language}`);
+    }
+    return validateNativeQuery(language, query, target.catalog);
   }
 
   public async createDraft(orgId: string, dto: CreateNativeQueryDto, actorId: string): Promise<NativeQueryDefinition> {
@@ -69,7 +81,7 @@ export class NativeQueryService {
     const name = this.requiredText(dto?.name, 'name', 160);
     const query = this.requiredText(dto?.query, 'query', 100_000);
     const entityType = this.requiredText(dto?.entity_type, 'entity_type', 80);
-    const { language } = await this.resolveTarget(orgId, dto?.connector_id, entityType);
+    const { language, catalog } = await this.resolveTarget(orgId, dto?.connector_id, entityType);
     const interval = this.interval(dto.interval_seconds);
     const startFrom = this.startFrom(dto.start_from);
 
@@ -88,7 +100,7 @@ export class NativeQueryService {
          RETURNING *`,
         [
           randomUUID(), orgId, dto.connector_id, name, language, entityType, query, interval, startFrom,
-          JSON.stringify(validateNativeQuery(language, query)), actorId,
+          JSON.stringify(validateNativeQuery(language, query, catalog)), actorId,
         ],
       );
       created = this.map(inserted.rows[0]);
@@ -111,14 +123,14 @@ export class NativeQueryService {
     const name = dto?.name === undefined ? current.name : this.requiredText(dto.name, 'name', 160);
     const query = dto?.query === undefined ? current.query : this.requiredText(dto.query, 'query', 100_000);
     const entityType = dto?.entity_type === undefined ? current.entity_type : this.requiredText(dto.entity_type, 'entity_type', 80);
-    await this.resolveTarget(orgId, current.connector_id, entityType);
+    const { catalog } = await this.resolveTarget(orgId, current.connector_id, entityType);
     const interval = dto?.interval_seconds === undefined ? current.interval_seconds : this.interval(dto.interval_seconds);
     const startFrom = dto?.start_from === undefined ? current.start_from : this.startFrom(dto.start_from);
     const result = await this.dbService.db.query<any>(
       `UPDATE integration_native_queries
        SET name = $3, query = $4, entity_type = $5, interval_seconds = $6, start_from = $7, validation = $8
        WHERE org_id = $1 AND id = $2 RETURNING *`,
-      [orgId, id, name, query, entityType, interval, startFrom, JSON.stringify(validateNativeQuery(current.language, query))],
+      [orgId, id, name, query, entityType, interval, startFrom, JSON.stringify(validateNativeQuery(current.language, query, catalog))],
     ).catch((error: any) => {
       if (/unique/i.test(String(error?.message))) throw new NativeQueryConflictError(`A native query named '${name}' already exists`);
       throw error;
@@ -133,11 +145,11 @@ export class NativeQueryService {
 
     // Reads happen before the transaction: PGlite serializes one connection, so querying through
     // the service connection while a transaction is open on it would deadlock.
-    const { connector } = await this.resolveTarget(orgId, current.connector_id, current.entity_type);
+    const { connector, catalog } = await this.resolveTarget(orgId, current.connector_id, current.entity_type);
     if (!connector.activatedAt) {
       throw new NativeQueryConflictError('The connector must be discovered and activated before a query on it can be published');
     }
-    const validation = validateNativeQuery(current.language, current.query);
+    const validation = validateNativeQuery(current.language, current.query, catalog);
     if (!validation.valid) {
       const first = validation.errors[0];
       throw new InvalidNativeQueryError(`Cannot publish: ${first.message} ${first.hint}`, validation);
@@ -282,8 +294,9 @@ export class NativeQueryService {
       return { ...base, status: 'skipped', message: reason };
     }
 
-    // Re-validated on every run so a query saved under older rules, or edited at rest, still cannot scan unbounded.
-    const validation = validateNativeQuery(definition.language, definition.query);
+    // Re-validated on every run so a query saved under older rules, edited at rest, or left behind
+    // by a schema change (a field losing its index) still cannot scan unbounded.
+    const validation = validateNativeQuery(definition.language, definition.query, buildQueryIndexCatalog(connector, definition.entity_type));
     if (!validation.valid) {
       return this.fail(definition, `Query no longer passes validation: ${validation.errors[0].message} ${validation.errors[0].hint}`, base);
     }
@@ -297,6 +310,7 @@ export class NativeQueryService {
         cursorValue: priorWatermark,
       });
     } catch (error) {
+      if (error instanceof ConnectorLoadShedError) return this.deferForShedding(definition, error, base);
       return this.fail(
         definition,
         this.message(error),
@@ -355,6 +369,25 @@ export class NativeQueryService {
     }
   }
 
+  /**
+   * The target is shedding load (US16.2): the run is postponed to the end of the window. It is not
+   * a failure of the query, so it neither counts towards the backoff nor moves the watermark.
+   */
+  private async deferForShedding(
+    definition: ClaimedQuery,
+    error: ConnectorLoadShedError,
+    base: Omit<NativeQueryRunResult, 'status'>,
+  ): Promise<NativeQueryRunResult> {
+    const message = `Deferred: ${error.message}`.slice(0, 500);
+    await this.dbService.db.query(
+      `UPDATE integration_native_queries
+       SET next_run_at = $3, last_error = $4, lease_owner = NULL, lease_expires_at = NULL
+       WHERE org_id = $1 AND id = $2 AND lease_owner = $5`,
+      [definition.org_id, definition.id, error.until.toISOString(), message, definition.leaseOwner],
+    );
+    return { ...base, status: 'skipped', message };
+  }
+
   /** Records a failed run, keeps the watermark where it was, and backs off exponentially up to six hours. */
   private async fail(
     definition: ClaimedQuery,
@@ -410,7 +443,7 @@ export class NativeQueryService {
     if (!entityTypes.includes(entityType)) {
       throw new InvalidNativeQueryError(`entity_type '${entityType}' is not configured on this connector (available: ${entityTypes.join(', ')})`);
     }
-    return { connector, language };
+    return { connector, language, catalog: buildQueryIndexCatalog(connector, entityType) };
   }
 
   private requiredText(value: unknown, field: string, max: number): string {

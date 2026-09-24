@@ -46,12 +46,17 @@ export class NativeQueryController {
     return this.service.list(requireOrg(orgId));
   }
 
-  /** Stateless: checks any JQL, WIQL or encoded query without saving it. */
+  /**
+   * Stateless: checks any JQL, WIQL or encoded query without saving it. Naming a connector and
+   * entity type also checks every filtered field against that target's indexes (US16.2).
+   */
   @Post('validate')
-  async validate(@Body() dto: { language?: string; query?: string }, @Headers('x-org-id') orgId?: string) {
+  async validate(
+    @Body() dto: { language?: string; query?: string; connector_id?: string; entity_type?: string },
+    @Headers('x-org-id') orgId?: string,
+  ) {
     try {
-      requireOrg(orgId);
-      return this.service.validateAdHoc(dto?.language, dto?.query);
+      return await this.service.validateAdHoc(requireOrg(orgId), dto?.language, dto?.query, dto?.connector_id, dto?.entity_type);
     } catch (error) {
       this.rethrow(error);
     }

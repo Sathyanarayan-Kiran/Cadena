@@ -116,6 +116,8 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
         type: this.fieldType(field.schema?.type),
         required: field.id === 'summary' || field.id === 'status' || field.id === 'issuetype' || field.id === 'project',
         custom: Boolean(field.custom),
+        ...(typeof field.searchable === 'boolean' ? { indexed: field.searchable } : {}),
+        ...(Array.isArray(field.clauseNames) ? { clauseNames: field.clauseNames.map(String) } : {}),
         ...(field.id === 'status' && statusNames.length ? { allowedValues: statusNames } : {}),
       }));
 

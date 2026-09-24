@@ -59,6 +59,12 @@ export interface ConnectorConfigDto {
   commentSync?: ConnectorCommentSyncPolicy;
   /** Shared per-target request shaping and adaptive retry policy (US16.1). */
   rateGovernance?: ConnectorRateGovernancePolicy;
+  /**
+   * Instance-specific database indexes an administrator has confirmed, keyed by entity type
+   * (US16.2). Scheduled queries may filter only on indexed fields; these extend what discovery
+   * and the provider platform already vouch for.
+   */
+  queryIndexes?: Record<string, string[]>;
   /** How twins become governed WorkItems: owning team, type map and owner map. */
   projection?: Record<string, unknown>;
 }
@@ -79,6 +85,12 @@ export interface ConnectorFieldSchema {
   allowedValues?: string[];
   /** Provider-native codes for `allowedValues`, index-aligned (for example ServiceNow state choices). */
   allowedValueCodes?: string[];
+  /** Whether the provider's search index covers the field (Jira `searchable`); unset when the provider does not say. */
+  indexed?: boolean;
+  /** Names a native query may use for the field (Jira `clauseNames`, e.g. "Sprint" and "cf[10020]"). */
+  clauseNames?: string[];
+  /** A reference to another record (ServiceNow `internal_type=reference`), which the platform indexes. */
+  reference?: boolean;
 }
 
 export interface ConnectorEntitySchema {
@@ -152,6 +164,11 @@ export interface ConnectorRateGovernancePolicy {
   maxBackoffMs: number;
   /** Symmetric jitter around the exponential delay, from 0 to 1. */
   jitterRatio: number;
+  /**
+   * Consecutive semaphore-pressure responses from the target that start load shedding (US16.2).
+   * One overloaded response is retried per item as usual; a sustained run stops all traffic.
+   */
+  shedAfterPressureResponses: number;
 }
 
 export interface ConnectorRateGovernanceMetrics {
@@ -175,6 +192,18 @@ export interface ConnectorRateGovernanceMetrics {
     throttleEvents: number;
     semaphorePressureEvents: number;
     retryEvents: number;
+  };
+  /**
+   * US16.2: while the target reports database semaphore pressure, Cadena stops sending it work.
+   * `shedding` refuses every call until `until`; `probing` lets one call test recovery.
+   */
+  loadShedding: {
+    state: 'normal' | 'shedding' | 'probing';
+    since: string | null;
+    until: string | null;
+    reason: string | null;
+    episodes: number;
+    shedRequests: number;
   };
   requests: { total: number; succeeded: number; failed: number; shapedWaitMs: number };
   backlog: {
@@ -278,6 +307,8 @@ export interface IngestionPollResult {
   hasMore: boolean;
   nextCursors: WatermarkCursor[];
   durationMs: number;
+  /** Set when the target was shedding load (US16.2): provider work stopped and resumes after `until`. */
+  loadShedding?: { until: string; reason: string };
 }
 
 export type ConnectorWorkOrderStatus = 'pending' | 'processing' | 'executed' | 'failed' | 'dead' | 'held' | 'noop';
