@@ -837,6 +837,7 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
         PORT: String(LED_PORT),
         CADENA_DATA_DIR: '',
         CADENA_INTERACTION_MODE: 'connector-led',
+        CADENA_BACKFILL_TICK_MS: '1000',
         CADENA_CONNECTOR_SANDBOX: 'enabled',
         CADENA_CONNECTOR_LIVE_HTTP: '',
         UI_SANDBOX_TOKEN: 'sandbox-token',
@@ -1091,6 +1092,83 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     await page.evaluate(() => (document.querySelector('#nativeQueryDialog') as HTMLDialogElement).close());
   });
 
+  it('plans, starts and completes a bulk backfill, shows its counts, and exports the CSV audit', async () => {
+    const cardText = () => page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('#backfillList .mapping-card')).find((node) => node.textContent?.includes('UI backfill'));
+      return (card as HTMLElement | undefined)?.innerText ?? '';
+    });
+    const cardButton = (label: string) => page.evaluate((buttonLabel) => {
+      const card = Array.from(document.querySelectorAll('#backfillList .mapping-card')).find((node) => node.textContent?.includes('UI backfill'));
+      const button = Array.from(card?.querySelectorAll('button') ?? []).find((node) => node.textContent === buttonLabel) as HTMLButtonElement | undefined;
+      button?.click();
+      return Boolean(button);
+    }, label);
+    const setValue = (selector: string, value: string) => page.$eval(selector, (node, next) => { (node as HTMLInputElement).value = next; }, value);
+    // The dialog's sticky footer covers a control Puppeteer scrolls to the bottom edge, so centre it first.
+    const centeredClick = async (selector: string) => {
+      await page.$eval(selector, (node) => node.scrollIntoView({ block: 'center' }));
+      await page.click(selector);
+    };
+
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openBackfillFromNav')?.click());
+    await page.waitForSelector('#backfillDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => !document.querySelector('#backfillList .skeleton'), { timeout: 10000 });
+    const jiraOption = await page.$$eval('#backfillConnector option', (options) =>
+      options.map((option) => ({ value: (option as HTMLOptionElement).value, text: option.textContent || '' })).find((option) => option.text.includes('JQL')));
+    expect(jiraOption).toBeTruthy();
+    await page.select('#backfillConnector', jiraOption!.value);
+    expect(await page.$eval('#backfillEntity', (node) => (node as HTMLInputElement).value)).toBe('issue');
+
+    // A range that ends before it starts is refused with the reason, and nothing is planned.
+    await page.type('#backfillName', 'UI backfill');
+    await setValue('#backfillFrom', '2026-09-22T00:00');
+    await setValue('#backfillTo', '2026-09-21T00:00');
+    await centeredClick('#saveBackfillButton');
+    await page.waitForFunction(() => !(document.querySelector('#backfillAlert') as HTMLElement).hidden, { timeout: 10000 });
+    expect(await textOf('#backfillAlert')).toContain('earlier than to');
+    expect(await cardText()).toBe('');
+    // Chromium logs the deliberately refused request as a network error; nothing else is excused.
+    consoleErrors.splice(0, consoleErrors.length, ...consoleErrors.filter((message) => !/Failed to load resource.*422/.test(message)));
+
+    // A valid plan appears as a pending job with its chunk count. The sandbox's seeded records are
+    // timestamped 2026-09-22, so a two-day range starting the day before covers them.
+    await setValue('#backfillFrom', '2026-09-21T00:00');
+    await setValue('#backfillTo', '2026-09-23T00:00');
+    await centeredClick('#saveBackfillButton');
+    await page.waitForFunction(() => (document.querySelector('#backfillList')?.textContent ?? '').includes('UI backfill'), { timeout: 10000 });
+    const planned = await cardText();
+    expect(planned).toContain('pending');
+    expect(planned).toContain('0 of 2 chunks done');
+    expect(await cardButton('Download CSV report')).toBe(false);
+
+    // Starting it hands it to the scheduler; the dialog refreshes itself until it finishes.
+    expect(await cardButton('Start')).toBe(true);
+    await page.waitForFunction(() => {
+      const card = Array.from(document.querySelectorAll('#backfillList .mapping-card')).find((node) => node.textContent?.includes('UI backfill'));
+      return Boolean(card?.textContent?.includes('2 of 2 chunks done'));
+    }, { timeout: 45000 });
+    const finished = await cardText();
+    expect(finished).toContain('completed');
+    expect(finished).toMatch(/Fetched \d+/);
+    expect(finished).toMatch(/Processed \d+/);
+    expect(finished).toMatch(/Queued \d+/);
+    expect(finished).toMatch(/Failed \d+/);
+    expect(await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('#backfillList .mapping-card')).find((node) => node.textContent?.includes('UI backfill'));
+      const bar = card?.querySelector('progress') as HTMLProgressElement | null;
+      return Boolean(bar && bar.value === bar.max);
+    })).toBe(true);
+    const jobs = (await call('/integrations/backfill-jobs')).body as any[];
+    const job = jobs.find((candidate) => candidate.name === 'UI backfill');
+    expect(job.status).toBe('completed');
+    expect(job.counts.records.fetched).toBeGreaterThanOrEqual(3);
+
+    // The CSV audit is exported through the UI and the export is acknowledged with its row count.
+    expect(await cardButton('Download CSV report')).toBe(true);
+    await page.waitForFunction(() => /Exported \d+ audit row/.test(document.querySelector('#toastRegion')?.textContent ?? ''), { timeout: 15000 });
+    await page.evaluate(() => (document.querySelector('#backfillDialog') as HTMLDialogElement).close());
+  });
+
   it('flags a degraded source and stays within a phone viewport without console errors', async () => {
     await onboard(jiraConfig('Overlapping Jira'));
     await reload();
@@ -1121,6 +1199,16 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
     expect(await page.$eval('#nativeQueryDialog', (node) => node.getBoundingClientRect().width <= window.innerWidth + 1)).toBe(true);
     await page.evaluate(() => (document.querySelector('#nativeQueryDialog') as HTMLDialogElement).close());
+
+    // Backfill cards carry a progress bar and a long row of counts; they must wrap, not overflow.
+    await page.click('#mobileMenuButton');
+    await page.waitForSelector('#sidebar.open', { timeout: 5000 });
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openBackfillFromNav')?.click());
+    await page.waitForSelector('#backfillDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelectorAll('#backfillList .mapping-card').length > 0, { timeout: 10000 });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth > document.documentElement.clientWidth + 1)).toBe(false);
+    expect(await page.$eval('#backfillDialog', (node) => node.getBoundingClientRect().width <= window.innerWidth + 1)).toBe(true);
+    await page.evaluate(() => (document.querySelector('#backfillDialog') as HTMLDialogElement).close());
     expect(consoleErrors).toEqual([]);
   });
 });

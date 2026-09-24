@@ -119,6 +119,20 @@
       "expanded_stories": [
         "US17.3"
       ]
+    },
+    {
+      "id": "backfill-2026-09-24",
+      "source": "US17.4 governed bulk synchronization and historical backfill",
+      "date": "2026-09-24",
+      "baseline_epics": 20,
+      "baseline_stories": 73,
+      "current_epics": 20,
+      "current_stories": 73,
+      "added_epics": [],
+      "added_stories": [],
+      "expanded_stories": [
+        "US17.4"
+      ]
     }
   ],
   "spec_phases": [
@@ -665,11 +679,12 @@
     },
     "US17.4": {
       "name": "Bulk synchronization and historical backfill",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "master-2026-09-21",
-      "note": "New from the master backlog. The fixture importer is not a resumable, throttled cross-platform migration job with progress and CSV audit."
+      "expandedIn": "backfill-2026-09-24",
+      "note": "A backfill job is a validated time range split into persisted, half-open chunks that partition it exactly, read page by page from Jira or ServiceNow through the connector's own scope and any operator query checked like a scheduled one. Each page commits atomically with its chunk progress, per-record audit rows and durable ingestion-queue entries, so a crash, pause or takeover resumes from the saved page and nothing is read twice or lost. Adaptive control halves concurrency and adds delay (honouring Retry-After) on throttling or transient failure, grows it again on sustained success up to the job maximum, and paces every request through one shared per-minute ceiling; one job runs per connector at a time. A failing chunk fails alone and can be retried. Processed, queued and failed counts are read from the real queue, and a CSV audit report (one row per record, linked twin, queue status, failed chunks, formula-safe, with the export itself audited) is available through the API and a studio dialog. A general stale-version guard now stops an older record from overwriting a newer twin. Verified by <code>test/us17.4.spec.ts</code> (35 tests) and a browser test against deterministic Jira and ServiceNow fakes, with throttle feedback, the pacer and the cancel guard each confirmed to fail when deliberately broken. Not yet run against a live Jira or ServiceNow tenant, so real provider throttling behaviour is unobserved."
     },
     "US18.1": {
       "name": "Invitation-based independent node pairing",
