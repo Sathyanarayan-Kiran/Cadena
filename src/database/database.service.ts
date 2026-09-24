@@ -698,6 +698,32 @@ export class DatabaseService {
         UNIQUE (org_id, provider, name)
       );
 
+      -- US16.1: one durable quota/backoff state is shared by every connector for an org + target.
+      CREATE TABLE IF NOT EXISTS integration_rate_governance (
+        org_id UUID NOT NULL,
+        target_key TEXT NOT NULL,
+        target_origin TEXT NOT NULL,
+        requests_per_minute INT NOT NULL,
+        headroom_percentage INT NOT NULL,
+        max_concurrent INT NOT NULL,
+        window_started_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        used_requests INT NOT NULL DEFAULT 0,
+        retry_not_before TIMESTAMP WITH TIME ZONE,
+        consecutive_failures INT NOT NULL DEFAULT 0,
+        last_delay_ms INT NOT NULL DEFAULT 0,
+        throttle_events BIGINT NOT NULL DEFAULT 0,
+        semaphore_pressure_events BIGINT NOT NULL DEFAULT 0,
+        retry_events BIGINT NOT NULL DEFAULT 0,
+        total_requests BIGINT NOT NULL DEFAULT 0,
+        succeeded_requests BIGINT NOT NULL DEFAULT 0,
+        failed_requests BIGINT NOT NULL DEFAULT 0,
+        shaped_wait_ms BIGINT NOT NULL DEFAULT 0,
+        last_status INT,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (org_id, target_key)
+      );
+
       CREATE TABLE IF NOT EXISTS integration_connector_cursors (
         id UUID PRIMARY KEY,
         connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,

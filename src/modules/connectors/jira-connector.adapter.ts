@@ -21,6 +21,7 @@ import {
   WatermarkCursor,
 } from './connector.types';
 import { optionNumber, optionString, stringList } from './connector-config';
+import { ConnectorRateGovernor, getConnectorRateGovernor } from './rate-governor';
 
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,31}$/;
 const STANDARD_FIELDS = ['summary', 'status', 'created', 'updated', 'priority', 'assignee', 'issuetype', 'project', 'description', 'resolution'];
@@ -59,7 +60,10 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
     capabilities: [...this.capabilities],
   };
 
-  constructor(private readonly http: ConnectorFetch = createLiveConnectorFetch()) {}
+  constructor(
+    private readonly http: ConnectorFetch = createLiveConnectorFetch(),
+    private readonly rateGovernor: ConnectorRateGovernor = getConnectorRateGovernor(),
+  ) {}
 
   public validateConfig(config: Record<string, unknown>): void {
     const baseUrl = optionString(config, 'baseUrl');
@@ -372,23 +376,21 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
   }
 
   private get(ctx: ConnectorContext, path: string): Promise<any> {
-    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) });
+    return this.rateGovernor.execute(ctx, () => requestJson(
+      this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) },
+    ));
   }
 
   private post(ctx: ConnectorContext, path: string, body: unknown): Promise<any> {
-    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
-      method: 'POST',
-      headers: this.headers(ctx),
-      body: JSON.stringify(body),
-    });
+    return this.rateGovernor.execute(ctx, () => requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
+      method: 'POST', headers: this.headers(ctx), body: JSON.stringify(body),
+    }));
   }
 
   private put(ctx: ConnectorContext, path: string, body: unknown): Promise<any> {
-    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
-      method: 'PUT',
-      headers: this.headers(ctx),
-      body: JSON.stringify(body),
-    });
+    return this.rateGovernor.execute(ctx, () => requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
+      method: 'PUT', headers: this.headers(ctx), body: JSON.stringify(body),
+    }));
   }
 }
 

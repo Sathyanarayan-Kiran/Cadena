@@ -93,14 +93,14 @@ export async function requestJson<T = any>(
 
   const text = await response.text();
   if (!response.ok) {
-    const retryAfter = Number(response.headers.get('retry-after'));
+    const retryAfter = parseRetryAfterSeconds(response.headers.get('retry-after'));
     const retryable = response.status === 429 || response.status >= 500;
     const detail = summarizeErrorBody(text);
     throw new ConnectorRemoteError(
       `Provider responded ${response.status}${detail ? `: ${detail}` : ''}`,
       response.status,
       retryable,
-      Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : undefined,
+      retryAfter,
     );
   }
   if (!text.trim()) return null as T;
@@ -109,6 +109,16 @@ export async function requestJson<T = any>(
   } catch {
     throw new ConnectorRemoteError('Provider returned a non-JSON response', response.status, false);
   }
+}
+
+/** Supports both legal Retry-After forms: delta-seconds and an HTTP date. */
+export function parseRetryAfterSeconds(value: string | null, now: () => number = Date.now): number | undefined {
+  if (!value?.trim()) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.max(0.001, seconds);
+  const instant = Date.parse(value);
+  if (!Number.isFinite(instant)) return undefined;
+  return Math.max(0.001, (instant - now()) / 1000);
 }
 
 function summarizeErrorBody(text: string): string {

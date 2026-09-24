@@ -57,6 +57,8 @@ export interface ConnectorConfigDto {
   writeBack?: ConnectorWriteBackPolicy;
   /** Public comments only. Private work notes/restricted comments are discarded inside the adapter. */
   commentSync?: ConnectorCommentSyncPolicy;
+  /** Shared per-target request shaping and adaptive retry policy (US16.1). */
+  rateGovernance?: ConnectorRateGovernancePolicy;
   /** How twins become governed WorkItems: owning team, type map and owner map. */
   projection?: Record<string, unknown>;
 }
@@ -139,6 +141,50 @@ export interface ExternalRecordPayload {
   fieldAuthority?: Record<string, string>; // fieldName -> provider system name
   updatedAt: string;
   updatedBy?: string;
+}
+
+export interface ConnectorRateGovernancePolicy {
+  requestsPerMinute: number;
+  /** Percentage of the advertised quota Cadena may consume; the remainder is reserved headroom. */
+  headroomPercentage: number;
+  maxConcurrent: number;
+  baseBackoffMs: number;
+  maxBackoffMs: number;
+  /** Symmetric jitter around the exponential delay, from 0 to 1. */
+  jitterRatio: number;
+}
+
+export interface ConnectorRateGovernanceMetrics {
+  targetKey: string;
+  targetOrigin: string;
+  connectors: Array<{ id: string; name: string; provider: ConnectorProviderType }>;
+  quota: {
+    requestsPerMinute: number;
+    headroomPercentage: number;
+    effectiveLimit: number;
+    used: number;
+    remaining: number;
+    windowStartedAt: string | null;
+    resetsAt: string | null;
+  };
+  concurrency: { limit: number; inFlight: number; queued: number };
+  backoff: {
+    blockedUntil: string | null;
+    consecutiveFailures: number;
+    lastDelayMs: number;
+    throttleEvents: number;
+    semaphorePressureEvents: number;
+    retryEvents: number;
+  };
+  requests: { total: number; succeeded: number; failed: number; shapedWaitMs: number };
+  backlog: {
+    queued: number;
+    failed: number;
+    ingestion: number;
+    workOrders: number;
+    comments: number;
+    backfillChunks: number;
+  };
 }
 
 /** A provider comment that the adapter has already classified as customer-visible. */

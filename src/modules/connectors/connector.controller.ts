@@ -50,6 +50,11 @@ export class ConnectorController {
     return this.service.listConnectors(requireOrg(orgHeader));
   }
 
+  @Get('rate-governance')
+  public async rateGovernanceMetrics(@Headers('x-org-id') orgHeader?: string) {
+    return this.service.getRateGovernanceMetrics(requireOrg(orgHeader));
+  }
+
   @Get('twins')
   public async listAllTwins(@Headers('x-org-id') orgHeader?: string) {
     return this.service.listTwins(requireOrg(orgHeader));
@@ -120,6 +125,16 @@ export class ConnectorController {
     @Headers('x-actor-id') actorHeader?: string,
   ) {
     return this.service.configureCommentSync(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
+  }
+
+  @Post(':id/rate-governance')
+  public async configureRateGovernance(
+    @Param('id') id: string,
+    @Body() body: Record<string, unknown>,
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.service.configureRateGovernance(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
   }
 
   @Post(':id/sync')

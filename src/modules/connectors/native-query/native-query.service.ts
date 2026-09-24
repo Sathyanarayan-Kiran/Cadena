@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'crypto';
 import { DatabaseService } from '../../../database/database.service';
 import { EventOutboxService } from '../../events/event-outbox.service';
 import { ConnectorService } from '../connector.service';
+import { ConnectorRemoteError } from '../connector-http';
 import { ConnectorProviderType, ConnectorRecord } from '../connector.types';
 import { validateNativeQuery } from './native-query-validator';
 import {
@@ -296,7 +297,12 @@ export class NativeQueryService {
         cursorValue: priorWatermark,
       });
     } catch (error) {
-      return this.fail(definition, this.message(error), base);
+      return this.fail(
+        definition,
+        this.message(error),
+        base,
+        error instanceof ConnectorRemoteError ? error.retryAfterSeconds : undefined,
+      );
     }
 
     let event: Awaited<ReturnType<EventOutboxService['enqueue']>> | null = null;
@@ -354,9 +360,11 @@ export class NativeQueryService {
     definition: ClaimedQuery,
     message: string,
     base: Omit<NativeQueryRunResult, 'status'>,
+    retryAfterSeconds?: number,
   ): Promise<NativeQueryRunResult> {
     const failures = definition.consecutive_failures + 1;
-    const backoff = Math.min(definition.interval_seconds * 2 ** (failures - 1), Math.max(definition.interval_seconds, MAX_BACKOFF_SECONDS));
+    const exponential = Math.min(definition.interval_seconds * 2 ** (failures - 1), Math.max(definition.interval_seconds, MAX_BACKOFF_SECONDS));
+    const backoff = Math.max(exponential, Math.ceil(retryAfterSeconds || 0));
     let event: Awaited<ReturnType<EventOutboxService['enqueue']>> | null = null;
     await this.dbService.db.transaction(async (tx) => {
       const updated = await tx.query<any>(

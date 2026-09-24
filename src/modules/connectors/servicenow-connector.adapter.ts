@@ -22,6 +22,7 @@ import {
   WatermarkCursor,
 } from './connector.types';
 import { optionNumber, optionString, stringList } from './connector-config';
+import { ConnectorRateGovernor, getConnectorRateGovernor } from './rate-governor';
 
 const TABLE_NAME = /^[a-z][a-z0-9_]{0,79}$/;
 /** Core ITSM tables extend `task`, whose dictionary rows hold the shared columns such as `state`. */
@@ -59,7 +60,10 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     capabilities: [...this.capabilities],
   };
 
-  constructor(private readonly http: ConnectorFetch = createLiveConnectorFetch()) {}
+  constructor(
+    private readonly http: ConnectorFetch = createLiveConnectorFetch(),
+    private readonly rateGovernor: ConnectorRateGovernor = getConnectorRateGovernor(),
+  ) {}
 
   public validateConfig(config: Record<string, unknown>): void {
     const baseUrl = optionString(config, 'baseUrl');
@@ -278,8 +282,7 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
       }
       body.state = codes[index];
     }
-    const updated = await requestJson(
-      this.http,
+    const updated = await this.requestJson(ctx,
       `${trimBaseUrl(ctx.baseUrl)}/api/now/table/${update.entityType}/${encodeURIComponent(update.externalId)}`,
       { method: 'PATCH', headers: this.headers(ctx), body: JSON.stringify(body) },
     );
@@ -326,8 +329,7 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     if (!this.entityTypes(ctx.connector.config).includes(target.entityType)) {
       throw new ConnectorConfigurationError(`Table '${target.entityType}' is not configured on this connector`);
     }
-    const updated = await requestJson(
-      this.http,
+    const updated = await this.requestJson(ctx,
       `${trimBaseUrl(ctx.baseUrl)}/api/now/table/${target.entityType}/${encodeURIComponent(target.externalId)}`,
       { method: 'PATCH', headers: this.headers(ctx), body: JSON.stringify({ comments: body }) },
     );
@@ -388,7 +390,15 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
   }
 
   private get(ctx: ConnectorContext, path: string): Promise<any> {
-    return requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) });
+    return this.requestJson(ctx, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) });
+  }
+
+  private requestJson(
+    ctx: ConnectorContext,
+    url: string,
+    init: { method: 'GET' | 'POST' | 'PUT' | 'PATCH'; headers: Record<string, string>; body?: string },
+  ): Promise<any> {
+    return this.rateGovernor.execute(ctx, () => requestJson(this.http, url, init));
   }
 }
 

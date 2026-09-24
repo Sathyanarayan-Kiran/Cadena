@@ -45,6 +45,7 @@ import {
   ConnectorLimitation,
   ConnectorProviderDescriptor,
   ConnectorProviderType,
+  ConnectorRateGovernanceMetrics,
   ConnectorRecord,
   ConnectorStatus,
   ConnectorWorkOrder,
@@ -70,6 +71,7 @@ import { getProviderSandbox } from './sandbox/provider-sandbox';
 import { FieldMappingService } from './mapping/field-mapping.service';
 import { TwinProjectionConfig, TwinProjectionService } from './twin-projection.service';
 import { loadRuntimeConfig } from '../../config/runtime-config';
+import { getConnectorRateGovernor, validateRateGovernance } from './rate-governor';
 
 const MAX_WORK_ORDER_ATTEMPTS = 5;
 const WORK_ORDER_BASE_BACKOFF_MS = 30_000;
@@ -119,6 +121,7 @@ export class ConnectorService implements OnApplicationBootstrap {
   private syncGuardService = new SyncGuardService();
   private secrets = new SecretManagerResolver();
   private projection = new TwinProjectionService();
+  private rateGovernor = getConnectorRateGovernor();
   private adapters = new Map<ConnectorProviderType, ConnectorAdapter>();
   private readonly workerId = randomUUID();
 
@@ -138,6 +141,16 @@ export class ConnectorService implements OnApplicationBootstrap {
 
   public async onApplicationBootstrap(): Promise<void> {
     await this.dbService.initialize();
+    const configured = await this.dbService.db.query<any>(`SELECT * FROM integration_connectors`);
+    for (const row of configured.rows) {
+      // Legacy/validate-only connector rows may not have a runnable HTTP target; they do not
+      // participate in native-provider rate governance and must not block application startup.
+      try {
+        await this.rateGovernor.registerPolicy(this.mapConnector(row));
+      } catch (error) {
+        if (!(error instanceof ConnectorConfigurationError)) throw error;
+      }
+    }
     await this.dbService.db.query(
       `UPDATE integration_connector_work_orders
        SET status = 'failed', claimed_by = NULL, claim_expires_at = NULL,
@@ -196,6 +209,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       requiredFields: this.validateRequiredFields(dto.requiredFields),
       writeBack: this.validateWriteBack(dto.writeBack),
       commentSync: this.validateCommentSync(dto.commentSync),
+      rateGovernance: validateRateGovernance(dto.rateGovernance),
       projection: TwinProjectionService.validateConfig(dto.projection),
     }));
     this.guard(() => adapter.validateConfig(config));
@@ -223,6 +237,7 @@ export class ConnectorService implements OnApplicationBootstrap {
         name,
       });
     });
+    await this.rateGovernor.registerPolicy(connector);
     return connector;
   }
 
@@ -341,7 +356,9 @@ export class ConnectorService implements OnApplicationBootstrap {
         warnings: report.limitations,
       });
     });
-    return this.getConnector(orgId, connectorId);
+    const updated = await this.getConnector(orgId, connectorId);
+    await this.rateGovernor.registerPolicy(updated);
+    return updated;
   }
 
   public async pause(orgId: string, connectorId: string, actorId = 'system'): Promise<ConnectorRecord> {
@@ -406,6 +423,33 @@ export class ConnectorService implements OnApplicationBootstrap {
       });
     });
     return this.getConnector(orgId, connectorId);
+  }
+
+  /** Changes the shared request budget applied before any call to this connector's target. */
+  public async configureRateGovernance(
+    orgId: string,
+    connectorId: string,
+    input: unknown,
+    actorId = 'system',
+  ): Promise<ConnectorRecord> {
+    const connector = await this.getConnector(orgId, connectorId);
+    const policy = this.guard(() => validateRateGovernance(input));
+    await this.withEvent(async (tx) => {
+      await tx.query(
+        `UPDATE integration_connectors SET config = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND org_id = $3`,
+        [JSON.stringify({ ...connector.config, rateGovernance: policy }), connectorId, orgId],
+      );
+      return this.event(orgId, connectorId, actorId, 'ConnectorRateGovernanceConfigured', {
+        connector_id: connectorId,
+        provider: connector.provider,
+        target_origin: this.rateGovernor.describe(connector).targetOrigin,
+        before: connector.config.rateGovernance || validateRateGovernance(undefined),
+        after: policy,
+      });
+    });
+    const updated = await this.getConnector(orgId, connectorId);
+    await this.rateGovernor.registerPolicy(updated);
+    return updated;
   }
 
   /**
@@ -1440,6 +1484,10 @@ export class ConnectorService implements OnApplicationBootstrap {
 
   private async processDueWorkOrders(orgId: string, connector: ConnectorRecord, counters: PollCounters): Promise<void> {
     let processed = 0;
+    // One drain may process many distinct queue heads, but it never attempts the same order twice.
+    // A short adaptive delay must survive until a later scheduler/sync turn, not expire while this
+    // turn is still handling other targets and then replay inside the same call.
+    const cycleStartedAt = new Date().toISOString();
     while (processed < 500) {
       const due = await this.dbService.db.query<any>(
         `SELECT w.id FROM integration_connector_work_orders w
@@ -1448,6 +1496,7 @@ export class ConnectorService implements OnApplicationBootstrap {
               OR (w.status = 'processing'
                 AND (w.claim_expires_at IS NULL OR w.claim_expires_at <= CURRENT_TIMESTAMP)))
            AND (w.next_attempt_at IS NULL OR w.next_attempt_at <= CURRENT_TIMESTAMP)
+           AND w.updated_at <= $3
            AND NOT EXISTS (
              SELECT 1 FROM integration_connector_work_orders older
              WHERE older.org_id = w.org_id AND older.target_twin_id = w.target_twin_id
@@ -1455,7 +1504,7 @@ export class ConnectorService implements OnApplicationBootstrap {
                AND older.status IN ('pending', 'processing', 'failed', 'dead', 'held')
            )
          ORDER BY w.queue_position ASC LIMIT 50`,
-        [orgId, connector.id],
+        [orgId, connector.id, cycleStartedAt],
       );
       if (!due.rows.length) return;
       const outcomes = await Promise.all(due.rows.map((row) => this.executeWorkOrder(orgId, row.id)));
@@ -1998,6 +2047,86 @@ export class ConnectorService implements OnApplicationBootstrap {
   }
 
   // ─── Operational visibility ────────────────────────────────────────────────
+
+  /** Tenant-scoped quota, retry and durable queue telemetry grouped by provider target. */
+  public async getRateGovernanceMetrics(orgId: string): Promise<ConnectorRateGovernanceMetrics[]> {
+    const connectors = await this.listConnectors(orgId);
+    const stored = await this.rateGovernor.listStoredMetrics(orgId);
+    const byTarget = new Map(stored.map((metric) => [metric.targetKey, metric]));
+    const groups = new Map<string, ConnectorRecord[]>();
+    for (const connector of connectors) {
+      let descriptor;
+      try {
+        descriptor = this.rateGovernor.describe(connector);
+      } catch (error) {
+        if (error instanceof ConnectorConfigurationError) continue;
+        throw error;
+      }
+      const group = groups.get(descriptor.targetKey) || [];
+      group.push(connector);
+      groups.set(descriptor.targetKey, group);
+      if (!byTarget.has(descriptor.targetKey)) {
+        byTarget.set(descriptor.targetKey, this.rateGovernor.emptyMetric(orgId, connector));
+      }
+    }
+
+    const backlog = await this.dbService.db.query<any>(
+      `SELECT connector_id,
+              SUM(queued)::int AS queued, SUM(failed)::int AS failed,
+              SUM(ingestion)::int AS ingestion, SUM(work_orders)::int AS work_orders,
+              SUM(comments)::int AS comments, SUM(backfill_chunks)::int AS backfill_chunks
+       FROM (
+         SELECT connector_id,
+                CASE WHEN status IN ('pending', 'retry', 'processing') THEN 1 ELSE 0 END AS queued,
+                CASE WHEN status = 'dead' THEN 1 ELSE 0 END AS failed,
+                1 AS ingestion, 0 AS work_orders, 0 AS comments, 0 AS backfill_chunks
+         FROM integration_connector_ingestion_queue WHERE org_id = $1 AND status <> 'completed'
+         UNION ALL
+         SELECT target_connector_id,
+                CASE WHEN status IN ('pending', 'processing', 'failed') THEN 1 ELSE 0 END,
+                CASE WHEN status IN ('dead', 'held') THEN 1 ELSE 0 END,
+                0, 1, 0, 0
+         FROM integration_connector_work_orders WHERE org_id = $1 AND status NOT IN ('executed', 'noop')
+         UNION ALL
+         SELECT target_connector_id,
+                CASE WHEN status IN ('pending', 'processing', 'failed') THEN 1 ELSE 0 END,
+                CASE WHEN status = 'dead' THEN 1 ELSE 0 END,
+                0, 0, 1, 0
+         FROM integration_comment_deliveries WHERE org_id = $1 AND status <> 'executed'
+         UNION ALL
+         SELECT j.connector_id,
+                CASE WHEN c.status IN ('pending', 'running') THEN 1 ELSE 0 END,
+                CASE WHEN c.status = 'failed' THEN 1 ELSE 0 END,
+                0, 0, 0, 1
+         FROM integration_backfill_chunks c
+         JOIN integration_backfill_jobs j ON j.id = c.job_id
+         WHERE j.org_id = $1 AND c.status <> 'done'
+       ) q GROUP BY connector_id`,
+      [orgId],
+    );
+    const byConnector = new Map(backlog.rows.map((row) => [row.connector_id, row]));
+    const metrics: ConnectorRateGovernanceMetrics[] = [];
+    for (const [targetKey, targetConnectors] of groups) {
+      const base = byTarget.get(targetKey)!;
+      const totals = { queued: 0, failed: 0, ingestion: 0, workOrders: 0, comments: 0, backfillChunks: 0 };
+      for (const connector of targetConnectors) {
+        const row = byConnector.get(connector.id) as any;
+        if (!row) continue;
+        totals.queued += Number(row.queued || 0);
+        totals.failed += Number(row.failed || 0);
+        totals.ingestion += Number(row.ingestion || 0);
+        totals.workOrders += Number(row.work_orders || 0);
+        totals.comments += Number(row.comments || 0);
+        totals.backfillChunks += Number(row.backfill_chunks || 0);
+      }
+      metrics.push({
+        ...base,
+        connectors: targetConnectors.map(({ id, name, provider }) => ({ id, name, provider })),
+        backlog: totals,
+      });
+    }
+    return metrics.sort((left, right) => left.targetOrigin.localeCompare(right.targetOrigin));
+  }
 
   public async getHealth(orgId: string, connectorId: string): Promise<ConnectorHealth> {
     const connector = await this.getConnector(orgId, connectorId);
