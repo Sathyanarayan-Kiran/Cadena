@@ -39,6 +39,7 @@ export interface ItemRow {
   type: string;
   team_id: string;
   status: string;
+  priority?: string;
   created_at: Date | string;
 }
 
@@ -90,6 +91,7 @@ interface WaitRow {
   work_item_id: string;
   item_key: string | null;
   item_type: string;
+  priority: string | null;
   team_id: string;
   team_name: string | null;
   state: string;
@@ -107,6 +109,7 @@ interface WaitRow {
 }
 
 export interface WaitFilter {
+  itemId?: string;
   teamId?: string;
   itemType?: string;
   reason?: string;
@@ -133,7 +136,7 @@ export class FlowService {
   public async profile(orgId: string, workItemId: string, range: { from?: string; to?: string } = {}, now = new Date()) {
     await this.dbService.initialize();
     const item = (await this.dbService.db.query<ItemRow>(
-      `SELECT id, item_key, type, team_id, status, created_at FROM work_items WHERE id = $1 AND org_id = $2`,
+      `SELECT id, item_key, type, team_id, status, priority, created_at FROM work_items WHERE id = $1 AND org_id = $2`,
       [workItemId, orgId],
     )).rows[0];
     if (!item) throw new FlowNotFoundError(`Work item '${workItemId}' not found`);
@@ -327,7 +330,7 @@ export class FlowService {
     };
   }
 
-  private async collectWaits(orgId: string, range: { from?: string; to?: string }, filter: WaitFilter, now: Date) {
+  public async collectWaits(orgId: string, range: { from?: string; to?: string }, filter: WaitFilter, now: Date) {
     await this.dbService.initialize();
     const { from, to } = this.parseRange(range, true, now);
     const { items, truncated } = await this.loadItems(orgId, to!, filter);
@@ -345,6 +348,7 @@ export class FlowService {
           work_item_id: item.id,
           item_key: item.item_key,
           item_type: item.type,
+          priority: item.priority ?? null,
           team_id: item.team_id,
           team_name: teamNames.get(item.team_id) ?? null,
           state: interval.state,
@@ -430,13 +434,14 @@ export class FlowService {
     return { resolver, calendars, terminal, blockers, events };
   }
 
-  private async loadItems(orgId: string, to: Date, filter: { teamId?: string; itemType?: string }) {
+  private async loadItems(orgId: string, to: Date, filter: { teamId?: string; itemType?: string; itemId?: string }) {
     const params: unknown[] = [orgId, to.toISOString()];
     let where = 'org_id = $1 AND created_at < $2';
     if (filter.teamId) { params.push(filter.teamId); where += ` AND team_id = $${params.length}`; }
     if (filter.itemType) { params.push(filter.itemType); where += ` AND type = $${params.length}`; }
+    if (filter.itemId) { params.push(filter.itemId); where += ` AND id = $${params.length}`; }
     const result = await this.dbService.db.query<ItemRow>(
-      `SELECT id, item_key, type, team_id, status, created_at FROM work_items
+      `SELECT id, item_key, type, team_id, status, priority, created_at FROM work_items
        WHERE ${where} ORDER BY created_at, id LIMIT ${MAX_REPORT_ITEMS + 1}`,
       params,
     );

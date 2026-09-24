@@ -141,8 +141,8 @@ export class FlowRiskService {
     };
   }
 
-  /** Risk for every item that is currently waiting or blocked. */
-  public async assessOrg(orgId: string, now = new Date()) {
+  /** Comparable completed visits per team, item type and state, plus each state's SLA target (shared with US21.4). */
+  public async waitHistory(orgId: string, now = new Date()) {
     await this.dbService.initialize();
     const settings = await this.getSettings(orgId);
     const scored = await this.flow.scoreOrg(orgId, now);
@@ -161,6 +161,12 @@ export class FlowRiskService {
         history.set(key, entry);
       }
     }
+    return { settings, scored, history, targets };
+  }
+
+  /** Risk for every item that is currently waiting or blocked. */
+  public async assessOrg(orgId: string, now = new Date()) {
+    const { settings, scored, history, targets } = await this.waitHistory(orgId, now);
 
     const risks: WaitRisk[] = [];
     for (const { item, intervals } of scored.items) {

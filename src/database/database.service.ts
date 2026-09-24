@@ -658,6 +658,29 @@ export class DatabaseService {
       );
       CREATE INDEX IF NOT EXISTS flow_wait_risk_org_idx ON flow_wait_risk (org_id, active);
 
+      -- US21.4: append-only assumption sets; the highest version per org is current. Every cost records the version used.
+      CREATE TABLE IF NOT EXISTS cost_assumption_sets (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL REFERENCES orgs(id),
+        version INT NOT NULL,
+        currency TEXT NOT NULL,
+        note TEXT,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (org_id, version)
+      );
+      CREATE TABLE IF NOT EXISTS cost_assumptions (
+        id UUID PRIMARY KEY,
+        set_id UUID NOT NULL REFERENCES cost_assumption_sets(id),
+        team_id UUID,
+        item_type TEXT,
+        priority TEXT,
+        service_id UUID,
+        rate_per_day NUMERIC NOT NULL,
+        fixed_value_at_risk NUMERIC,
+        label TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS integration_connectors (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,
