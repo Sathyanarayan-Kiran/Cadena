@@ -19,7 +19,14 @@ import { CorrelationService } from '../integrations/correlation.service';
 import { StateMappingService } from '../integrations/state-mapping.service';
 import { SyncGuardService } from '../integrations/sync-guard.service';
 import { SyncIdentity } from '../integrations/sync-guard.types';
-import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage } from './connector.interface';
+import {
+  BackfillPage,
+  BackfillWindow,
+  ConnectorAdapter,
+  ConnectorContext,
+  ConnectorFetchPage,
+  EnqueuedRecordOutcome,
+} from './connector.interface';
 import {
   ConnectorConfigurationError,
   ConnectorCredentialError,
@@ -607,9 +614,48 @@ export class ConnectorService implements OnApplicationBootstrap {
     connector: ConnectorRecord,
     entityType: string,
     records: ExternalRecordPayload[],
-    advance: (tx: DatabaseQueryable, inserted: number) => Promise<void>,
+    advance: (tx: DatabaseQueryable, inserted: number, outcomes: EnqueuedRecordOutcome[]) => Promise<void>,
   ): Promise<{ inserted: number; duplicateDeliveries: number }> {
-    return this.acceptRecords(orgId, connector, entityType, records, advance);
+    const { inserted, duplicateDeliveries } = await this.acceptRecords(orgId, connector, entityType, records, advance);
+    return { inserted, duplicateDeliveries };
+  }
+
+  /**
+   * Durably enqueues one backfill page (US17.4). Each queued row is tagged with its job, so the
+   * job's processed/queued/failed counts are read from the real queue rather than tracked twice.
+   * `advance` runs in the same transaction, receiving one outcome per record, so chunk progress,
+   * the audit rows and the queue entries commit or roll back together.
+   */
+  public async enqueueBackfillRecords(
+    orgId: string,
+    connector: ConnectorRecord,
+    entityType: string,
+    records: ExternalRecordPayload[],
+    backfillJobId: string,
+    advance: (tx: DatabaseQueryable, inserted: number, outcomes: EnqueuedRecordOutcome[]) => Promise<void>,
+  ): Promise<{ inserted: number; outcomes: EnqueuedRecordOutcome[] }> {
+    const { inserted, outcomes } = await this.acceptRecords(orgId, connector, entityType, records, advance, backfillJobId);
+    return { inserted, outcomes };
+  }
+
+  /** Reads one backfill page through the provider adapter (US17.4). */
+  public async fetchBackfillPage(
+    connector: ConnectorRecord,
+    entityType: string,
+    window: BackfillWindow,
+    query: string | undefined,
+    pageToken?: string,
+  ): Promise<BackfillPage> {
+    const adapter = this.getAdapter(connector.provider);
+    if (!adapter.fetchBackfillPage) {
+      throw new ConflictException(`The ${connector.provider} adapter does not support historical backfill`);
+    }
+    return adapter.fetchBackfillPage(this.context(connector), entityType, window, query, pageToken);
+  }
+
+  /** Whether this connector's adapter can run a backfill at all. */
+  public supportsBackfill(connector: ConnectorRecord): boolean {
+    return typeof this.getAdapter(connector.provider).fetchBackfillPage === 'function';
   }
 
   private async acceptRecords(
@@ -617,13 +663,16 @@ export class ConnectorService implements OnApplicationBootstrap {
     connector: ConnectorRecord,
     entityType: string,
     records: ExternalRecordPayload[],
-    advance: (tx: DatabaseQueryable, inserted: number) => Promise<void>,
-  ): Promise<{ inserted: number; duplicateDeliveries: number }> {
+    advance: (tx: DatabaseQueryable, inserted: number, outcomes: EnqueuedRecordOutcome[]) => Promise<void>,
+    backfillJobId: string | null = null,
+  ): Promise<{ inserted: number; duplicateDeliveries: number; outcomes: EnqueuedRecordOutcome[] }> {
     let duplicateDeliveries = 0;
     let insertedCount = 0;
+    let outcomes: EnqueuedRecordOutcome[] = [];
     await this.dbService.db.transaction(async (tx) => {
       duplicateDeliveries = 0;
       insertedCount = 0;
+      outcomes = [];
       for (const record of records) {
         const dedupeKey = createHash('sha256').update(stableStringify({
           provider: connector.provider,
@@ -635,30 +684,32 @@ export class ConnectorService implements OnApplicationBootstrap {
         const inserted = await tx.query<any>(
           `INSERT INTO integration_connector_ingestion_queue
            (id, org_id, connector_id, partition_key, entity_type, external_id, dedupe_key,
-            payload, status, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            payload, status, backfill_job_id, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
            ON CONFLICT (connector_id, dedupe_key) DO NOTHING
            RETURNING id`,
           [
             randomUUID(), orgId, connector.id,
             this.twinPartitionKey(connector.provider, record.artifactType || entityType, record.externalId),
-            entityType, record.externalId, dedupeKey, JSON.stringify(record),
+            entityType, record.externalId, dedupeKey, JSON.stringify(record), backfillJobId,
           ],
         );
         if (inserted.rows.length) {
           insertedCount += 1;
+          outcomes.push({ externalId: record.externalId, updatedAt: record.updatedAt, queueEntryId: inserted.rows[0].id, outcome: 'enqueued' });
         } else {
           const existing = await tx.query<any>(
-            `SELECT status FROM integration_connector_ingestion_queue
+            `SELECT id, status FROM integration_connector_ingestion_queue
              WHERE connector_id = $1 AND dedupe_key = $2`,
             [connector.id, dedupeKey],
           );
           if (existing.rows[0]?.status === 'completed') duplicateDeliveries += 1;
+          outcomes.push({ externalId: record.externalId, updatedAt: record.updatedAt, queueEntryId: existing.rows[0]?.id ?? null, outcome: 'duplicate' });
         }
       }
-      await advance(tx, insertedCount);
+      await advance(tx, insertedCount, outcomes);
     });
-    return { inserted: insertedCount, duplicateDeliveries };
+    return { inserted: insertedCount, duplicateDeliveries, outcomes };
   }
 
   private async processDueIngestionRecords(
@@ -799,7 +850,7 @@ export class ConnectorService implements OnApplicationBootstrap {
   ): Promise<RecordOutcome> {
     if (!record.externalId) throw new Error('Provider record has no immutable id');
     const existing = await this.dbService.db.query<any>(
-      `SELECT t.id, t.connector_id, t.content_hash, t.native_status, t.payload, c.name AS connector_name
+      `SELECT t.id, t.connector_id, t.content_hash, t.native_status, t.payload, t.source_updated_at, c.name AS connector_name
        FROM integration_canonical_twins t
        JOIN integration_connectors c ON c.id = t.connector_id AND c.org_id = t.org_id
        WHERE t.org_id = $1 AND t.provider = $2 AND t.artifact_type = $3 AND t.external_id = $4`,
@@ -808,6 +859,14 @@ export class ConnectorService implements OnApplicationBootstrap {
     const prior = existing.rows[0];
     if (prior && prior.connector_id !== connector.id) {
       throw new Error(`${connector.provider}/${record.artifactType}/${record.externalId} is already managed by connector "${prior.connector_name}"`);
+    }
+
+    // A record read earlier can reach the queue after a newer one already updated the twin (a
+    // backfill page racing a live sync, or a slow retry). Applying it would roll the twin back to a
+    // state the source has already left, so an older source timestamp is dropped as stale.
+    if (prior?.source_updated_at && Date.parse(record.updatedAt) < new Date(prior.source_updated_at).getTime()) {
+      counters.twinsUnchanged++;
+      return 'unchanged';
     }
 
     const contentHash = createHash('sha256').update(stableStringify({

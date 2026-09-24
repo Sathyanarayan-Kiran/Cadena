@@ -368,6 +368,65 @@ export class DatabaseService {
         UNIQUE(org_id, name)
       );
 
+      CREATE TABLE IF NOT EXISTS integration_backfill_jobs (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        connector_id UUID NOT NULL,
+        name TEXT NOT NULL,
+        entity_type TEXT NOT NULL,
+        language TEXT CHECK (language IN ('jql', 'encoded')),
+        query TEXT,
+        from_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        to_at TIMESTAMP WITH TIME ZONE NOT NULL,
+        chunk_seconds INT NOT NULL CHECK (chunk_seconds BETWEEN 60 AND 2678400),
+        status TEXT NOT NULL CHECK (status IN ('pending', 'running', 'paused', 'completed', 'completed_with_errors', 'cancelled')),
+        max_concurrency INT NOT NULL CHECK (max_concurrency BETWEEN 1 AND 8),
+        max_requests_per_minute INT NOT NULL CHECK (max_requests_per_minute BETWEEN 1 AND 6000),
+        concurrency INT NOT NULL,
+        delay_ms INT NOT NULL DEFAULT 0,
+        throttle_events INT NOT NULL DEFAULT 0,
+        last_error TEXT,
+        lease_owner TEXT,
+        lease_expires_at TIMESTAMP WITH TIME ZONE,
+        created_by TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        started_at TIMESTAMP WITH TIME ZONE,
+        finished_at TIMESTAMP WITH TIME ZONE,
+        UNIQUE(org_id, id)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_backfill_chunks (
+        id UUID PRIMARY KEY,
+        job_id UUID NOT NULL REFERENCES integration_backfill_jobs(id) ON DELETE CASCADE,
+        org_id UUID NOT NULL,
+        seq INT NOT NULL,
+        window_start TIMESTAMP WITH TIME ZONE NOT NULL,
+        window_end TIMESTAMP WITH TIME ZONE NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'done', 'failed')),
+        attempts INT NOT NULL DEFAULT 0,
+        page_token TEXT,
+        pages INT NOT NULL DEFAULT 0,
+        fetched INT NOT NULL DEFAULT 0,
+        enqueued INT NOT NULL DEFAULT 0,
+        duplicates INT NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_attempt_at TIMESTAMP WITH TIME ZONE,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(job_id, seq)
+      );
+
+      CREATE TABLE IF NOT EXISTS integration_backfill_records (
+        id BIGSERIAL PRIMARY KEY,
+        job_id UUID NOT NULL REFERENCES integration_backfill_jobs(id) ON DELETE CASCADE,
+        org_id UUID NOT NULL,
+        chunk_seq INT NOT NULL,
+        external_id TEXT NOT NULL,
+        record_updated_at TIMESTAMP WITH TIME ZONE,
+        outcome TEXT NOT NULL CHECK (outcome IN ('enqueued', 'duplicate')),
+        queue_entry_id UUID,
+        recorded_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
       CREATE TABLE IF NOT EXISTS integration_deliveries (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,
@@ -698,6 +757,8 @@ export class DatabaseService {
     // US17.2: a field-only propagation (no state change) has no target state to record.
     await this.db.exec(`ALTER TABLE integration_connector_work_orders ALTER COLUMN target_state DROP NOT NULL;`);
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claimed_by TEXT;`);
+    // US17.4: rows queued by a backfill job carry the job id, so its counts come from the real queue.
+    await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS backfill_job_id UUID;`);
     await this.db.exec(`ALTER TABLE integration_connector_ingestion_queue ADD COLUMN IF NOT EXISTS claim_expires_at TIMESTAMP WITH TIME ZONE;`);
     await this.db.exec(`CREATE INDEX IF NOT EXISTS integration_connector_work_orders_twin ON integration_connector_work_orders (org_id, target_twin_id, status);`);
     // Twin-backed WorkItem projection: connector twins appear as work items owned by their source.
@@ -752,6 +813,12 @@ export class DatabaseService {
       CREATE INDEX IF NOT EXISTS integration_state_mappings_lookup
         ON integration_state_mapping_definitions
         (org_id, source_system, source_entity_type, target_system, target_entity_type, status, version);
+      CREATE INDEX IF NOT EXISTS integration_backfill_chunks_job
+        ON integration_backfill_chunks (job_id, status, seq);
+      CREATE INDEX IF NOT EXISTS integration_backfill_records_job
+        ON integration_backfill_records (job_id, id);
+      CREATE INDEX IF NOT EXISTS integration_ingestion_queue_backfill
+        ON integration_connector_ingestion_queue (backfill_job_id, status);
       CREATE INDEX IF NOT EXISTS integration_native_queries_due
         ON integration_native_queries (status, next_run_at);
       CREATE INDEX IF NOT EXISTS integration_field_mappings_lookup

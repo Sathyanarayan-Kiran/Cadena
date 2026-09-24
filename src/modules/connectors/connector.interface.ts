@@ -18,6 +18,26 @@ export interface ConnectorContext {
   credentials: Record<string, string>;
 }
 
+/** A half-open time range `[from, to)` a backfill chunk reads, aligned to whole minutes. */
+export interface BackfillWindow {
+  from: Date;
+  to: Date;
+}
+
+export interface BackfillPage {
+  records: ExternalRecordPayload[];
+  /** Opaque continuation for the next page of the same window; absent when the window is exhausted. */
+  nextPageToken?: string;
+}
+
+/** What happened to one record of an enqueued page: newly queued, or already queued/ingested. */
+export interface EnqueuedRecordOutcome {
+  externalId: string;
+  updatedAt: string;
+  queueEntryId: string | null;
+  outcome: 'enqueued' | 'duplicate';
+}
+
 export interface ConnectorFetchPage {
   records: ExternalRecordPayload[];
   /** Watermark to persist after these records are durably materialized. */
@@ -71,6 +91,20 @@ export interface ConnectorAdapter {
    * the adapter confines the query to the connector's configured scope.
    */
   fetchNativeQuery?(ctx: ConnectorContext, entityType: string, query: string, cursor: WatermarkCursor): Promise<ConnectorFetchPage>;
+
+  /**
+   * Reads ONE page of the records last updated inside `window` (US17.4 backfill), optionally
+   * narrowed by a validated native query. The window is half-open and applied by the adapter, along
+   * with the connector's own scope, so a job can never read outside either. `pageToken` resumes a
+   * window mid-way, which is what makes a chunk resumable at page granularity.
+   */
+  fetchBackfillPage?(
+    ctx: ConnectorContext,
+    entityType: string,
+    window: BackfillWindow,
+    query: string | undefined,
+    pageToken?: string,
+  ): Promise<BackfillPage>;
 
   /**
    * Writes a state, a set of fields, or both to one native record. Throws ConnectorRemoteError on

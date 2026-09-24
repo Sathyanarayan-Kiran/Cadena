@@ -236,8 +236,13 @@ export class FakeJiraApi extends FakeProviderApi {
     const since = sinceMatch
       ? Date.UTC(+sinceMatch[1], +sinceMatch[2] - 1, +sinceMatch[3], +sinceMatch[4], +sinceMatch[5])
       : -Infinity;
+    // Backfill windows (US17.4) are half-open: `updated < "..."` is an exclusive upper bound.
+    const untilMatch = /updated < "(\d{4})\/(\d{2})\/(\d{2}) (\d{2}):(\d{2})"/.exec(jql);
+    const until = untilMatch
+      ? Date.UTC(+untilMatch[1], +untilMatch[2] - 1, +untilMatch[3], +untilMatch[4], +untilMatch[5])
+      : Infinity;
     const matching = Array.from(this.issues.values())
-      .filter((issue) => inProjects(issue) && issue.updated >= since && satisfiesQuery(issue))
+      .filter((issue) => inProjects(issue) && issue.updated >= since && issue.updated < until && satisfiesQuery(issue))
       .sort((a, b) => a.updated - b.updated || a.key.localeCompare(b.key));
     const offset = Number(body?.nextPageToken || 0);
     const size = Number(body?.maxResults || 50);
@@ -408,10 +413,17 @@ export class FakeServiceNowApi extends FakeProviderApi {
       const since = sinceMatch
         ? Date.UTC(+sinceMatch[1], +sinceMatch[2] - 1, +sinceMatch[3], +sinceMatch[4], +sinceMatch[5], +sinceMatch[6])
         : -Infinity;
+      const untilMatch = /sys_updated_on<(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/.exec(query);
+      const until = untilMatch
+        ? Date.UTC(+untilMatch[1], +untilMatch[2] - 1, +untilMatch[3], +untilMatch[4], +untilMatch[5], +untilMatch[6])
+        : Infinity;
       const limit = Number(url.searchParams.get('sysparm_limit') || 100);
       const offset = Number(url.searchParams.get('sysparm_offset') || 0);
       const matching = Array.from(rows.values())
-        .filter((record) => Math.floor(record.sys_updated_on / 1000) * 1000 >= since && this.matchesEncodedQuery(record, query))
+        .filter((record) => {
+          const stamp = Math.floor(record.sys_updated_on / 1000) * 1000;
+          return stamp >= since && stamp < until && this.matchesEncodedQuery(record, query);
+        })
         .sort((a, b) => a.sys_updated_on - b.sys_updated_on || a.sys_id.localeCompare(b.sys_id))
         .slice(offset, offset + limit);
       const pair = (value: string, display = value) => ({ value, display_value: display });

@@ -1,4 +1,4 @@
-import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
+import { BackfillPage, BackfillWindow, ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
 import {
   ConnectorFetch,
   ConnectorConfigurationError,
@@ -149,13 +149,44 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
     return this.searchPages(ctx, jql, cursor);
   }
 
+  /**
+   * One page of a backfill window (US17.4): `updated >= from AND updated < to`, half-open so
+   * neighbouring windows never overlap, ANDed with the connector's project scope and any validated
+   * operator query. Jira's own continuation token resumes the window on the next call.
+   */
+  public async fetchBackfillPage(
+    ctx: ConnectorContext,
+    entityType: string,
+    window: BackfillWindow,
+    query: string | undefined,
+    pageToken?: string,
+  ): Promise<BackfillPage> {
+    if (entityType !== 'issue') throw new ConnectorConfigurationError(`Jira does not expose entity type '${entityType}'`);
+    const customFields = stringList((ctx.connector.config.options as any)?.customFieldIds).filter((id) => /^customfield_\d+$/.test(id));
+    const scope = query ? `(${query}) AND ${this.projectClause(ctx)}` : this.projectClause(ctx);
+    const jql = `${scope} AND ${this.updatedSince(ctx, window.from)} AND ${this.updatedClause(ctx, '<', window.to)} ORDER BY updated ASC, key ASC`;
+    const page = await this.post(ctx, '/rest/api/3/search/jql', {
+      jql,
+      maxResults: PAGE_SIZE,
+      fields: [...STANDARD_FIELDS, ...customFields],
+      ...(pageToken ? { nextPageToken: pageToken } : {}),
+    });
+    const records = (Array.isArray(page?.issues) ? page.issues : []).map((issue: any) => this.toRecord(ctx, issue, customFields));
+    const next = typeof page?.nextPageToken === 'string' && page.nextPageToken && page?.isLast !== true ? page.nextPageToken : undefined;
+    return { records, nextPageToken: next };
+  }
+
   private projectClause(ctx: ConnectorContext): string {
     const keys = stringList(ctx.connector.config.projectKeys);
     return `project in (${keys.map((key) => `"${key}"`).join(', ')})`;
   }
 
   private updatedSince(ctx: ConnectorContext, since: Date): string {
-    return `updated >= "${formatInTimeZone(since, this.timeZone(ctx.connector.config)).slice(0, 16).replace(/-/g, '/')}"`;
+    return this.updatedClause(ctx, '>=', since);
+  }
+
+  private updatedClause(ctx: ConnectorContext, operator: '>=' | '<', instant: Date): string {
+    return `updated ${operator} "${formatInTimeZone(instant, this.timeZone(ctx.connector.config)).slice(0, 16).replace(/-/g, '/')}"`;
   }
 
   private async searchPages(ctx: ConnectorContext, jql: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {

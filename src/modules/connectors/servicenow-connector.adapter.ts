@@ -1,4 +1,4 @@
-import { ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
+import { BackfillPage, BackfillWindow, ConnectorAdapter, ConnectorContext, ConnectorFetchPage, ConnectorRecordUpdate } from './connector.interface';
 import {
   ConnectorFetch,
   ConnectorConfigurationError,
@@ -164,6 +164,52 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     const since = formatInTimeZone(new Date(cursor.cursorValue), this.timeZone(ctx.connector.config));
     const bounded = query.split('^NQ').map((part) => `${part}^sys_updated_on>=${since}`).join('^NQ');
     return this.queryPages(ctx, entityType, `${bounded}^ORDERBYsys_updated_on^ORDERBYsys_id`, cursor);
+  }
+
+  /**
+   * One page of a backfill window (US17.4): `sys_updated_on>=from^sys_updated_on<to`, applied to
+   * every `^NQ` part of an optional operator query. Paging is keyset-like rather than a raw
+   * offset: the token is the last timestamp read plus how many rows at exactly that second were
+   * already consumed, and the next page restarts from that timestamp. A record edited mid-run
+   * therefore can only shift a neighbour within the same second, not across a whole page boundary.
+   */
+  public async fetchBackfillPage(
+    ctx: ConnectorContext,
+    entityType: string,
+    window: BackfillWindow,
+    query: string | undefined,
+    pageToken?: string,
+  ): Promise<BackfillPage> {
+    if (!this.entityTypes(ctx.connector.config).includes(entityType)) {
+      throw new ConnectorConfigurationError(`Table '${entityType}' is not configured on this connector`);
+    }
+    const zone = this.timeZone(ctx.connector.config);
+    let start = window.from;
+    let skip = 0;
+    if (pageToken) {
+      const [stamp, consumed] = pageToken.split('|');
+      const resumeAt = new Date(stamp);
+      if (Number.isNaN(resumeAt.getTime()) || !/^\d+$/.test(consumed || '')) {
+        throw new ConnectorConfigurationError('The backfill page token is malformed');
+      }
+      start = resumeAt;
+      skip = Number(consumed);
+    }
+    const bound = `sys_updated_on>=${formatInTimeZone(start, zone)}^sys_updated_on<${formatInTimeZone(window.to, zone)}`;
+    const scoped = query ? query.split('^NQ').map((part) => `${part}^${bound}`).join('^NQ') : bound;
+    const page = await this.get(
+      ctx,
+      `/api/now/table/${entityType}?sysparm_query=${encodeURIComponent(`${scoped}^ORDERBYsys_updated_on^ORDERBYsys_id`)}`
+        + `&sysparm_display_value=all&sysparm_fields=${SYNC_FIELDS.join(',')}&sysparm_limit=${PAGE_SIZE}&sysparm_offset=${skip}`,
+    );
+    const rows: any[] = Array.isArray(page?.result) ? page.result : [];
+    const records = rows.map((row) => this.toRecord(ctx, entityType, row));
+    if (rows.length < PAGE_SIZE) return { records };
+    const lastStamp = records[records.length - 1].updatedAt;
+    const atLast = records.filter((record) => record.updatedAt === lastStamp).length;
+    // If the whole page sits at the timestamp we resumed from, its rows add to those already skipped.
+    const carried = pageToken && atLast === records.length && new Date(pageToken.split('|')[0]).toISOString() === lastStamp ? skip : 0;
+    return { records, nextPageToken: `${lastStamp}|${atLast + carried}` };
   }
 
   private async queryPages(ctx: ConnectorContext, entityType: string, query: string, cursor?: WatermarkCursor): Promise<ConnectorFetchPage> {
