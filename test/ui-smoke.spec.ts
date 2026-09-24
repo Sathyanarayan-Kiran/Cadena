@@ -961,6 +961,7 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     options: { accountEmail: 'sync@acme.test' },
     projectKeys: ['CAD'],
     writeBack: { state: true },
+    commentSync: { enabled: true, direction: 'from_source', authorAllowList: [], authorBlockList: [] },
   });
 
   const textOf = (selector: string) => page.$eval(selector, (node) => (node as HTMLElement).innerText);
@@ -1032,6 +1033,8 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
 
     await page.click('#onboardingConnectButton');
     await page.waitForSelector('#connectorsDialog[open]', { timeout: 10000 });
+    expect(await page.$eval('#connectorCommentSync', (node) => (node as HTMLInputElement).checked)).toBe(false);
+    expect(await page.$eval('#connectorCommentDirection', (node) => (node as HTMLSelectElement).value)).toBe('bidirectional');
     await page.evaluate(() => (document.querySelector('#connectorsDialog') as HTMLDialogElement).close());
   });
 
@@ -1044,11 +1047,13 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
       credentials: { password: 'env:UI_SANDBOX_TOKEN' },
       options: { username: 'svc.cadena' },
       tableNames: ['incident'],
+      commentSync: { enabled: true, direction: 'to_source', authorAllowList: [], authorBlockList: [] },
     });
     expect((await call('/integrations/correlations', {
       source: { system: 'servicenow', entity_type: 'incident', immutable_id: 'sys10000' },
       target: { system: 'jira', entity_type: 'issue', immutable_id: '20000' },
     })).status).toBe(201);
+    expect((await call(`/integrations/connectors/${jiraId}/sync`, {})).body.commentsTransferred).toBe(1);
     const draft = await call('/integrations/state-mappings', {
       name: 'Sandbox lifecycle',
       source: { system: 'servicenow', entity_type: 'incident' },
@@ -1099,6 +1104,11 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     expect(drawer).toContain('CADENA GOVERNANCE');
     expect(drawer).toContain('CAD-101 · story');
     expect(drawer).toContain('Open traceability');
+    expect(drawer).toContain('PUBLIC COMMENTS');
+    expect(drawer).toContain('Customer-facing update: the checkout team is investigating.');
+    expect(drawer).toContain('Sandbox Support');
+    expect(drawer).toContain('Read-only');
+    expect(drawer).not.toContain('Restricted diagnostic');
     const summary = await page.$eval('#twinBody .twin-field[data-field="summary"]', (node) => (node as HTMLElement).innerText);
     expect(summary).toContain('Owned by Jira');
     expect(summary).toContain('no outbound mapping');
