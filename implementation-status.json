@@ -768,11 +768,11 @@
     },
     "US21.1": {
       "name": "Flow efficiency: active versus waiting time",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "flow-waste-2026-09-24",
-      "note": "New. Time in state is measured against SLA thresholds and hold states pause the SLA clock, but no state is classified as active, waiting or blocked, so there is no worked-versus-waiting split and no flow-efficiency figure. Builds on the state-change history, business calendars and hold-state handling already delivered (US3.1, US3.4, US9.4)."
+      "note": "Each workflow state is classified active, waiting or blocked, per team with an org-wide default that a team overrides, as append-only versions audited through FlowClassificationChanged domain events; a state with no setting is unclassified and is never treated as active. A work item's flow profile is computed on demand from its recorded WorkItemStateChanged history (connector twins at the source system's own timestamps): active, waiting, blocked and unclassified business time, and flow efficiency as active over total elapsed. Business time follows each state's SLA-policy calendar (24x7 where none exists) and time in a workflow terminal state is excluded. GET /metrics/flow-efficiency breaks a date range down by team, item type and state, and the studio's Flow efficiency dialog shows it and edits classifications. Verified against local data and the provider fakes only. Classification changes are not role-gated, matching the other configuration endpoints, and a twin's source states that no workflow declares terminal stay unclassified once the item is done."
     },
     "US21.2": {
       "name": "Wait reasons and attribution",

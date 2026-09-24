@@ -2,6 +2,35 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — US21.1 flow efficiency: active versus waiting time — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, after the user approved the plan (classification per team with an org default, business time from existing calendars, a classification dialog and report table in the studio). Nothing in an earlier section is superseded. The work is uncommitted at the time of writing.
+
+**Status:** US21.1 moves from not-started to **done**. The ledger moves to **41 done / 7 partial / 29 not started** across **21 epics / 77 stories**. Verification is against local data and the provider fakes only; no live tenant was involved.
+
+### What was built
+
+- **Classification (`flow_state_classifications`, `flow-classification.service.ts`).** Append-only versions per (org, team, state). A team row overrides the org default (`team_id` NULL). Values are `active`, `waiting`, `blocked` or an explicit `unclassified`. Re-saving an unchanged value creates no version; each change emits a `FlowClassificationChanged` domain event carrying the before and after version and the actor.
+- **Calculation (`flow-profile.ts`, pure).** State intervals are built from `WorkItemStateChanged` events (the first state is the first event's `from`); time in a workflow terminal state is dropped; an event that contradicts the prior state or predates creation is counted as a history anomaly, not repaired. Business time uses a day-walking calculation that a test holds equal to `SlaCalculatorService` on 60 random intervals. Flow efficiency is active over total elapsed; unclassified time counts as elapsed, is reported separately with its share and is never active.
+- **Service and API (`flow.service.ts`, `flow.controller.ts`).** `GET /workitems/:id/flow-profile`, `GET /metrics/flow-efficiency?from&to&team_id&item_type` (by team, item type and state, capped at 10,000 items with a `truncated` flag), and `GET`/`PUT /metrics/flow-classifications` plus `/history`. Nothing is stored: reclassifying a state restates every profile at once and no item's history is edited.
+- **Studio.** A **Flow efficiency** dialog under Insights: date range, summary figures, an alert naming unclassified states, tables by team, item type and state, and a per-scope classification editor.
+
+### Decisions and limits, stated plainly
+
+- Calendars belong to SLA policies (item type and state), not to teams, so business time uses the state's SLA-policy calendar and is 24x7 where none exists. The response says so.
+- Terminal states come from the item type's workflow definition. A connector twin whose source state no workflow declares terminal (for example Jira `Done`) keeps accruing unclassified time after it is done until that is addressed; classification cannot mark a state as closed.
+- Classification endpoints are not role-gated, like the SLA-policy endpoints. "Administrator" is a convention today, not an enforced role.
+- Not built: wait reasons, risk of waiting, cost of delay (US21.2 to US21.4), and a per-item flow panel in the work-item drawer.
+
+### Verification
+
+- `test/us21.1.spec.ts` (14 tests): calculator equivalence, interval building, unclassified handling, versioning and audit events, validation, retroactive and team-override behaviour, calendars, report breakdown and clipping, tenant isolation, open intervals and connector-twin timestamps. Two behaviours (unclassified defaulting to active; terminal time not dropped) were broken on purpose and six tests failed, then the code was restored.
+- `test/ui-smoke.spec.ts` gains a browser test that opens the dialog, sees the unclassified alert, saves a classification and sees the report and history change.
+
+### Primary files
+
+- `src/modules/flow/` (new), `src/database/database.service.ts`, `src/app.module.ts`, `public/index.html`, `test/us21.1.spec.ts`, `test/ui-smoke.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — Flow efficiency, wait analysis and cost of delay: backlog extension — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was proposed and written by **Claude (Claude Sonnet 5)** on 2026-09-24 in response to a product question. It changes the backlog and the status ledger only. **No runtime code was written or changed**, and nothing here supersedes an earlier section.

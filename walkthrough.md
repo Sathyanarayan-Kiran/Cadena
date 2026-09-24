@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), and the US20.2 connector-led management workspace. The canonical backlog is **21 epics / 77 stories**, with **40 done / 7 partial / 30 not started**.
-**Verification:** 271 automated tests across 50 test files, plus 25 browser smoke tests driving the real page in pilot and connector-led modes.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), the US20.2 connector-led management workspace, and US21.1 flow efficiency (worked versus waiting time from recorded history). The canonical backlog is **21 epics / 77 stories**, with **41 done / 7 partial / 29 not started**.
+**Verification:** 285 automated tests across 51 test files, plus 26 browser smoke tests driving the real page in pilot and connector-led modes.
 
 ---
 
@@ -16,9 +16,19 @@ A product question came up: can Cadena measure non-productive time, explain why 
 - **US21.3 Risk of waiting:** estimate from history how likely an item is to overrun its state, showing the sample size and method, and producing no score when there is too little history.
 - **US21.4 Cost of delay:** configurable, versioned cost assumptions give an estimated cost per waiting interval and a ranking by cost of delay over duration. Figures are labelled as estimates from the organisation's own assumptions, and no applicable assumption gives no cost rather than zero.
 
-The canonical backlog is now **21 epics / 77 stories**; the ledger is **40 done / 7 partial / 30 not started**. `public/status.html` was regenerated with `npm run tracker`.
+The canonical backlog is now **21 epics / 77 stories**; the ledger is **41 done / 7 partial / 29 not started**. `public/status.html` was regenerated with `npm run tracker`.
 
 ---
+
+## 2026-09-24 — US21.1 flow efficiency (Claude)
+
+How much of an item's elapsed time was spent being worked on, and how much waiting? Cadena now answers from the state history it already records.
+
+- **Try it.** Open **Flow efficiency** under Insights. It reports the last 30 days: flow efficiency, active, waiting, blocked and unclassified time, and tables by team, item type and state.
+- **Classify states.** At first every state is unclassified, and the dialog says how much time that is. Pick active, waiting or blocked for each state under **Classify workflow states**; the report restates at once. Choose a team to override the organization default for that team.
+- **Never guessed.** Time in a state nobody classified counts as elapsed but never as active, and is shown separately. Reclassifying never edits an item's history; each change is a new audited version.
+- **Per item.** `GET /workitems/:id/flow-profile` returns each interval with its classification, calendar and minutes. Connector twins use the source system's own timestamps.
+- **Know the limits.** Business time follows each state's SLA-policy calendar (24x7 without one). A synced state that no workflow treats as terminal, such as Jira `Done`, keeps counting as unclassified after the item is done. Classification changes are not role-gated. Wait reasons, risk and cost (US21.2 to US21.4) are still to do.
 
 ## 2026-09-24 — US17.4 governed bulk synchronization and historical backfill (Claude)
 
