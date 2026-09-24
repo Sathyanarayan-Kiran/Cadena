@@ -2,6 +2,38 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — US21.4 cost of delay — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, in three commits (the engine and API, the studio, and this ledger sync), after the user asked to go ahead. The design choices below were made by Claude on stated defaults, not put to the user. It builds on US21.1 to US21.3 and supersedes nothing. It completes Epic 21.
+
+**Status:** US21.4 moves from not-started to **done**. The ledger moves to **44 done / 7 partial / 26 not started** across **21 epics / 77 stories**. Verification is against local data and the provider fakes only.
+
+### What was built
+
+- **Assumptions (`cost_assumption_sets`, `cost_assumptions`, `cost-of-delay.service.ts`).** An append-only, versioned set: each rule has a cost rate per day, an optional fixed value at risk, an optional label and any of team, item type, priority and service (a rule that sets none is the org-wide default). Team and service must belong to the tenant, rates are non-negative numbers, the currency is a three-letter code, and two rules covering exactly the same scope are refused. A save that changes nothing creates no version; each real change is a new version audited as `CostAssumptionsChanged` (before and after version, counts added, removed and changed). `GET /metrics/cost-assumptions[?version=N]`, `/history` and `PUT`.
+- **Pricing (`cost-of-delay.ts`, pure).** The most specific rule whose every set dimension matches wins: more dimensions first, then service over team over item type over priority, then the higher rate, then id, so the choice is deterministic. A "day" is a day of the interval's own calendar (24 hours for 24x7, 8 business hours for 5x8), consistent with US21.1's business time. An interval no rule covers has **no cost** and is counted as unpriced time; it is never added as zero.
+- **Reports.** `GET /workitems/:id/cost-of-delay` prices each waiting or blocked interval and the total; `GET /metrics/cost-of-delay` ranks states, reasons, teams and items by estimated cost with shares, unpriced minutes reported separately and the item's value at risk shown beside its cost. Every response carries `estimate: true`, the label, and the assumption version and rules used, and `?version=N` recalculates under an older set.
+- **Open items.** `GET /metrics/cost-of-delay/open-items` orders items waiting now by cost of delay (the applicable rate per day) divided by the estimated remaining duration in days. The remaining duration is the median remaining time of comparable completed visits (same team, item type and state, from US21.3's history and minimum sample) that lasted longer than the wait so far. Items it cannot rank are listed with the reason (`insufficient_history` or `beyond_history`), and items with no applicable assumption are listed without a cost.
+- **Studio.** The Flow efficiency dialog has an assumption editor (scope selectors, rate, value at risk, label, currency), the priced report with an unpriced-time warning, and the open-waits ranking; the item drawer shows the item's estimated cost over the last 30 days.
+
+### Decisions and limits, stated plainly
+
+- **The fixed value at risk is reported, not spent.** The criterion says it is optional and does not say how it enters a calculation. It is shown beside an item's cost and never added into the cost or the ordering, so no invented figure is mixed into a computed one.
+- **"Cost of delay divided by remaining duration" uses the rate per day** as the cost of delay and an estimate of remaining duration from history, so the score has units of cost per day squared and is meaningful only for ordering. Without enough comparable history an item is listed but not ranked.
+- **Rates are flat per day.** They do not vary by wait length, and there is no currency conversion: one currency per assumption set.
+- A saved note is not part of the version comparison, so changing only the note creates no version.
+- The blocking item and the reason from US21.2 are not priced separately; cost is by the waiting item's own scope.
+- Not built: role gating of assumptions (like the SLA-policy endpoints), and per-team currency.
+
+### Verification
+
+- `test/us21.4.spec.ts` (12 tests): rule specificity and precedence, calendar-day pricing, median remaining time and the score; no cost while no assumption exists; validation; versioned and audited saves with an unchanged save creating nothing; per-interval and total cost with the assumptions and version; a wait no rule covers giving no cost; the ranked report with unpriced time kept out of the total; open-item ordering with unranked and unpriced items explained; recalculation under an older version and version 404 and 422; tenant isolation. Four behaviours (an unmatched item priced at zero, service-over-team precedence, honouring a requested version, open-item ordering) were broken on purpose and the tests failed each time before the code was restored.
+- `test/ui-smoke.spec.ts` gains a test that saves an assumption, sees the priced report and the open-waits table, and checks the drawer.
+
+### Primary files
+
+- `src/modules/flow/` (`cost-of-delay.ts`, `cost-of-delay.service.ts`, `cost-of-delay.controller.ts` new; `flow.service.ts`, `flow-risk.service.ts`, `flow.module.ts` extended), `src/database/database.service.ts`, `public/index.html`, `test/us21.4.spec.ts`, `test/ui-smoke.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — US21.3 risk of waiting too long — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, in three commits (the engine and notification routing, the studio, and this ledger sync), after the user asked to proceed. The design choices below were made by Claude on stated defaults, not put to the user. It builds on US21.1 and US21.2 and supersedes nothing.

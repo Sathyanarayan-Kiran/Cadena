@@ -792,11 +792,11 @@
     },
     "US21.4": {
       "name": "Cost of delay",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "addedIn": "flow-waste-2026-09-24",
-      "note": "New. No cost rates, value-at-risk or cost-of-delay figures exist anywhere. Depends on US21.1 and US21.2; US11.3's business criticality could supply an input. Figures would be estimates from assumptions the organisation supplies, shown alongside those assumptions, and are not accounting data."
+      "note": "An organization saves a versioned set of cost-of-delay assumptions: a cost rate per day and an optional fixed value at risk for a scope of team, item type, priority and service (a rule that sets none is the org-wide default). Each save is validated, appended as a new version and audited (CostAssumptionsChanged with the before and after version and what was added, removed and changed); an unchanged save creates no version. Waiting and blocked intervals from US21.1 and US21.2 are priced with the most specific applicable rule (more dimensions first, then service over team over item type over priority), where a day is a day of the interval's own calendar. Every response names the assumption version it used, lists the assumptions applied, is labelled an estimate rather than an accounting figure, and can be recalculated under an older version. An interval no assumption covers has no cost and is reported as unpriced time, never as zero. GET /workitems/:id/cost-of-delay prices each interval and the total; GET /metrics/cost-of-delay ranks states, reasons, teams and items by estimated cost; GET /metrics/cost-of-delay/open-items orders items waiting now by cost of delay (the rate per day) divided by the estimated remaining duration in days, taken from the median remaining time of comparable completed visits (the US21.3 history), and lists items it cannot rank with the reason. The studio's Flow efficiency dialog edits the assumptions and shows the report, and the item drawer shows the item's cost. Verified against local data and the provider fakes only. The fixed value at risk is reported beside the cost and is not added into it or into the ordering; the remaining duration is a historical estimate; and assumptions are not role-gated."
     }
   }
 }
