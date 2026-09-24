@@ -14,6 +14,7 @@ import { AuditController } from './modules/audit/audit.controller';
 import { HealthModule } from './modules/health/health.module';
 import { ConnectorModule } from './modules/connectors/connector.module';
 import { WorkspaceModule } from './modules/workspace/workspace.module';
+import { FlowModule } from './modules/flow/flow.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { WorkspaceModule } from './modules/workspace/workspace.module';
     HealthModule,
     ConnectorModule,
     WorkspaceModule,
+    FlowModule,
   ],
   controllers: [WorkItemController, WorkflowController, LineageController, AuditController],
   providers: [],

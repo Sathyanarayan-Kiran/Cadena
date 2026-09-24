@@ -609,6 +609,21 @@ export class DatabaseService {
         UNIQUE(org_id, item_type, state)
       );
 
+      -- US21.1: append-only versions; the highest version per (org, team, state) is current.
+      -- team_id NULL is the org-wide default that a team row overrides.
+      CREATE TABLE IF NOT EXISTS flow_state_classifications (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL REFERENCES orgs(id),
+        team_id UUID REFERENCES teams(id),
+        state TEXT NOT NULL,
+        classification TEXT NOT NULL CHECK (classification IN ('active', 'waiting', 'blocked', 'unclassified')),
+        version INT NOT NULL,
+        changed_by TEXT NOT NULL,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS flow_state_classifications_version_idx
+        ON flow_state_classifications (org_id, COALESCE(team_id, '00000000-0000-0000-0000-000000000000'::uuid), state, version);
+
       CREATE TABLE IF NOT EXISTS integration_connectors (
         id UUID PRIMARY KEY,
         org_id UUID NOT NULL,
