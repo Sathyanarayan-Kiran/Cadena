@@ -133,6 +133,25 @@
       "expanded_stories": [
         "US17.4"
       ]
+    },
+    {
+      "id": "flow-waste-2026-09-24",
+      "source": "flow efficiency, wait analysis and cost-of-delay proposal",
+      "date": "2026-09-24",
+      "baseline_epics": 20,
+      "baseline_stories": 73,
+      "current_epics": 21,
+      "current_stories": 77,
+      "added_epics": [
+        "E21"
+      ],
+      "added_stories": [
+        "US21.1",
+        "US21.2",
+        "US21.3",
+        "US21.4"
+      ],
+      "expanded_stories": []
     }
   ],
   "spec_phases": [
@@ -236,6 +255,11 @@
       "rollout": "Enterprise Scaling",
       "isNew": true,
       "addedIn": "master-2026-09-21"
+    },
+    "E21": {
+      "rollout": "Enterprise Scaling",
+      "isNew": true,
+      "addedIn": "flow-waste-2026-09-24"
     }
   },
   "stories": {
@@ -741,6 +765,38 @@
       "note": "Verified by <code>test/us10.9.spec.ts</code> — bearer credentials stored only as a SHA-256 hash, tenant resolved from the credential, a contradicting header refused, revocation honoured, and credential management restricted to admins. Header identity survives only behind <code>CADENA_ALLOW_HEADER_AUTH</code> for development.",
       "addedIn": "auth-2026-09-21",
       "isNew": true
+    },
+    "US21.1": {
+      "name": "Flow efficiency: active versus waiting time",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "flow-waste-2026-09-24",
+      "note": "New. Time in state is measured against SLA thresholds and hold states pause the SLA clock, but no state is classified as active, waiting or blocked, so there is no worked-versus-waiting split and no flow-efficiency figure. Builds on the state-change history, business calendars and hold-state handling already delivered (US3.1, US3.4, US9.4)."
+    },
+    "US21.2": {
+      "name": "Wait reasons and attribution",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "flow-waste-2026-09-24",
+      "note": "New. Hold states pause the SLA clock and typed links record blocking relationships (US3.4, US4.1), but no reason is captured for a wait and no report attributes waiting time to a cause. Depends on US21.1's state classification."
+    },
+    "US21.3": {
+      "name": "Risk of waiting too long",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "flow-waste-2026-09-24",
+      "note": "New. Aging scores compare an item with its SLA threshold (US3.2) and US15.3 scores the risk of a change, but nothing estimates from history how likely an item is to wait too long. Depends on US21.1; it needs enough completed items to be meaningful and must not invent a score without them."
+    },
+    "US21.4": {
+      "name": "Cost of delay",
+      "status": "idle",
+      "phase": 3,
+      "isNew": true,
+      "addedIn": "flow-waste-2026-09-24",
+      "note": "New. No cost rates, value-at-risk or cost-of-delay figures exist anywhere. Depends on US21.1 and US21.2; US11.3's business criticality could supply an input. Figures would be estimates from assumptions the organisation supplies, shown alongside those assumptions, and are not accounting data."
     }
   }
 }

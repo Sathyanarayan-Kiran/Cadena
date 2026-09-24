@@ -2,6 +2,39 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — Flow efficiency, wait analysis and cost of delay: backlog extension — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was proposed and written by **Claude (Claude Sonnet 5)** on 2026-09-24 in response to a product question. It changes the backlog and the status ledger only. **No runtime code was written or changed**, and nothing here supersedes an earlier section.
+
+**Status:** Four stories in a new **Epic 21** are added, all **not started**. The canonical scope moves from **20 epics / 73 stories** to **21 epics / 77 stories**, and the ledger from **40 done / 7 partial / 26 not started** to **40 done / 7 partial / 30 not started**.
+
+### Why
+
+The existing backlog measures how long an item has been in a state against an SLA threshold (US3.1, US3.2), pauses the SLA clock in configured hold states (US3.4), notifies on warning and breach (US3.3, US8.x) and reports cycle time, lead time and DORA/ITIL figures (US9.2, US9.4). A search of `Backlog.md` and the code for wait, waste, cost, financial, cost of delay and flow efficiency found nothing that separates worked time from waiting time, explains a wait, predicts a long one or prices it. An item can be green against its SLA and still spend most of its life idle.
+
+### What was added
+
+- **US21.1 Flow efficiency: active versus waiting time.** A versioned, audited classification of each workflow state as active, waiting or blocked; per-item flow profiles in business time; a report by team, item type and state. Time in an unclassified state is reported separately and is never assumed to be active. Connector-synchronized twins use the source system's own state-change timestamps.
+- **US21.2 Wait reasons and attribution.** A reason category for each wait, taken from the configured hold reason, a blocking link or the source system's reason field; a missing reason is `unattributed`, not guessed. A wait caused by a linked item (`blocks`, `caused_by`) is attributed to that item and its owning team. A drillable report of waiting time by reason, team and blocking item.
+- **US21.3 Risk of waiting too long.** A percentile and an estimated probability of overrunning the state's target, computed from comparable completed items, with the sample size and method shown. Below a configurable minimum sample no score is produced. A threshold crossing notifies once through the existing escalation routing and is visible on the item and the heatmap.
+- **US21.4 Cost of delay.** Versioned, audited assumptions (a cost rate per day by team, type, priority or service, and an optional value at risk); each calculation records the version it used. Costs are labelled as estimates rather than accounting figures, and no applicable assumption gives no cost rather than zero. A ranking by cost, and an ordering of open items by cost of delay over remaining duration.
+
+### Dependencies and design cautions
+
+- US21.2, US21.3 and US21.4 all depend on US21.1's state classification; US21.4 also depends on US21.2. US11.3's business criticality (not started) could feed US21.4.
+- The building blocks already exist: timestamped state-change history, business calendars, hold-state handling, typed links, per-team roll-ups and the escalation routing.
+- The acceptance criteria deliberately refuse to invent numbers: unclassified time is not active, an unknown reason is not guessed, insufficient history gives no risk score, and a missing rate gives no cost. Financial figures are estimates from assumptions the organisation supplies and are not accounting data.
+
+### Verification
+
+- `implementation-status.json` gains the Epic 21 entry, four story entries and a delta (`flow-waste-2026-09-24`) that chains from 20 epics / 73 stories to 21 / 77, which `test/tracker.spec.ts` checks.
+- `backlog.json` and `Backlog.md` carry the same four stories and criteria. `public/status.html` was regenerated with `npm run tracker`.
+- No production code, tests or dependencies changed.
+
+### Primary files updated by Claude
+
+- `Backlog.md`, `backlog.json`, `implementation-status.json`, `README.md`, `walkthrough.md`, `implementation_plan.md`; `public/status.html` regenerated with `npm run tracker`
+
 ## Claude — US17.4 governed bulk synchronization and historical backfill — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, in three commits (`9533ebc`, `a703fba` and the studio/docs commit that follows them), building on the US17.3 increment below. Nothing there is superseded.

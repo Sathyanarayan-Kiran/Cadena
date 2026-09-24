@@ -6,6 +6,8 @@ Epics below map directly to the services and phases defined in the main specific
 
 > **Connector-led product decision (2026-09-22):** Cadena's production experience is a synchronization control plane over authoritative Jira, ServiceNow and other provider records. The internal `WorkItem` remains the canonical twin used for mapping, policy, audit and analytics; it is normally created by connector ingestion rather than duplicate user entry. After the separate authentication increment brought the ledger to 72 stories, US17.1 now owns connector-led ingestion and new US20.2 owns the management-workspace transition. The canonical scope is now **20 epics / 73 stories**; the local-create pilot remains implemented but is not the target primary workflow.
 
+> **Flow-waste extension (2026-09-24):** A product question (can Cadena measure non-productive time, explain why work is waiting and price the delay?) found that time in state is measured against SLA thresholds and hold states pause the SLA clock, but nothing separates worked time from waiting time, attributes waiting to a cause, predicts long waits or estimates their financial cost. Epic 21 adds four stories for those gaps. The canonical scope is now **21 epics / 77 stories**. All four new stories are not started.
+
 ## Epic 1 — Canonical work item model & core service
 
 **US1.1** As a platform engineer, I want one WorkItem schema shared across all item types, so that every type gets create/read/update/list for free.
@@ -398,3 +400,29 @@ Epics below map directly to the services and phases defined in the main specific
 - Given production connector mode is enabled, when an operator opens the workspace, then its primary actions are connect source, discover records and start synchronization; local work-item creation is available only in an explicitly enabled pilot, administrator or standalone mode.
 - Given a work item originated outside Cadena, when it is displayed, then the source system, native record link, synchronization state, last successful sync, field authority and linked counterpart are visible.
 - Given a user attempts to edit an externally owned field, when no permitted outbound mapping exists, then the edit is blocked; when a permitted mapping exists, the change is routed through the audited connector rather than saved as an untracked local divergence.
+
+## Epic 21 — Flow efficiency, wait analysis & cost of delay
+
+**US21.1** As a delivery lead, I want each workflow state classified as active, waiting or blocked and worked time reported against waiting time, so that I can see how much of an item's elapsed time was spent waiting instead of being worked.
+
+- Given a team's workflow states, when an administrator classifies each state as `active`, `waiting` or `blocked`, then the classification is versioned and audited and applied to time-in-state calculations without editing any item's recorded history.
+- Given an item with recorded state history, when its flow profile is requested, then active, waiting and blocked durations are returned in business time and flow efficiency (active time as a share of total elapsed time) is computed from event history rather than manual entry, with time in unclassified states reported separately and never assumed to be active.
+- Given items across teams, when the flow-efficiency report is requested for a date range, then it is broken down by team, item type and state, and connector-synchronized twins use the source system's own state-change timestamps.
+
+**US21.2** As a team lead, I want every period an item spends waiting or blocked attributed to a reason, so that I can understand why we are waiting and act on the largest causes.
+
+- Given an item enters a waiting or blocked state, when the transition is recorded, then a reason category (for example customer, third party, dependency, approval, capacity or other) is captured from the configured hold reason, a blocking link or the source system's own reason field, and a missing reason is reported as `unattributed` rather than guessed.
+- Given an item is blocked by a linked item (`blocks` or `caused_by`), when its waiting time is analysed, then the wait is attributed to that linked item and its owning team.
+- Given a date range and scope, when the wait-reason report is requested, then total waiting time is grouped by reason, team and blocking item with each group's share of the total, and every figure drills down to the underlying items and state intervals.
+
+**US21.3** As a team lead, I want to be warned when an item is likely to wait longer than is normal for its state, so that I can intervene before the delay is incurred rather than after an SLA breach.
+
+- Given at least a configurable minimum number of completed comparable items (same team, type and state), when an item is waiting, then its risk is computed from the historical time-in-state distribution (the percentile its current wait has reached and the estimated probability of exceeding the state's target), and the sample size and method are shown with the result.
+- Given fewer comparable items than the minimum, when risk is requested, then no score is produced and the response states that history is insufficient.
+- Given an item's risk crosses a configured threshold, when the evaluation runs, then a notification is sent through the existing escalation routing once per crossing, and the risk is visible on the item and on the aging heatmap.
+
+**US21.4** As a delivery manager, I want an estimated financial cost of items waiting too long, so that delay can be prioritized against other work in money terms.
+
+- Given an administrator configures cost-of-delay assumptions (a cost rate per day by team, item type, priority or service, and optionally a fixed value at risk), when they are saved, then the assumptions are versioned and audited and every calculation records the version it used.
+- Given an item with recorded waiting time and applicable assumptions, when its cost is requested, then the estimated cost of delay is returned for each waiting interval and in total, shown with the assumptions and labelled as an estimate rather than an accounting figure; with no applicable assumption it returns no cost rather than zero.
+- Given a date range, when the cost report is requested, then states, reasons, teams and items are ranked by estimated cost, and open items are ordered by cost of delay divided by remaining duration so the most expensive waits surface first.
