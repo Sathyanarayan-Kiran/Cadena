@@ -760,6 +760,7 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     expect(rows.some((row) => row.startsWith('In Review Waiting'))).toBe(true);
     const alertText = await page.$$eval('#flowReport .inline-alert', (nodes) => nodes.map((node) => node.textContent ?? '').join(' '));
     expect(alertText).not.toContain('In Review');
+    await page.waitForFunction(() => (document.querySelector('#flowStates select[data-state="In Review"]') as HTMLSelectElement | null)?.dataset.current === 'waiting', { timeout: 10000 });
     expect(await page.$eval('#flowStates select[data-state="In Review"]', (node) => (node as HTMLSelectElement).dataset.current)).toBe('waiting');
     expect(await page.$eval('#flowStates', (node) => (node as HTMLElement).innerText)).toContain('Version 1');
 
@@ -848,6 +849,39 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     expect(await page.$eval('#flowRisk', (node) => node.textContent ?? '')).toContain('At risk');
     expect(await page.$eval('#riskMinSample', (node) => (node as HTMLInputElement).value)).toBe('3');
     expect(await page.$eval('#riskThreshold', (node) => (node as HTMLInputElement).value)).toBe('50');
+    await closeAnyDialog();
+  });
+
+  it('prices waiting time from saved assumptions, labels it an estimate, and shows it in the drawer', async () => {
+    await closeAnyDialog();
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openFlowFromNav')?.click());
+    await page.waitForSelector('#flowDialog[open]', { timeout: 10000 });
+    // The dialog keeps the previous open's content until its reload finishes; wait for the run to complete before editing.
+    await page.waitForFunction(() => document.querySelector<HTMLButtonElement>('#flowRunButton')?.disabled === false, { timeout: 10000 });
+    await page.waitForFunction(() => (document.querySelector('#costReport')?.textContent ?? '').includes('No cost assumptions'), { timeout: 10000 });
+    expect(await page.$eval('#costReport', (node) => node.textContent ?? '')).toContain('not an accounting figure');
+
+    // 1440 per day is one unit per minute of waiting, so any waiting time in the range produces a visible cost.
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#addCostRule')?.click());
+    await page.waitForSelector('#costRules article input[aria-label="Cost per day"]', { timeout: 10000 });
+    await page.type('#costRules article input[aria-label="Cost per day"]', '1440');
+    await page.$eval('#saveCostRules', (node) => node.scrollIntoView({ block: 'center' }));
+    await page.click('#saveCostRules');
+    await page.waitForFunction(() => (document.querySelector('#costReport')?.textContent ?? '').includes('v1'), { timeout: 10000 });
+    const report = await page.$eval('#costReport', (node) => node.textContent ?? '');
+    expect(report).toContain('not an accounting figure');
+    expect(report).toContain('By state');
+    expect(report).not.toContain('No cost assumptions');
+    expect(await page.$eval('#costOpen', (node) => node.textContent ?? '')).toContain('Open waits');
+    const history = await api('/metrics/cost-assumptions/history');
+    expect(history).toHaveLength(1);
+    await closeAnyDialog();
+
+    await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('.work-card')).find((node) => node.textContent?.includes('Story awaiting review'));
+      (card?.querySelectorAll('.card-action')[1] as HTMLButtonElement).click();
+    });
+    await page.waitForFunction(() => (document.querySelector('#detailBody')?.textContent ?? '').includes('Cost of delay (estimate)') && (document.querySelector('#detailBody')?.textContent ?? '').includes('Version 1'), { timeout: 10000 });
     await closeAnyDialog();
   });
 
