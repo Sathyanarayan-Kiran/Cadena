@@ -551,11 +551,11 @@
     },
     "US13.4": {
       "name": "Work-note privacy in comment sync",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
       "expandedIn": "master-2026-09-21",
-      "note": "Expanded by the master backlog: opt-in public/private streams now include directional rules, role filtering and original-author attribution."
+      "note": "Verified by <code>test/us13.4.spec.ts</code> and the connector-led browser smoke suite. Comment sync is independently opt-in per connector and off by default; direction controls reading from and writing to each source, and stable provider account-id allow/block lists are enforced with the block list winning. Jira restricted/JSM-internal comments and ServiceNow work notes are discarded inside their adapters before Cadena receives them. Permitted public comments are stored in a dedicated tenant-scoped ledger, transferred with visible original-author/source attribution and a stable echo marker, retried durably, and shown read-only in either counterpart twin drawer. Verification is against provider fakes only; no live tenant was contacted."
     },
     "US13.5": {
       "name": "Resolution code write-back",

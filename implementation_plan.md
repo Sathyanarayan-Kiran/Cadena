@@ -2,6 +2,40 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Codex — US13.4 work-note privacy in comment sync — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-24 after the user approved three product decisions: policy per connector, stable original-author allow/block lists, and a read-only public-comment view in the twin drawer. It builds on US13.2 correlation and uses its own marker-based comment echo guard rather than changing Claude's US13.5 increment. No live provider was contacted.
+
+**Status:** US13.4 moves from not-started to **done**. The ledger moves to **46 done / 7 partial / 24 not started** across **21 epics / 77 stories**. Verification is against deterministic Jira and ServiceNow provider fakes only.
+
+### What was built
+
+- **Explicit connector policy.** `commentSync` is off by default. Each connector independently chooses `from_source`, `to_source` or `bidirectional`, plus stable provider account-id allow and block lists (the block list wins). `POST /integrations/connectors/:id/comment-sync` validates, stores and audits policy changes. The connector studio exposes the same controls for new and existing connectors.
+- **Privacy at the adapter boundary.** Jira drops any comment with restricted visibility and JSM comments marked internal. ServiceNow reads `sys_journal_field` but returns only `comments`, never `work_notes`. Private text therefore never enters an ingestion payload, database table, delivery record, audit event or target request.
+- **Dedicated public-comment ledger.** Permitted comments are stored separately from twin payloads in `integration_public_comments`, tenant-scoped and de-duplicated by connector plus provider comment id. Existing comments are caught up if a counterpart is linked after first ingestion.
+- **Governed propagation.** A delivery is created only when the source connector permits reading and the target connector permits writing. Target-side author policy is checked again. Deliveries have durable pending/failed/dead state and bounded retry, without blocking the twin's lifecycle queue.
+- **Attribution and echo safety.** The target text visibly names the original author, stable account id and source system. A stable `[cadena-comment:<delivery-id>]` marker suppresses the returning copy. A retry searches for that marker first, so a provider write that succeeded immediately before a crash is recovered rather than duplicated.
+- **Read-only twin view.** Either member of a managed counterpart pair shows the shared public comments in the synchronized-twin drawer, including original author, source and timestamp. There is no local compose/edit path.
+
+### Decisions and limits, stated plainly
+
+- The approved "role filter" is implemented as a stable original-author account-id allow/block list, not a first-class RBAC role lookup. Display names are attribution only and never authorize transfer.
+- Comment text is plain text. Rich-text round-trip fidelity remains US14.1.
+- Comment reads are tied to provider record-change polling. Jira and ServiceNow ordinarily update the parent record when a comment/journal entry is added; live behaviour has not been observed.
+- The provider adapters read at most 1,000 comments per changed record in this pilot increment. There is no separate comment watermark or pagination yet.
+- Direction is relative to each connector: `from_source` allows reading that provider, `to_source` allows writing it. A transfer needs both sides to permit their half.
+- No live Jira or ServiceNow tenant was contacted, so real JSM property shapes, ServiceNow ACLs/data policies, provider pagination and rate limits remain unverified.
+
+### Verification
+
+- `test/us13.4.spec.ts` (5 tests): default-off makes no comment request; ServiceNow work notes never leave the adapter; Jira restricted and JSM-internal comments never leave the adapter; public comments transfer with attribution and a marker; returning markers are suppressed; source and target direction plus account-id allow/block rules are enforced; policy is audited and tenant-isolated; both counterpart drawers return the public thread read-only.
+- The privacy filter was removed on purpose and the focused test failed by fetching, storing and transferring the private work note; restoring it made the test pass.
+- The affected connector regression set (`us13.4`, `us13.5`, `us17.1`, `us20.2`) passes 30 tests. The connector-led browser subset passes 7 tests against the built production server, including default-off controls and the read-only public-comment drawer.
+
+### Primary files
+
+- `src/modules/connectors/connector.types.ts`, `connector.interface.ts`, `connector.controller.ts`, `connector.service.ts`, `jira-connector.adapter.ts`, `servicenow-connector.adapter.ts`, `sandbox/provider-sandbox.ts`, `src/database/database.service.ts`, `public/index.html`, `test/us13.4.spec.ts`, `test/ui-smoke.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — US13.5 resolution write-back on closure — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, after the user asked to start with US13.4 and US13.5. The design choices below were made by Claude on stated defaults. US13.4 (comment privacy) is a separate, larger story that is not started; it is being proposed to the user rather than built. Nothing in an earlier section is superseded.

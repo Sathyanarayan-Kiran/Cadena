@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex and Claude updates, 2026-09-23):** Phase 0, the complete Epic 3 aging/SLA engine including durable hold-state suspension, the complete Epic 4 traceability graph, the Epic 5 transactional outbox, reliable-consumption paths and HTTP 202 webhook ingestion, the Epic 8 notification and escalation service, the Phase 1 operational views, US10.4/US10.7 audit evidence, US13.2 correlation, US13.3 echo suppression, the provider-neutral US13.1 state-translation engine, US16.4/US16.5 durable per-twin queues and failure isolation, and the normalized Git/CI and monitoring integrations are implemented. The cloud staging foundation is implemented in the repository but not activated in a cloud account. The US17.1 Jira/ServiceNow connector slice (native discovery, watermarked durable ingestion into canonical twins, and outbox-driven execution of US13.1 work orders) is implemented and verified against deterministic provider API fakes; it has not yet been run against a live tenant, so US17.1 and US13.1 remain partial. US17.2 governed visual field mappings with a sandboxed scripting escape hatch are done. US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries run on a per-query watermark, with unbounded scans blocked at publish) are implemented and verified against the provider fakes; WIQL is validate-only because no Azure DevOps adapter exists, and nothing has run against a live tenant, so US17.3 is partial. US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit) is done, verified against the fakes only. The US20.2 connector-led management workspace is implemented: connector-led mode is the staging/production default, local creation is refused there, and externally owned fields are read-only except for governed, audited state write-back. A 2026-09-23 increment closed three items the projection work had left open (directory-based owner matching by assignee email, a frozen/stale indicator for a paused projection, and the audit-chain single-writer constraint, which let `deploy/staging` move to 2 replicas) and upgraded the dev/test toolchain (vitest 2→5, vite 5→6), bringing `npm audit` to 0 vulnerabilities across the whole dependency tree; none of this changed any story's status. The canonical backlog contains **21 epics and 77 stories**, with **45 done / 7 partial / 25 not started**. Epic 21 (flow efficiency, wait reasons, risk of waiting and cost of delay) was added on 2026-09-24; US21.1 (worked versus waiting time and flow efficiency from recorded history) US21.2 (waiting time attributed to reasons and blocking items) US21.3 (risk of waiting too long, with a once-per-crossing warning) and US21.4 (estimated cost of delay from versioned assumptions) are done, verified locally and against the fakes, which completes Epic 21. US13.5 (resolution code and notes written back when engineering completes the work, held with the missing field named otherwise) is done, verified against the provider fakes only. See `implementation_plan.md` for clearly attributed Codex and Claude delivery records and `status.html` for the generated ledger and platform milestone.
+> **Current status (Codex and Claude updates, 2026-09-24):** The canonical backlog contains **21 epics and 77 stories**, with **46 done / 7 partial / 24 not started**. The implemented pilot includes the workflow/SLA, traceability, durable event delivery, notification, audit, connector-led workspace, Jira/ServiceNow canonical-twin ingestion, governed state and field mapping, per-twin queues, scheduled queries, backfill, projection, flow-efficiency analytics, wait risk and cost of delay described below. US13.4 public-comment synchronization is now done: it is independently opt-in per connector, filters ServiceNow work notes and Jira/JSM private comments inside the adapters, enforces per-connector direction and original-author account-id rules, preserves visible attribution, suppresses returning copies by a stable marker, and shows the public thread read-only in the twin drawer. US13.5 resolution metadata write-back is also done. Connector behaviour is verified only against deterministic provider fakes; no live Jira or ServiceNow tenant was contacted. The cloud staging foundation exists in the repository but is not activated in a cloud account, US13.1/US17.1 still await live-tenant validation, US17.3 still lacks an Azure DevOps runner, and no compliance certification is claimed. See `implementation_plan.md` for attributed delivery records and `status.html` for the generated ledger.
 
 ## Product Interaction Model
 
@@ -488,6 +488,28 @@ A backfill job brings existing records in as linked twins without overwhelming e
 - **Scheduling.** An in-process timer (10 seconds by default) works running jobs; each job is claimed with a database lease, so extra instances are safe. `CADENA_BACKFILL_SCHEDULER=disabled` turns it off and `CADENA_BACKFILL_TICK_MS` (minimum 1000) sets the period. Live provider traffic remains gated by `CADENA_CONNECTOR_LIVE_HTTP`. The studio's **Bulk backfill** dialog plans, starts, pauses, resumes, cancels and retries jobs, shows progress and counts, and downloads the CSV.
 
 Verified against the deterministic provider fakes only; see `implementation_plan.md` for the limits that remain.
+
+### Public-comment privacy and synchronization (US13.4)
+
+Comment synchronization is configured per connector and remains off unless explicitly enabled:
+
+```json
+{
+  "enabled": true,
+  "direction": "from_source",
+  "authorAllowList": ["acct-support"],
+  "authorBlockList": ["automation-bot"]
+}
+```
+
+Save it when creating a connector as `commentSync`, or later with `POST /integrations/connectors/:id/comment-sync`. Direction is relative to that connector: `from_source` reads public comments from it, `to_source` writes public comments to it, and `bidirectional` permits both. A cross-system transfer requires the source to permit reading and the target to permit writing. Account-id matching is case-insensitive, and the block list wins.
+
+- Jira comments with restricted visibility and JSM comments marked internal are discarded inside the Jira adapter. ServiceNow `work_notes` are discarded inside the ServiceNow adapter; only its customer-visible `comments` journal entries leave the adapter.
+- Permitted public comments live in a dedicated tenant-scoped ledger rather than inside twin field payloads. They are de-duplicated by provider id and catch up when a counterpart is linked later.
+- A transferred comment carries the original author's display name, stable account id and source system, plus a stable Cadena marker. Returning copies are suppressed by that marker, and a retry finds an already-written marker before adding anything again.
+- Either counterpart's synchronized-twin drawer shows the shared public thread read-only. Cadena does not offer a local compose or edit path.
+
+Limits: plain text only; at most 1,000 comments are read for a changed record; no separate comment watermark; verified against provider fakes only. Real Jira/JSM visibility properties, ServiceNow journal ACLs, pagination and throttling have not been observed.
 
 ### Resolution write-back on closure (US13.5)
 
@@ -1056,8 +1078,8 @@ The next delivery sequence follows the connector-led product decision:
 2. **US17.1 and US17.3 live validation and completion**:
    - With credentials and explicit authorisation, enable `CADENA_CONNECTOR_LIVE_HTTP` against a Jira Cloud and ServiceNow sandbox and run both ordinary polling and a scheduled native query there. Then add webhook-triggered ingestion, the remaining provider adapters and an Azure DevOps adapter, which is what lets WIQL queries be scheduled and US17.3 be completed.
 
-3. **US13.4 and US13.5 — safe content and closure sync**:
-   - Keep private work notes out of public streams and write complete resolution metadata back to the ITSM record.
+3. **Connector production hardening**:
+   - Add webhook-triggered ingestion, provider comment pagination/watermarks, longer-lived retry scheduling and the remaining provider adapters without weakening the source-authority or privacy boundaries.
 
 Multi-worker dispatch, a managed broker, real notification transports, CMDB federation and analytics materialized views remain production-hardening tracks, but they no longer obscure the immediate product path.
 
@@ -1148,6 +1170,9 @@ Multi-worker dispatch, a managed broker, real notification transports, CMDB fede
 | **US13.2** | Resolves one-to-many and many-to-one dependency trees without cross-tenant or orphan links | `test/us13.2.spec.ts` | **PASS** |
 | **US13.3** | Suppresses an exact returning write by service-account identity plus canonical SHA-256 payload hash | `test/us13.3.spec.ts` | **PASS** |
 | **US13.3** | Detects the unchanged no-op from durable content after volatile suppression state is lost | `test/us13.3.spec.ts` | **PASS** |
+| **US13.4** | Keeps comment synchronization off until explicitly enabled and enforces direction plus original-author account-id rules | `test/us13.4.spec.ts`, `test/ui-smoke.spec.ts` | **PASS (API fakes)** |
+| **US13.4** | Discards ServiceNow work notes and Jira/JSM private comments inside the adapters, while attributed public comments synchronize once and remain read-only in the twin drawer | `test/us13.4.spec.ts`, `test/ui-smoke.spec.ts` | **PASS (API fakes)** |
+| **US13.5** | Writes configured resolution code and notes with closure, or holds the write with every missing field named | `test/us13.5.spec.ts` | **PASS (API fakes)** |
 | **US16.4** | Executes changes in durable FIFO order per twin while unrelated twins proceed and expired connector leases recover | `test/us16.4-16.5.spec.ts` | **PASS** |
 | **US16.4** | Recovers a committed twin change through the transactional outbox without loss or duplicate work-order execution | `test/us16.4-16.5.spec.ts` | **PASS** |
 | **US16.5** | Pauses only the failed twin and keeps unrelated writes and ingested records moving | `test/us16.4-16.5.spec.ts` | **PASS** |
