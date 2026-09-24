@@ -803,6 +803,54 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await page.select('#typeFilter', '');
   });
 
+  it('shows the risk of waiting on the board card, in the drawer and in the flow dialog', async () => {
+    await closeAnyDialog();
+    // "In Review" is classified waiting by the earlier flow test. Give it comparable history: three completed visits.
+    const put = await fetch(`${BASE}/metrics/flow-risk/settings`, {
+      method: 'PUT',
+      headers: { 'x-org-id': ORG, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ min_sample: 3, percentile_threshold: 0.5 }),
+    });
+    expect(put.status).toBe(200);
+    for (let i = 0; i < 3; i++) {
+      const story = await api('/workitems', { type: 'story', title: `Risk history ${i}`, team_id: TEAM, org_id: ORG });
+      for (const toState of ['Planned', 'In Progress', 'In Review', 'Done']) {
+        await api(`/workitems/${story.id}/transitions`, { to_state: toState });
+      }
+    }
+    const summary = await api('/metrics/flow-risk/evaluate', {});
+    expect(summary.at_risk).toBeGreaterThanOrEqual(1);
+    await page.evaluate(() => (window as any).loadWorkspace({ quiet: true }));
+
+    await page.waitForFunction(
+      () => Array.from(document.querySelectorAll('.work-card')).some((card) => card.textContent?.includes('Story awaiting review') && card.querySelector('.risk-tag.at-risk')),
+      { timeout: 10000 },
+    );
+    const badge = await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('.work-card')).find((node) => node.textContent?.includes('Story awaiting review'));
+      const tag = card?.querySelector('.risk-tag') as HTMLElement | null;
+      return { text: tag?.textContent ?? '', title: tag?.title ?? '' };
+    });
+    expect(badge.text).toContain('Wait risk');
+    expect(badge.title).toContain('comparable visits');
+
+    await page.evaluate(() => {
+      const card = Array.from(document.querySelectorAll('.work-card')).find((node) => node.textContent?.includes('Story awaiting review'));
+      (card?.querySelectorAll('.card-action')[1] as HTMLButtonElement).click();
+    });
+    await page.waitForFunction(() => document.querySelector('#detailBody')?.textContent?.includes('Percentile reached') ?? false, { timeout: 10000 });
+    expect(await page.$eval('#detailBody', (node) => node.textContent ?? '')).toContain('At risk');
+    await closeAnyDialog();
+
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openFlowFromNav')?.click());
+    await page.waitForSelector('#flowDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => document.querySelector('#flowRisk table') !== null, { timeout: 10000 });
+    expect(await page.$eval('#flowRisk', (node) => node.textContent ?? '')).toContain('At risk');
+    expect(await page.$eval('#riskMinSample', (node) => (node as HTMLInputElement).value)).toBe('3');
+    expect(await page.$eval('#riskThreshold', (node) => (node as HTMLInputElement).value)).toBe('50');
+    await closeAnyDialog();
+  });
+
   it('renders without console errors and does not overflow at phone width', async () => {
     await page.setViewport({ width: 390, height: 844 });
     await page.reload({ waitUntil: 'networkidle0' });
