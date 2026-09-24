@@ -25,6 +25,9 @@ describe('US5.4 — durable HTTP 202 webhook ingestion', () => {
     const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
     app = moduleRef.createNestApplication();
     await app.init();
+    // Listen once up front: supertest otherwise binds an ephemeral listener per
+    // request, and the concurrent burst below races those binds on one server.
+    await app.listen(0);
   });
 
   afterAll(async () => {

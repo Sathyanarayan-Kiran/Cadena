@@ -47,61 +47,16 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 
 ### 1. Run Automated Test Suite (Single Command)
 
-To run the complete test suite covering Epics 1, 2, 3, 4, 6, 7, 8, 9, and 10 plus Stage B dogfooding:
+To run the complete non-browser suite (every implemented story plus persistence, tracker and review-regression specs):
 
 ```bash
 npm test
 ```
 
-Expected output:
+Expected summary:
 ```
- ✓ test/us1.1.spec.ts (2 tests)
- ✓ test/us1.2.spec.ts (2 tests)
- ✓ test/us1.3.spec.ts (2 tests)
- ✓ test/us2.1.spec.ts (2 tests)
- ✓ test/us2.2.spec.ts (2 tests)
- ✓ test/us2.3.spec.ts (1 test)
- ✓ test/us3.1.spec.ts (2 tests)
- ✓ test/us3.2.spec.ts (2 tests)
- ✓ test/us3.3.spec.ts (2 tests)
- ✓ test/us3.4.spec.ts (2 tests)
- ✓ test/us4.1.spec.ts (2 tests)
- ✓ test/us4.2.spec.ts (1 test)
- ✓ test/us4.3.spec.ts (6 tests)
- ✓ test/us4.4.spec.ts (1 test)
- ✓ test/us6.1.spec.ts (2 tests)
- ✓ test/us6.2.spec.ts (1 test)
- ✓ test/us6.3.spec.ts (1 test)
- ✓ test/us7.1.spec.ts (7 tests)
- ✓ test/us7.2.spec.ts (3 tests)
- ✓ test/us7.3.spec.ts (4 tests)
- ✓ test/us8.1.spec.ts (3 tests)
- ✓ test/us8.2.spec.ts (4 tests)
- ✓ test/us8.3.spec.ts (5 tests)
- ✓ test/us9.2.spec.ts (3 tests)
- ✓ test/us9.3.spec.ts (5 tests)
- ✓ test/us9.4.spec.ts (7 tests)
- ✓ test/tracker.spec.ts (7 tests)
- ✓ test/persistence.spec.ts (5 tests)
- ✓ test/us5.1.spec.ts (4 tests)
- ✓ test/us5.4.spec.ts (4 tests)
- ✓ test/us5.spec.ts (10 tests)
- ✓ test/review-regressions.spec.ts (7 tests)
- ✓ test/us10.3.spec.ts (1 test)
- ✓ test/us10.4.spec.ts (2 tests)
- ✓ test/us10.7.spec.ts (2 tests)
- ✓ test/us13.2.spec.ts (2 tests)
- ✓ test/us13.3.spec.ts (2 tests)
- ✓ test/us10.9.spec.ts (13 tests)
- ✓ test/backlog-fixture.spec.ts (1 test)
- ✓ test/us13.1.spec.ts (3 tests)
- ✓ test/cloud-staging.spec.ts (6 tests)
- ✓ test/us17.1.spec.ts (11 tests)
- ✓ test/us20.2.spec.ts (7 tests)
- ✓ test/us16.4-16.5.spec.ts (4 tests)
-
- Test Files  44 passed (44)
-      Tests  166 passed (166)
+ Test Files  57 passed (57)
+      Tests  339 passed (339)
 ```
 
 ### 2. Run the Server
