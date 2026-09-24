@@ -559,10 +559,10 @@
     },
     "US13.5": {
       "name": "Resolution code write-back",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
-      "note": "Closure metadata written back so ITIL records stay complete without manual re-entry."
+      "note": "A Jira issue moving to Done resolves its correlated ServiceNow incident, and the resolution code and notes travel with the resolution in the same write. A published state-mapping rule can list required target fields (for example close_code and close_notes); they are checked against the fields the source carries and the fields a published field mapping will write to the target, so a mapping such as Jira resolution to close_code through a value table and a notes field to close_notes satisfies them. If a required field is missing or blank the closure is held before anything is sent, the incident is left as it was, and the held work order names the missing field and how to supply it (a published field mapping, or re-injecting the held entry from the twin dead-letter queue with a corrected sourcePayload). The ServiceNow adapter now also surfaces the provider's error detail, so a data-policy refusal naming a mandatory field is reported as such if a rule declared nothing required. The Jira adapter reads the issue resolution. Verified against the provider fakes only, including a fake ServiceNow data policy that makes the resolution code and notes mandatory on Resolved; nothing has run against a live tenant. The resolution notes come from a configurable Jira custom field, since Jira has no native resolution-notes field, and only Jira to ServiceNow closure is exercised."
     },
     "US14.1": {
       "name": "Format-preserving transfer",

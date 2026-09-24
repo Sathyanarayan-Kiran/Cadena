@@ -2,6 +2,41 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — US13.5 resolution write-back on closure — 2026-09-24
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, after the user asked to start with US13.4 and US13.5. The design choices below were made by Claude on stated defaults. US13.4 (comment privacy) is a separate, larger story that is not started; it is being proposed to the user rather than built. Nothing in an earlier section is superseded.
+
+**Status:** US13.5 moves from not-started to **done**. The ledger moves to **45 done / 7 partial / 25 not started** across **21 epics / 77 stories**. Verification is against the provider fakes only; no live Jira or ServiceNow instance was contacted.
+
+### What already existed, and what was missing
+
+US13.1 already lets a state-mapping rule declare `required_target_fields` and holds the transition when one is missing. What did not work for closure was that the check compared the rule's field paths only with the fields the **source** carries, under the source's own names. A ServiceNow incident needs `close_code` and `close_notes`, which Jira does not have under those names, so a closure could not both require them and be written with them.
+
+### What was changed
+
+- **Required fields see mapped fields (`connector.service.ts`).** The US17.2 field-mapping translation, which is read-only, is now evaluated before the state translation and its output is merged into the fields the state rule's `required_target_fields` are checked against. Precedence of holds is unchanged (a state hold is reported before a field-mapping hold), and the mapped fields are still written in the same work order as the state, so a closure is one write.
+- **Actionable failure.** A closure missing a required field is held before anything is sent. The held work order's error names every missing field, says the target record was not changed, and states how to supply the field (a published field mapping, or re-injecting the held entry from the twin dead-letter queue with a corrected `sourcePayload`). Blank text counts as missing.
+- **Provider detail (`connector-http.ts`).** The provider error summary now includes ServiceNow's `error.detail`, which is where a data policy names a mandatory field, so a refusal from the provider is reported with the field named.
+- **Jira resolution (`jira-connector.adapter.ts`).** The adapter requests and surfaces the issue `resolution` (present only once resolved, so existing record shapes are unchanged). The resolution notes are read from a configured custom field (`options.customFieldIds`), because Jira has no native resolution-notes field.
+- **Fakes (`provider-sandbox.ts`).** The Jira fake carries a resolution and a resolution-notes field; the ServiceNow fake discovers `close_notes` and can enforce a data policy (`mandatoryOnResolve`) that refuses a move to Resolved without them, as a real instance does. It is off by default, so no existing scenario changes.
+- **Studio.** The state-mapping dialog already had a per-rule required-fields input; its help text now says what those paths are checked against.
+
+### Decisions and limits, stated plainly
+
+- **Configured resolution code.** The code is configured through a published field mapping (for example a value table from Jira `Done` and `Won't Do` to ServiceNow close codes), not through a new setting.
+- **Only Jira to ServiceNow closure is exercised.** The mechanism is provider-neutral, but no other direction was tested. Azure DevOps has no adapter.
+- **Held, not "failed".** The acceptance criterion says the sync fails with an actionable error; the platform represents this as a held work order that blocks later writes to that twin until it is corrected, which is its existing behaviour for every held closure.
+- **Live behaviour is unverified.** Whether a real instance accepts `close_code` and `close_notes` in the same request as the state change, and what its data policy or business rule returns, has not been observed.
+- The Jira notes field is a custom field the operator must name; a comment-based resolution note is not read.
+
+### Verification
+
+- `test/us13.5.spec.ts` (7 tests): the code and notes are written in one PATCH with the state, each Jira resolution maps to its configured code, a missing note names `close_notes` and leaves the incident untouched with no request sent, a missing resolution and blank notes name their fields, a held closure completes after the field is supplied through the dead-letter queue, a provider data-policy refusal is reported with the field named when a rule declared nothing required, and a closure with nothing required is unaffected. Two behaviours (mapped fields counting toward the required check, and the actionable hint) were broken on purpose and the tests failed each time before the code was restored. The nine existing connector suites (112 tests) still pass.
+
+### Primary files
+
+- `src/modules/connectors/connector.service.ts`, `connector-http.ts`, `jira-connector.adapter.ts`, `sandbox/provider-sandbox.ts`, `public/index.html`, `test/us13.5.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — US21.4 cost of delay — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude (Claude Sonnet 5)** on 2026-09-24, in three commits (the engine and API, the studio, and this ledger sync), after the user asked to go ahead. The design choices below were made by Claude on stated defaults, not put to the user. It builds on US21.1 to US21.3 and supersedes nothing. It completes Epic 21.

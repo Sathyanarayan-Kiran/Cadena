@@ -2,8 +2,8 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), the US20.2 connector-led management workspace, US21.1 flow efficiency (worked versus waiting time from recorded history), US21.2 wait reasons (why the waiting happened), US21.3 risk of waiting too long, and US21.4 cost of delay. The canonical backlog is **21 epics / 77 stories**, with **44 done / 7 partial / 26 not started**.
-**Verification:** 321 automated tests across 54 test files, plus 29 browser smoke tests driving the real page in pilot and connector-led modes.
+**Current state:** Phase 0 pilot plus the Phase 1 operational-visibility slice are implemented and verified: Epic 3 aging/SLA including durable hold-state suspension, Epic 4 traceability, all Epic 5 stories including transactional event delivery and asynchronous HTTP 202 webhook ingestion, Epic 6 Git/CI, Epic 7 monitoring/APM, Epic 8 notification/escalation, US9.1 team heatmap, US9.2 executive rollup, US9.3 interactive traceability, US9.4 flow metrics, US10.4 audit export, US10.7 SHA-256 verification, US10.9 authenticated tenant identity, US13.2 immutable cross-system correlation, US13.3 echo-loop suppression, provider-neutral US13.1 state-translation engine, US16.4/US16.5 per-twin durable queues and failure isolation, the partial US17.1 Jira/ServiceNow connector slice (native discovery, durable watermarked ingestion into canonical twins, and outbox-driven state propagation verified against deterministic API fakes), US17.2 governed visual field mappings with a sandboxed scripting escape hatch, the partial US17.3 scheduled native-query triggers (JQL and ServiceNow encoded queries on a per-query watermark, with unbounded scans blocked at publish; WIQL is validate-only), US17.4 governed historical backfill (resumable chunks, adaptive concurrency and rate limits, queue-derived counts and a CSV audit), the US20.2 connector-led management workspace, US21.1 flow efficiency (worked versus waiting time from recorded history), US21.2 wait reasons (why the waiting happened), US21.3 risk of waiting too long, US21.4 cost of delay, and US13.5 resolution write-back on closure (verified against the fakes). The canonical backlog is **21 epics / 77 stories**, with **45 done / 7 partial / 25 not started**.
+**Verification:** 328 automated tests across 55 test files, plus 29 browser smoke tests driving the real page in pilot and connector-led modes.
 
 ---
 
@@ -16,9 +16,18 @@ A product question came up: can Cadena measure non-productive time, explain why 
 - **US21.3 Risk of waiting:** estimate from history how likely an item is to overrun its state, showing the sample size and method, and producing no score when there is too little history.
 - **US21.4 Cost of delay:** configurable, versioned cost assumptions give an estimated cost per waiting interval and a ranking by cost of delay over duration. Figures are labelled as estimates from the organisation's own assumptions, and no applicable assumption gives no cost rather than zero.
 
-The canonical backlog is now **21 epics / 77 stories**; the ledger is **44 done / 7 partial / 26 not started**. `public/status.html` was regenerated with `npm run tracker`.
+The canonical backlog is now **21 epics / 77 stories**; the ledger is **45 done / 7 partial / 25 not started**. `public/status.html` was regenerated with `npm run tracker`.
 
 ---
+
+## 2026-09-24 — US13.5 resolution write-back on closure (Claude)
+
+When engineering finishes the work, the ITSM record should close complete, without anyone re-typing the resolution.
+
+- **How it works.** Publish a state mapping whose rule (for example Jira `Done` to ServiceNow `Resolved`) lists required fields such as `close_code, close_notes`, and a field mapping that writes them (the Jira resolution through a value table to the close code, and a notes field straight to the close notes). When the issue moves to Done, the incident is resolved and both fields are written in the same request.
+- **When something is missing.** If a required field is empty on the source, nothing is sent: the incident stays as it was, and the held work order says which field is missing and how to supply it. Once it is supplied (by adding a field mapping, or re-injecting the held entry from the twin dead-letter queue with the corrected source payload) the closure completes.
+- **A second safety net.** If a rule declares nothing required but ServiceNow itself refuses the resolution, its message naming the mandatory field is now shown as the reason.
+- **Know the limits.** This is verified against the fakes only, and only Jira to ServiceNow. Jira has no resolution-notes field, so you name a custom field for it. Nothing has run against a real instance, so the exact behaviour of your ServiceNow data policy is unobserved.
 
 ## 2026-09-24 — US21.4 cost of delay (Claude)
 
