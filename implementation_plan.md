@@ -2,6 +2,14 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Claude — review of US13.4 and provider-side privacy hardening — 2026-09-24
+
+> **Attribution boundary:** This short section was written by **Claude (Claude Sonnet 5)** on 2026-09-24. It reviews the Codex US13.4 increment below (three commits, `3912445`, `902da33`, `a3d389c`), which Claude did not write, and records one small change Claude made to it. Nothing in the Codex section is withdrawn.
+
+- **Reviewed and verified:** the full suite passes (333 tests across 56 files) and the whole browser suite passes (29 tests), not only the connector-led subset. The privacy filters for Jira restricted and JSM-internal comments are in the adapter, the policy is off by default and audited, and default-off makes no comment request at all.
+- **One tightening.** The ServiceNow adapter asked the provider for both `comments` and `work_notes` and discarded the work notes after they arrived. Private text therefore never reached a table, delivery or target request, but it did cross the wire into Cadena's process. The adapter now requests only `comments`, so internal notes never leave ServiceNow; the in-adapter filter stays as defence in depth. `test/us13.4.spec.ts` now asserts that no request to `sys_journal_field` mentions `work_notes`, and that assertion fails if the query is reverted.
+- **Still unverified:** everything about real Jira and ServiceNow behaviour, as the Codex section states. The Claude US13.5 section above says US13.4 was not started; that was true when it was written and is superseded by the Codex section.
+
 ## Codex — US13.4 work-note privacy in comment sync — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-24 after the user approved three product decisions: policy per connector, stable original-author allow/block lists, and a read-only public-comment view in the twin drawer. It builds on US13.2 correlation and uses its own marker-based comment echo guard rather than changing Claude's US13.5 increment. No live provider was contacted.

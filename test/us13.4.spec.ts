@@ -95,6 +95,10 @@ describe('US13.4 — work-note privacy in comment sync', () => {
     });
     const result = await sync(orgId, snowConnector);
     expect(result.body).toMatchObject({ commentsFetched: 1, commentsStored: 1, commentsTransferred: 1 });
+    // Internal work notes are never even requested from ServiceNow, not merely dropped after arriving.
+    const journalReads = snow.requests.filter((request) => request.path.includes('sys_journal_field'));
+    expect(journalReads.length).toBeGreaterThan(0);
+    expect(journalReads.every((request) => !decodeURIComponent(request.url).includes('work_notes'))).toBe(true);
 
     const jiraComments = jira.comments.get(issue.id) || [];
     expect(jiraComments).toHaveLength(1);

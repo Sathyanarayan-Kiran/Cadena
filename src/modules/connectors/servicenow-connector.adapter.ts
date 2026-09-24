@@ -296,14 +296,15 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     if (!this.entityTypes(ctx.connector.config).includes(target.entityType)) {
       throw new ConnectorConfigurationError(`Table '${target.entityType}' is not configured on this connector`);
     }
-    const query = `element_id=${target.externalId}^elementINcomments,work_notes^ORDERBYsys_created_on`;
+    // Only customer-visible `comments` are requested: internal `work_notes` never leave ServiceNow at all.
+    const query = `element_id=${target.externalId}^elementINcomments^ORDERBYsys_created_on`;
     const page = await this.get(
       ctx,
       `/api/now/table/sys_journal_field?sysparm_query=${encodeURIComponent(query)}`
         + '&sysparm_display_value=all&sysparm_fields=sys_id,element,element_id,value,sys_created_on,sys_created_by&sysparm_limit=1000',
     );
     const rows: any[] = Array.isArray(page?.result) ? page.result : [];
-    // work_notes are deliberately discarded here. They never reach a Cadena queue or table.
+    // Defence in depth: even if the provider ignored the element filter, anything but `comments` is discarded here.
     return rows.filter((row) => fieldValue(row?.element) === 'comments').map((row) => {
       const body = fieldDisplay(row?.value);
       return {
