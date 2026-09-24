@@ -1035,6 +1035,9 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     await page.waitForSelector('#connectorsDialog[open]', { timeout: 10000 });
     expect(await page.$eval('#connectorCommentSync', (node) => (node as HTMLInputElement).checked)).toBe(false);
     expect(await page.$eval('#connectorCommentDirection', (node) => (node as HTMLSelectElement).value)).toBe('bidirectional');
+    expect(await page.$eval('#connectorRateRpm', (node) => (node as HTMLInputElement).value)).toBe('600');
+    expect(await page.$eval('#connectorRateHeadroom', (node) => (node as HTMLInputElement).value)).toBe('90');
+    expect(await page.$eval('#connectorRateConcurrency', (node) => (node as HTMLInputElement).value)).toBe('4');
     await page.evaluate(() => (document.querySelector('#connectorsDialog') as HTMLDialogElement).close());
   });
 
@@ -1074,6 +1077,8 @@ describe.skipIf(!canRun)('UI smoke — connector-led workspace', () => {
     expect((await textOf('#sourceKpiSourcesContext')).toLowerCase()).toContain('2 healthy');
     expect(await page.$$eval('#sourceHealthList .source-card', (cards) => cards.length)).toBe(2);
     expect(await textOf('#sourceHealthList')).toContain('Sandbox ServiceNow');
+    expect((await textOf('#sourceHealthList')).toLowerCase()).toContain('request budget');
+    expect((await textOf('#sourceHealthList')).toLowerCase()).toContain('target backlog');
     expect(await page.$$eval('#twinRows tr', (rows) => rows.length)).toBe(5);
 
     const row = await page.evaluate(() => {
