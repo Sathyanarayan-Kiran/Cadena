@@ -736,6 +736,38 @@ describe.skipIf(!canRun)('UI smoke — pilot workspace renders and responds', ()
     await closeAnyDialog();
   });
 
+  it('reports flow efficiency, flags unclassified time, and saves a classification as an audited version', async () => {
+    await closeAnyDialog();
+    await page.evaluate(() => document.querySelector<HTMLButtonElement>('#openFlowFromNav')?.click());
+    await page.waitForSelector('#flowDialog[open]', { timeout: 10000 });
+    await page.waitForFunction(() => !document.querySelector('#flowReport .skeleton'), { timeout: 10000 });
+    const report = await page.$eval('#flowReport', (node) => (node as HTMLElement).textContent ?? '');
+    expect(report).toContain('Flow efficiency');
+    expect(report).toContain('never as active');
+    expect(report).toContain('In Review');
+
+    await page.waitForFunction(() => document.querySelectorAll('#flowStates select').length > 0, { timeout: 10000 });
+    await page.select('#flowStates select[data-state="In Review"]', 'waiting');
+    await page.$eval('#saveFlowButton', (node) => node.scrollIntoView({ block: 'center' }));
+    await page.click('#saveFlowButton');
+    await page.waitForFunction(
+      () => document.querySelector('#toastRegion')?.textContent?.includes('new versions') || document.querySelector('#toastRegion')?.textContent?.includes('as new version'),
+      { timeout: 10000 },
+    );
+    await page.waitForFunction(() => !document.querySelector('#flowReport .skeleton'), { timeout: 10000 });
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#flowReport table tbody tr')).some((tr) => /^In Review\s+Waiting/.test((tr as HTMLElement).innerText.trim())), { timeout: 10000 });
+    const rows = await page.$$eval('#flowReport table tbody tr', (trs) => trs.map((tr) => (tr as HTMLElement).innerText.replace(/\s+/g, ' ')));
+    expect(rows.some((row) => row.startsWith('In Review Waiting'))).toBe(true);
+    const alertText = await page.$$eval('#flowReport .inline-alert', (nodes) => nodes.map((node) => node.textContent ?? '').join(' '));
+    expect(alertText).not.toContain('In Review');
+    expect(await page.$eval('#flowStates select[data-state="In Review"]', (node) => (node as HTMLSelectElement).dataset.current)).toBe('waiting');
+    expect(await page.$eval('#flowStates', (node) => (node as HTMLElement).innerText)).toContain('Version 1');
+
+    const history = await api('/metrics/flow-classifications/history?state=In%20Review');
+    expect(history).toHaveLength(1);
+    await closeAnyDialog();
+  });
+
   it('renders without console errors and does not overflow at phone width', async () => {
     await page.setViewport({ width: 390, height: 844 });
     await page.reload({ waitUntil: 'networkidle0' });
