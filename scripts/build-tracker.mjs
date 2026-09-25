@@ -23,6 +23,31 @@ const overlay = read('implementation-status.json');
 
 const STATUS_LABEL = { done: 'Done', partial: 'Partial', idle: 'Not started' };
 
+/**
+ * Returns the newest date carried by the tracker inputs.
+ *
+ * The generated page is committed, so its contents must not depend on the day on which
+ * the generator happens to run. Scope deltas and platform milestones are the dated input
+ * records that describe the ledger's currency; their newest date is therefore the page's
+ * deterministic "Built" value.
+ */
+export function trackerAsOfDate(statusOverlay = overlay) {
+  const dates = [
+    ...(statusOverlay.deltas ?? (statusOverlay.latest_delta ? [statusOverlay.latest_delta] : [])),
+    ...(statusOverlay.platform_milestones ?? []),
+  ].map((entry) => entry.date).filter(Boolean);
+
+  if (dates.length === 0) {
+    throw new Error('implementation-status.json has no dated delta or platform milestone');
+  }
+  for (const date of dates) {
+    if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      throw new Error(`implementation-status.json has an invalid tracker date '${date}'`);
+    }
+  }
+  return dates.sort().at(-1);
+}
+
 /** Merges the two sources into the shape the page renders, failing loudly on a gap. */
 export function buildModel() {
   const problems = [];
@@ -496,6 +521,21 @@ const SHELL_HEAD = `<!doctype html>
 </style>
 `;
 
+/** Builds the complete committed artifact without consulting the wall clock. */
+export function buildTrackerDocument(model = buildModel()) {
+  if (model.problems.length) {
+    throw new Error(`Tracker inputs are out of sync:\n${model.problems.map((p) => `  - ${p}`).join('\n')}`);
+  }
+
+  // Counted from disk so the page cannot claim a suite size the repo does not have.
+  const specFiles = readdirSync(join(ROOT, 'test')).filter((f) => f.endsWith('.spec.ts'));
+  const body = page(model, {
+    tests: `${specFiles.length} spec files, including a headless-browser smoke suite`,
+    built: trackerAsOfDate(),
+  });
+  return SHELL_HEAD + body + '\n</body>\n</html>\n';
+}
+
 function main() {
   const model = buildModel();
   if (model.problems.length) {
@@ -508,19 +548,15 @@ function main() {
   const done = model.epics.reduce((n, e) => n + e.stories.filter((s) => s.status === 'done').length, 0);
   const partial = model.epics.reduce((n, e) => n + e.stories.filter((s) => s.status === 'partial').length, 0);
 
-  // Counted from disk so the page cannot claim a suite size the repo does not have.
-  const specFiles = readdirSync(join(ROOT, 'test')).filter((f) => f.endsWith('.spec.ts'));
-  const body = page(model, {
-    tests: `${specFiles.length} spec files, including a headless-browser smoke suite`,
-    built: new Date().toISOString().slice(0, 10),
-  });
+  const document = buildTrackerDocument(model);
 
   const out = join(ROOT, 'public', 'status.html');
   mkdirSync(dirname(out), { recursive: true });
-  writeFileSync(out, SHELL_HEAD + body + '\n</body>\n</html>\n', 'utf8');
+  writeFileSync(out, document, 'utf8');
 
   const flag = process.argv.indexOf('--fragment');
   if (flag !== -1 && process.argv[flag + 1]) {
+    const body = document.slice(SHELL_HEAD.length, -'\n</body>\n</html>\n'.length);
     writeFileSync(resolve(process.argv[flag + 1]), body + '\n', 'utf8');
   }
 

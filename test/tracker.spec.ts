@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import backlog from '../backlog.json';
 import overlay from '../implementation-status.json';
+import { buildTrackerDocument, trackerAsOfDate } from '../scripts/build-tracker.mjs';
 
 /**
  * Keeps the implementation tracker honest.
@@ -119,5 +120,20 @@ describe('Implementation tracker', () => {
     // The generator inlines the model, so a stale page is detectable by story id.
     const absent = backlogStoryIds.filter((id) => !html.includes(`"${id}"`));
     expect(absent, 'stories missing from the generated page — run `npm run tracker`').toEqual([]);
+  });
+
+  it('generates identical output on different wall-clock days', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-09-25T01:00:00Z'));
+      const first = buildTrackerDocument();
+      vi.setSystemTime(new Date('2031-04-17T23:59:59Z'));
+      const second = buildTrackerDocument();
+
+      expect(second).toBe(first);
+      expect(first).toContain(`<span><b>Built</b> ${trackerAsOfDate()}</span>`);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
