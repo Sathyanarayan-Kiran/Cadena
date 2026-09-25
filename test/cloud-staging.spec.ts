@@ -64,6 +64,22 @@ describe('Cloud staging foundation', () => {
     expect(ingress).toContain('secretName: cadena-staging-tls');
     expect(kustomization).not.toContain('secret.example.yaml');
   });
+
+  it('keeps CI and both container stages on the Node major required by isolated-vm', () => {
+    const root = join(__dirname, '..');
+    const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
+    const packageLock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8'));
+    const dockerfile = readFileSync(join(root, 'Dockerfile'), 'utf8');
+    const ci = readFileSync(join(root, '.github', 'workflows', 'ci.yml'), 'utf8');
+    const isolatedVmEngine = packageLock.packages['node_modules/isolated-vm'].engines.node;
+    const requiredMajor = Number(isolatedVmEngine.match(/\d+/)?.[0]);
+    const declaredMajor = Number(packageJson.engines.node.match(/\d+/)?.[0]);
+
+    expect(requiredMajor).toBeGreaterThan(0);
+    expect(declaredMajor).toBeGreaterThanOrEqual(requiredMajor);
+    expect(dockerfile.match(new RegExp(`^FROM node:${requiredMajor}-bookworm-slim`, 'gm'))).toHaveLength(2);
+    expect(ci).toMatch(new RegExp(`node-version:\\s*${requiredMajor}`));
+  });
 });
 
 describe('Health probes', () => {
