@@ -29,16 +29,18 @@ const STATUS_LABEL = { done: 'Done', partial: 'Partial', idle: 'Not started' };
  * The generated page is committed, so its contents must not depend on the day on which
  * the generator happens to run. Scope deltas and platform milestones are the dated input
  * records that describe the ledger's currency; their newest date is therefore the page's
- * deterministic "Built" value.
+ * deterministic "Built" value. An explicit as_of date lets a delivery advance the
+ * ledger date without pretending that product delivery changed backlog scope.
  */
 export function trackerAsOfDate(statusOverlay = overlay) {
   const dates = [
+    statusOverlay.as_of,
     ...(statusOverlay.deltas ?? (statusOverlay.latest_delta ? [statusOverlay.latest_delta] : [])),
     ...(statusOverlay.platform_milestones ?? []),
-  ].map((entry) => entry.date).filter(Boolean);
+  ].map((entry) => typeof entry === 'string' ? entry : entry?.date).filter(Boolean);
 
   if (dates.length === 0) {
-    throw new Error('implementation-status.json has no dated delta or platform milestone');
+    throw new Error('implementation-status.json has no as_of date, dated delta or platform milestone');
   }
   for (const date of dates) {
     if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {

@@ -4,7 +4,7 @@ This repository contains the pilot implementation of the Unified SDLC & ITSM pla
 
 The pilot proves the platform's technical foundation: **one canonical work-item twin model** and **one policy/workflow engine** serving delivery item types (`Epic`, `Story`, `Release`) and operational item types (`Incident`), with real, queryable traceability between them. In the target product, those twins are normally materialized from authoritative Jira, ServiceNow and other provider records rather than entered again by users.
 
-> **Current status (Codex and Claude updates, 2026-09-24):** The canonical backlog contains **21 epics and 77 stories**, with **48 done / 7 partial / 22 not started**. The implemented pilot includes the workflow/SLA, traceability, durable event delivery, notification, audit, connector-led workspace, Jira/ServiceNow canonical-twin ingestion, governed state and field mapping, per-twin queues, scheduled queries, backfill, target-wide adaptive rate governance, indexed-query safety with load shedding, projection, flow-efficiency analytics, wait risk and cost of delay described below. US16.1 now gives every provider request a shared tenant-and-target quota, headroom and concurrency boundary, propagates `Retry-After` or jittered exponential delay to durable workers, and exports quota/backlog/retry telemetry. US16.2 refuses a scheduled query that filters on a field the target has not indexed, naming the field, and stops all traffic to a target that keeps reporting database semaphore pressure until a single probe shows it has recovered. US13.4 public-comment synchronization and US13.5 resolution metadata write-back are also done. Connector behaviour is verified only against deterministic provider fakes; no live Jira or ServiceNow tenant was contacted. The cloud staging foundation exists in the repository but is not activated in a cloud account, US13.1/US17.1 still await live-tenant validation, US17.3 still lacks an Azure DevOps runner, and no compliance certification is claimed. See `implementation_plan.md` for attributed delivery records and `status.html` for the generated ledger.
+> **Current status (Codex and Claude updates, 2026-09-25):** The canonical backlog contains **21 epics and 77 stories**, with **49 done / 7 partial / 21 not started**. The implemented pilot includes the workflow/SLA, traceability, durable event delivery, notification, audit, connector-led workspace, Jira/ServiceNow canonical-twin ingestion, governed state and field mapping, per-twin queues, scheduled queries, backfill, target-wide adaptive rate governance, indexed-query safety with load shedding, outbound-only relay connectivity, projection, flow-efficiency analytics, wait risk and cost of delay described below. US16.3 now lets a relay behind the firewall long-poll over outbound HTTPS/443, retain provider credentials locally, and resume queued work in FIFO order without repeating a provider request whose result reached its durable local ledger. US13.4 public-comment synchronization and US13.5 resolution metadata write-back are also done. Connector behaviour is verified only against deterministic provider fakes; no live Jira or ServiceNow tenant or firewall was contacted. The cloud staging foundation exists in the repository but is not activated in a cloud account, US13.1/US17.1 still await live-tenant validation, US17.3 still lacks an Azure DevOps runner, and no compliance certification is claimed. See `implementation_plan.md` for attributed delivery records and `status.html` for the generated ledger.
 
 ## Product Interaction Model
 
@@ -39,7 +39,7 @@ Jira record ←→ Cadena correlation, mapping, policy and audit ←→ ServiceN
 - **Compliance Audit**: Creation, field edits, typed links, state transitions and integration-driven changes append to a tenant-wide SHA-256 chain and project into an audit trail with actor, timestamp, normalized before/after values and verification metadata; JSON export is available at the specification's `GET /audit/export` route.
 - **Notification & Escalation**: Event-bus subscribers routing SLA warnings, breaches and escalations to each person's preferred channel with email fallback and a queryable delivery log.
 - **Pilot UI**: Responsive board/list workspace, explicitly verified worst-first SLA heatmap, workflow-driven transitions, hold-state policy configuration, state-mapping administration, source-connector onboarding and health, a connector-led landing view and synchronized-twin workspace with governed write-back, executive overview, item details with audit history/export, linking, lineage exploration and export, service impact, monitoring evidence, and notification delivery logs. Local creation appears only in pilot (under Pilot actions) and standalone modes.
-- **Testing**: Vitest + NestJS Testing + Supertest running 351 non-browser tests across 58 files, plus a 29-scenario headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
+- **Testing**: Vitest + NestJS Testing + Supertest running 356 non-browser tests across 59 files, plus a 29-scenario headless-Chrome smoke suite (`puppeteer-core`) driving the built server.
 
 ---
 
@@ -55,8 +55,8 @@ npm test
 
 Expected summary:
 ```
- Test Files  58 passed (58)
-      Tests  351 passed (351)
+ Test Files  59 passed (59)
+      Tests  356 passed (356)
 ```
 
 ### 2. Run the Server
@@ -489,6 +489,36 @@ This is verified against deterministic provider fakes only. Real Jira and Servic
 - `ConnectorLoadSheddingStarted` and `ConnectorLoadSheddingEnded` domain events record each episode. `GET /integrations/connectors/rate-governance` adds `loadShedding: { state, since, until, reason, episodes, shedRequests }`, where `state` is `normal`, `shedding` or `probing`. The request-budget panel shows the same information.
 
 This is verified against deterministic provider fakes only. What real Jira and ServiceNow semaphore exhaustion looks like on the wire (status, body, headers) has not been observed. Detection therefore still relies on the US16.1 pressure heuristic (HTTP 503, or a body mentioning semaphore, "too many requests" or "temporarily unavailable").
+
+### Outbound-only relay connectivity (US16.3)
+
+A connector whose provider is reachable only inside a private network can set `connectivity: { "mode": "relay" }`. The control plane stores each provider HTTP operation as a durable, credential-free queue entry; a headless relay inside that network claims the queue head by long-polling Cadena. The cloud process never connects to the provider.
+
+```http
+POST /integrations/connectors/:id/relay
+GET  /integrations/connectors/:id/relay
+
+POST /integrations/relay/:relayId/poll
+POST /integrations/relay/:relayId/deliveries/:deliveryId/ack
+```
+
+Provisioning returns the bearer token once; Cadena stores only its SHA-256 digest and the status endpoint never returns it. The agent refuses a control-plane URL unless it is HTTPS on effective port 443, opens no listener, and accepts work only for the exact configured provider origin. Authorization and other provider secrets are stripped before requests are queued and added by the relay from its local configuration.
+
+Run the relay as a separate process behind the firewall:
+
+```bash
+CADENA_RELAY_CONTROL_PLANE_URL=https://cadena.example \
+CADENA_RELAY_ID=<id returned at provisioning> \
+CADENA_RELAY_TOKEN=<one-time token> \
+CADENA_RELAY_TARGET_ORIGIN=https://jira.internal.example \
+CADENA_RELAY_PROVIDER_AUTHORIZATION='Bearer ...' \
+CADENA_RELAY_LEDGER_DIR=./data/relay-ledger \
+npm run relay
+```
+
+The control plane leases only the earliest unfinished request, so a disconnect cannot let later work overtake it. Before acknowledging a provider response, the relay fsyncs it to one immutable file per delivery. If the ACK is lost or the process restarts, the same delivery is acknowledged from that ledger without another provider call, then the next queue entry is released.
+
+This is verified against a deterministic Jira fake only. The relay ledger is operational state and needs durable storage, backup and a retention policy; this increment does not prune it. A crash in the narrow interval after a provider commits a request but before its response reaches the ledger can still repeat a non-idempotent operation, so production targets should also support an idempotency key or a provider-side lookup/echo guard. No live firewall, proxy or provider was tested.
 
 ### Public-comment privacy and synchronization (US13.4)
 

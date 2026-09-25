@@ -1,6 +1,7 @@
 {
   "_comment": "Status overlay for the implementation tracker. backlog.json owns the stories and their acceptance criteria; this file owns delivery status, the abridged title shown in the tracker, and phase alignment. Regenerate the page with `npm run tracker`. test/tracker.spec.ts fails if the two files fall out of sync.",
   "source_of_truth": "repository",
+  "as_of": "2026-09-25",
   "platform_milestones": [
     {
       "id": "cloud-staging-foundation-2026-09-22",
@@ -621,10 +622,10 @@
     },
     "US16.3": {
       "name": "Zero-inbound-port connectivity",
-      "status": "idle",
+      "status": "done",
       "phase": 3,
       "isNew": true,
-      "note": "A relay behind the firewall long-polls over outbound HTTPS, so integrating never widens the attack surface."
+      "note": "A connector in relay mode persists credential-free provider requests for a headless agent behind the firewall. The agent accepts only a control-plane URL using outbound HTTPS on effective port 443, opens no listener, long-polls with a one-time bearer credential whose server-side representation is SHA-256 only, enforces the configured provider origin, and adds provider authorization locally. Strict queue-head leasing preserves FIFO order across disconnects. Each provider result is fsynced to a local per-delivery ledger before acknowledgement, so an ACK loss or process reconnect reuses the result instead of executing the provider request again. Verified by <code>test/us16.3.spec.ts</code> against a deterministic Jira fake. No live firewall or provider was contacted; the ledger needs operator retention/backup, and a crash after the provider commits but before the result is persisted can still duplicate a non-idempotent provider operation."
     },
     "US9.5": {
       "name": "Integration topology and queue health",

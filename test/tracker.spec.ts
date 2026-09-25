@@ -131,6 +131,7 @@ describe('Implementation tracker', () => {
       const second = buildTrackerDocument();
 
       expect(second).toBe(first);
+      expect(trackerAsOfDate()).toBe((overlay as any).as_of);
       expect(first).toContain(`<span><b>Built</b> ${trackerAsOfDate()}</span>`);
     } finally {
       vi.useRealTimers();

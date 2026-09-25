@@ -2,6 +2,39 @@
 
 This document records the delivered pilot architecture and subsequent implementation increments. Codex- and Claude-authored delivery records are kept above the original Gemini Epic 3 plan, each under its own attribution boundary, so ownership and current status are explicit.
 
+## Codex — US16.3 Zero-inbound-port connectivity — 2026-09-25
+
+> **Attribution boundary:** Everything in this section was designed and implemented by **Codex** on 2026-09-25 after the user required the deterministic tracker/CI repair to be completed and green first. It extends the existing Jira and ServiceNow adapter boundary; it does not claim that a live provider, firewall or proxy was contacted.
+
+**Status:** US16.3 moves from not-started to **done**. The ledger moves to **49 done / 7 partial / 21 not started** across **21 epics / 77 stories**. Verification is against a deterministic Jira provider fake only.
+
+### What was built
+
+- **Relay-mode connectors.** `connectivity.mode` selects direct or relay transport. Relay-mode registration does not require the control plane to hold provider credentials. Every native adapter call—test, discovery, polling, scheduled query, backfill, write-back and comments—receives the same request-scoped transport and therefore can cross the relay rather than bypassing it.
+- **One-time relay credential.** `POST /integrations/connectors/:id/relay` provisions or rotates a random bearer token, stores only its SHA-256 digest and emits `ConnectorRelayProvisioned`; `GET .../:id/relay` reports status without the token. The agent endpoints authenticate independently of the platform header/token guard with a timing-safe digest comparison.
+- **Durable, sanitized FIFO.** Provider requests are stored in `integration_relay_requests` after authorization, cookies, proxy authorization and API-key headers are removed. A stable operation key deduplicates retries. Long-poll claims only the earliest unfinished row under a lease, so later work cannot overtake a disconnected head. Provider/network errors return the head to pending with bounded backoff.
+- **Outbound-only agent.** The standalone `npm run relay` process refuses any control-plane URL other than HTTPS on effective port 443, opens no listener, long-polls with outbound POSTs and rejects a delivery outside the exact configured provider origin. Provider authorization is merged only inside that process.
+- **Reconnect without repeated execution after a recorded result.** The agent writes the provider status, permitted response headers and body to an immutable per-delivery file, fsyncs it, then acknowledges. If the ACK connection drops or the process restarts, it loads that file, acknowledges the same queue head without another provider request, and only then receives the next item.
+
+### Decisions and limits, stated plainly
+
+- Port 443 is enforced for the Cadena control-plane connection. The provider target may use its private-network scheme and port, but its origin must match the configured allowlist exactly.
+- Relay requests and responses are application-level HTTP envelopes inside TLS, not a general-purpose tunnel. Only a small response-header allowlist crosses back to the control plane.
+- The relay execution ledger is append-only in this increment. Operators must place it on durable storage and define backup, access and retention controls; automatic pruning and replication are not built.
+- The persisted result closes the common provider-success/ACK-loss window. It cannot eliminate the narrower crash window after a provider commits but before the agent receives and fsyncs the response. Non-idempotent production operations still require a provider idempotency key or provider-side lookup/echo guard.
+- The acceptance path was not exercised through a real corporate proxy, firewall, Jira or ServiceNow tenant. Proxy authentication, certificate-chain deployment and provider-specific reconnect behaviour remain unobserved.
+
+### Verification
+
+- `test/us16.3.spec.ts` (3 tests): HTTPS/443 refusal, one-time hash-only credential and invalid-token rejection; test/discover/activate/sync over the relay with no control-plane provider credential and no authorization header persisted; and two queued requests across a deliberately dropped ACK, lease expiry and a new agent process, proving provider execution order `1, 2`, first-item execution once and delivery attempts `2, 1`.
+- Removing the ledger lookup on purpose made the reconnect test fail because the fake provider observed order `1, 1`; restoring it made the focused suite pass.
+- The affected connector regression set (`us10.9`, `us16.1`, `us16.2`, `us16.3`, `us16.4-16.5`, `us17.1`, `us20.2`) passes 56 tests across 7 files.
+- The complete non-browser suite passes 356 tests across 59 files; the built-server browser suite passes all 29 scenarios.
+
+### Primary files
+
+- `src/modules/connectors/relay/connector-relay.service.ts`, `connector-relay.controller.ts`, `outbound-relay-agent.ts`, `src/scripts/outbound-relay.ts`, both native adapters, `connector.service.ts`, `connector.types.ts`, `connector-config.ts`, `src/database/database.service.ts`, `src/modules/auth/auth.guard.ts`, `test/us16.3.spec.ts`, plus this ledger sync (`implementation-status.json`, `README.md`, `walkthrough.md`; `public/status.html` regenerated with `npm run tracker`).
+
 ## Claude — US16.2 indexed-query safety and load shedding — 2026-09-24
 
 > **Attribution boundary:** Everything in this section was designed and implemented by **Claude** on 2026-09-24 after the user asked to fix the failing US5.4 test first and then take US16.2. It builds on Codex's US16.1 governor and Claude's US17.3 query validator. No live provider was contacted.

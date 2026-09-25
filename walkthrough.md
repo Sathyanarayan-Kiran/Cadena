@@ -2,8 +2,23 @@
 
 A running record of what is built, how to try it, and what changed when.
 
-**Current state:** The Phase 0 pilot and Phase 1 operational slice include workflow/SLA governance, traceability, durable event delivery, Git/CI and monitoring ingestion, notification/escalation, audit evidence, immutable connector correlation, echo suppression, provider-neutral state and field mappings, durable per-twin queues, scheduled native queries, governed backfill, target-wide adaptive rate governance, indexed-query safety with load shedding, twin projection, the connector-led workspace, flow-efficiency analytics, waiting risk, cost of delay, US13.4 public-comment privacy/synchronization and US13.5 resolution write-back. The canonical backlog is **21 epics / 77 stories**, with **48 done / 7 partial / 22 not started**. Jira/ServiceNow connector behaviour is verified against deterministic API fakes only; US13.1 and US17.1 remain partial pending explicit live-sandbox validation, and US17.3 remains partial because Azure DevOps has no adapter.
-**Verification:** 351 non-browser tests across 58 files and all 29 browser scenarios pass. In two earlier browser runs the time-sensitive US21.4 `By state` assertion failed, and it failed the same way on the commit before US16.2. No live provider was contacted.
+**Current state:** The Phase 0 pilot and Phase 1 operational slice include workflow/SLA governance, traceability, durable event delivery, Git/CI and monitoring ingestion, notification/escalation, audit evidence, immutable connector correlation, echo suppression, provider-neutral state and field mappings, durable per-twin queues, scheduled native queries, governed backfill, target-wide adaptive rate governance, indexed-query safety with load shedding, outbound-only relay connectivity, twin projection, the connector-led workspace, flow-efficiency analytics, waiting risk, cost of delay, US13.4 public-comment privacy/synchronization and US13.5 resolution write-back. The canonical backlog is **21 epics / 77 stories**, with **49 done / 7 partial / 21 not started**. Jira/ServiceNow connector behaviour is verified against deterministic API fakes only; US13.1 and US17.1 remain partial pending explicit live-sandbox validation, and US17.3 remains partial because Azure DevOps has no adapter.
+**Verification:** 356 non-browser tests across 59 files and all 29 browser scenarios pass. In two earlier browser runs the time-sensitive US21.4 `By state` assertion failed, and it failed the same way on the commit before US16.2. No live provider or firewall was contacted.
+
+---
+
+## 2026-09-25 — US16.3 outbound-only relay connectivity (Codex)
+
+An on-premise Jira or ServiceNow connector can now use a relay inside its network without exposing an inbound port.
+
+- Create the connector with `connectivity.mode` set to `relay`, then provision its relay. The bearer token is shown once; only a SHA-256 digest remains in Cadena.
+- Run `npm run relay` behind the firewall with the Cadena HTTPS URL, relay id/token, exact provider origin, a durable ledger directory and the provider authorization value. The agent refuses non-HTTPS control planes and non-443 ports, opens no listener, and adds the provider secret locally.
+- Every adapter operation uses the same route: Cadena queues a sanitized request, the relay long-polls and executes it, and the response returns through an acknowledgement. Connection test, discovery, activation and synchronization are covered end to end.
+- The queue leases only its oldest unfinished request. A provider result is fsynced before acknowledgement, so an ACK disconnect and process restart reuse the result and preserve FIFO order without a second provider call.
+
+Three acceptance tests cover the port/protocol refusal, hash-only token storage and bad-token rejection; full connector lifecycle with provider credentials absent from Cadena's queue; and an ACK disconnect followed by lease expiry, reconnect, result reuse and ordered delivery of the next item. Disabling ledger reuse deliberately makes the provider receive the first request twice.
+
+The test uses a deterministic Jira fake. No live firewall, proxy or provider was contacted. The ledger is not pruned and must live on durable storage. A crash after the provider commits but before the response is fsynced remains a provider-idempotency problem.
 
 ---
 
