@@ -14,6 +14,7 @@
     "start": "cross-env CADENA_DATA_DIR=./data node dist/server.js",
     "start:staging": "cross-env CADENA_RUNTIME_MODE=staging node dist/server.js",
     "staging:validate": "tsx src/scripts/validate-runtime.ts",
+    "relay": "tsx src/scripts/outbound-relay.ts",
     "test:ui": "tsc && vitest run test/ui-smoke.spec.ts",
     "tracker": "node scripts/build-tracker.mjs",
     "dev:ephemeral": "cross-env CADENA_ALLOW_HEADER_AUTH=true tsx watch src/server.ts",

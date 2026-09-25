@@ -3,6 +3,7 @@ import {
   BadRequestException,
   ConflictException,
   HttpException,
+  Inject,
   Injectable,
   NotFoundException,
   OnApplicationBootstrap,
@@ -75,6 +76,7 @@ import { TwinProjectionConfig, TwinProjectionService } from './twin-projection.s
 import { loadRuntimeConfig } from '../../config/runtime-config';
 import { getConnectorRateGovernor, validateRateGovernance } from './rate-governor';
 import { validateQueryIndexes } from './native-query/query-index-catalog';
+import { ConnectorRelayService } from './relay/connector-relay.service';
 
 const MAX_WORK_ORDER_ATTEMPTS = 5;
 const WORK_ORDER_BASE_BACKOFF_MS = 30_000;
@@ -128,7 +130,7 @@ export class ConnectorService implements OnApplicationBootstrap {
   private adapters = new Map<ConnectorProviderType, ConnectorAdapter>();
   private readonly workerId = randomUUID();
 
-  constructor() {
+  constructor(@Inject(ConnectorRelayService) private readonly relayService: ConnectorRelayService) {
     // The sandbox is a local-only demonstration transport; runtime config refuses it elsewhere.
     const transport = loadRuntimeConfig().connectorSandbox ? getProviderSandbox().fetch : undefined;
     this.registerAdapter(new JiraConnectorAdapter(transport));
@@ -214,6 +216,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       commentSync: this.validateCommentSync(dto.commentSync),
       rateGovernance: validateRateGovernance(dto.rateGovernance),
       queryIndexes: validateQueryIndexes(dto.queryIndexes),
+      connectivity: this.validateConnectivity(dto.connectivity),
       projection: TwinProjectionService.validateConfig(dto.projection),
     }));
     this.guard(() => adapter.validateConfig(config));
@@ -1344,6 +1347,7 @@ export class ConnectorService implements OnApplicationBootstrap {
     const attempts = Number(claimed.rows[0].attempts);
     const target = await this.getConnector(orgId, row.target_connector_id);
     const adapter = this.getAdapter(target.provider);
+    const targetContext = this.context(target, row.id);
     const marker = String(row.marker).toLowerCase();
     try {
       if (!adapter.pushPublicComment) {
@@ -1353,7 +1357,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       // marker first makes the retry a completion, not a duplicate comment.
       let existing: ExternalPublicComment | undefined;
       if (adapter.fetchPublicComments) {
-        const targetComments = await adapter.fetchPublicComments(this.context(target), {
+        const targetComments = await adapter.fetchPublicComments(targetContext, {
           entityType: row.target_entity_type, externalId: row.target_external_id,
         });
         existing = targetComments.find((comment) => comment.originMarker?.toLowerCase() === marker);
@@ -1361,7 +1365,7 @@ export class ConnectorService implements OnApplicationBootstrap {
       const result = existing
         ? { externalId: existing.externalId, message: 'Recovered an already-written public comment by its Cadena marker' }
         : await adapter.pushPublicComment(
-          this.context(target),
+          targetContext,
           { entityType: row.target_entity_type, externalId: row.target_external_id },
           this.transferredCommentBody(row, marker),
         );
@@ -1826,7 +1830,7 @@ export class ConnectorService implements OnApplicationBootstrap {
         translationInProgress = false;
       }
 
-      const result = await adapter.pushUpdate(this.context(target), {
+      const result = await adapter.pushUpdate(this.context(target, workOrderId), {
         entityType: work.target_entity_type,
         externalId: work.target_external_id,
         targetState,
@@ -2853,12 +2857,29 @@ export class ConnectorService implements OnApplicationBootstrap {
     };
   }
 
-  private context(connector: ConnectorRecord): ConnectorContext {
+  private context(connector: ConnectorRecord, operationId: string = randomUUID()): ConnectorContext {
+    const relayMode = (connector.config.connectivity as Record<string, unknown> | undefined)?.mode === 'relay';
     return {
       connector,
       baseUrl: String(connector.config.baseUrl || ''),
-      credentials: this.secrets.resolveAll(connector.config.credentials as Record<string, string>),
+      credentials: relayMode ? {} : this.secrets.resolveAll(connector.config.credentials as Record<string, string>),
+      ...(relayMode ? { http: this.relayService.createFetch(connector, operationId) } : {}),
     };
+  }
+
+  private validateConnectivity(input: unknown): { mode: 'direct' | 'relay' } {
+    if (input === undefined || input === null) return { mode: 'direct' };
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throw new ConnectorConfigurationError('connectivity must be an object');
+    }
+    const keys = Object.keys(input);
+    const unknown = keys.filter((key) => key !== 'mode');
+    if (unknown.length) throw new ConnectorConfigurationError(`connectivity has unknown field(s): ${unknown.join(', ')}`);
+    const mode = (input as Record<string, unknown>).mode;
+    if (mode !== 'direct' && mode !== 'relay') {
+      throw new ConnectorConfigurationError("connectivity.mode must be 'direct' or 'relay'");
+    }
+    return { mode };
   }
 
   private validateOptions(options: unknown): Record<string, unknown> {

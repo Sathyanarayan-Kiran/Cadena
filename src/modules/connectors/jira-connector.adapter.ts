@@ -20,7 +20,7 @@ import {
   ExternalRecordPayload,
   WatermarkCursor,
 } from './connector.types';
-import { optionNumber, optionString, stringList } from './connector-config';
+import { optionNumber, optionString, stringList, usesOutboundRelay } from './connector-config';
 import { ConnectorRateGovernor, getConnectorRateGovernor } from './rate-governor';
 
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]{0,31}$/;
@@ -78,6 +78,7 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
 
     const credentials = (config.credentials || {}) as Record<string, string>;
     const authType = config.authType || 'basic';
+    if (usesOutboundRelay(config)) return;
     if (authType === 'basic') {
       if (!credentials.apiToken) throw new ConnectorCredentialError('Basic Jira auth requires credentials.apiToken');
       if (!optionString(config.options, 'accountEmail')) {
@@ -370,6 +371,9 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
   }
 
   private headers(ctx: ConnectorContext): Record<string, string> {
+    if (usesOutboundRelay(ctx.connector.config)) {
+      return { Accept: 'application/json', 'Content-Type': 'application/json' };
+    }
     const authType = ctx.connector.config.authType || 'basic';
     const authorization = authType === 'bearer'
       ? `Bearer ${ctx.credentials.accessToken}`
@@ -379,18 +383,18 @@ export class JiraConnectorAdapter implements ConnectorAdapter {
 
   private get(ctx: ConnectorContext, path: string): Promise<any> {
     return this.rateGovernor.execute(ctx, () => requestJson(
-      this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) },
+      ctx.http ?? this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, { method: 'GET', headers: this.headers(ctx) },
     ));
   }
 
   private post(ctx: ConnectorContext, path: string, body: unknown): Promise<any> {
-    return this.rateGovernor.execute(ctx, () => requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
+    return this.rateGovernor.execute(ctx, () => requestJson(ctx.http ?? this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
       method: 'POST', headers: this.headers(ctx), body: JSON.stringify(body),
     }));
   }
 
   private put(ctx: ConnectorContext, path: string, body: unknown): Promise<any> {
-    return this.rateGovernor.execute(ctx, () => requestJson(this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
+    return this.rateGovernor.execute(ctx, () => requestJson(ctx.http ?? this.http, `${trimBaseUrl(ctx.baseUrl)}${path}`, {
       method: 'PUT', headers: this.headers(ctx), body: JSON.stringify(body),
     }));
   }

@@ -21,7 +21,7 @@ import {
   ExternalRecordPayload,
   WatermarkCursor,
 } from './connector.types';
-import { optionNumber, optionString, stringList } from './connector-config';
+import { optionNumber, optionString, stringList, usesOutboundRelay } from './connector-config';
 import { ConnectorRateGovernor, getConnectorRateGovernor } from './rate-governor';
 
 const TABLE_NAME = /^[a-z][a-z0-9_]{0,79}$/;
@@ -78,6 +78,7 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
 
     const credentials = (config.credentials || {}) as Record<string, string>;
     const authType = config.authType || 'basic';
+    if (usesOutboundRelay(config)) return;
     if (authType === 'basic') {
       if (!credentials.password) throw new ConnectorCredentialError('Basic ServiceNow auth requires credentials.password');
       if (!optionString(config.options, 'username')) {
@@ -383,6 +384,9 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
   }
 
   private headers(ctx: ConnectorContext): Record<string, string> {
+    if (usesOutboundRelay(ctx.connector.config)) {
+      return { Accept: 'application/json', 'Content-Type': 'application/json' };
+    }
     const authType = ctx.connector.config.authType || 'basic';
     const authorization = authType === 'bearer'
       ? `Bearer ${ctx.credentials.accessToken}`
@@ -399,7 +403,7 @@ export class ServiceNowConnectorAdapter implements ConnectorAdapter {
     url: string,
     init: { method: 'GET' | 'POST' | 'PUT' | 'PATCH'; headers: Record<string, string>; body?: string },
   ): Promise<any> {
-    return this.rateGovernor.execute(ctx, () => requestJson(this.http, url, init));
+    return this.rateGovernor.execute(ctx, () => requestJson(ctx.http ?? this.http, url, init));
   }
 }
 

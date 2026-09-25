@@ -11,6 +11,7 @@ import {
 } from '@nestjs/common';
 import { ConnectorService } from './connector.service';
 import { ConnectorConfigDto } from './connector.types';
+import { ConnectorRelayService } from './relay/connector-relay.service';
 
 function requireOrg(orgId?: string): string {
   if (!orgId?.trim()) {
@@ -25,7 +26,10 @@ function resolveActor(actorId?: string): string {
 
 @Controller('integrations/connectors')
 export class ConnectorController {
-  constructor(@Inject(ConnectorService) private readonly service: ConnectorService) {}
+  constructor(
+    @Inject(ConnectorService) private readonly service: ConnectorService,
+    @Inject(ConnectorRelayService) private readonly relays: ConnectorRelayService,
+  ) {}
 
   @Get('providers')
   public providers() {
@@ -146,6 +150,22 @@ export class ConnectorController {
     @Headers('x-actor-id') actorHeader?: string,
   ) {
     return this.service.configureQueryIndexes(requireOrg(orgHeader), id, body || {}, resolveActor(actorHeader));
+  }
+
+  /** Provisions or rotates the one-time bearer credential for an outbound-only relay. */
+  @Post(':id/relay')
+  public async provisionRelay(
+    @Param('id') id: string,
+    @Body() body: { name?: string },
+    @Headers('x-org-id') orgHeader?: string,
+    @Headers('x-actor-id') actorHeader?: string,
+  ) {
+    return this.relays.provision(requireOrg(orgHeader), id, body?.name, resolveActor(actorHeader));
+  }
+
+  @Get(':id/relay')
+  public async relayStatus(@Param('id') id: string, @Headers('x-org-id') orgHeader?: string) {
+    return this.relays.status(requireOrg(orgHeader), id);
   }
 
   @Post(':id/sync')

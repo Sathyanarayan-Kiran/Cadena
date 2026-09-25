@@ -23,6 +23,10 @@ export class AuthGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const path = request.path || request.url?.split('?')[0];
     if (path === '/health/live' || path === '/health/ready') return true;
+    // Relay agents authenticate against their own hashed, connector-scoped credential inside
+    // ConnectorRelayService. Passing that bearer through the platform credential resolver would
+    // reject it before the relay boundary can verify it. No other integration path is exempt.
+    if (path?.startsWith('/integrations/relay/')) return true;
     const principal = await this.resolve(request);
 
     if (principal.source === 'dev_header') {

@@ -8,6 +8,7 @@ import {
   ExternalRecordPayload,
   WatermarkCursor,
 } from './connector.types';
+import type { ConnectorFetch } from './connector-http';
 
 /**
  * Everything an adapter needs for one operation. Credentials arrive already resolved from
@@ -17,6 +18,8 @@ export interface ConnectorContext {
   connector: ConnectorRecord;
   baseUrl: string;
   credentials: Record<string, string>;
+  /** Per-connector transport override used by an outbound-only relay. */
+  http?: ConnectorFetch;
 }
 
 /** A half-open time range `[from, to)` a backfill chunk reads, aligned to whole minutes. */

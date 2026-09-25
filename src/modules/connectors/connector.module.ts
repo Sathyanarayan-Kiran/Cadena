@@ -10,10 +10,12 @@ import { FieldMappingService } from './mapping/field-mapping.service';
 import { NativeQueryController } from './native-query/native-query.controller';
 import { NativeQueryScheduler } from './native-query/native-query.scheduler';
 import { NativeQueryService } from './native-query/native-query.service';
+import { ConnectorRelayController } from './relay/connector-relay.controller';
+import { ConnectorRelayService } from './relay/connector-relay.service';
 
 @Module({
-  controllers: [ConnectorController, FieldMappingController, NativeQueryController, BackfillController],
-  providers: [ConnectorService, FieldMappingService, NativeQueryService, NativeQueryScheduler, BackfillService, BackfillRunnerService, BackfillScheduler],
-  exports: [ConnectorService, FieldMappingService, NativeQueryService, NativeQueryScheduler, BackfillService, BackfillRunnerService, BackfillScheduler],
+  controllers: [ConnectorController, ConnectorRelayController, FieldMappingController, NativeQueryController, BackfillController],
+  providers: [ConnectorRelayService, ConnectorService, FieldMappingService, NativeQueryService, NativeQueryScheduler, BackfillService, BackfillRunnerService, BackfillScheduler],
+  exports: [ConnectorRelayService, ConnectorService, FieldMappingService, NativeQueryService, NativeQueryScheduler, BackfillService, BackfillRunnerService, BackfillScheduler],
 })
 export class ConnectorModule {}

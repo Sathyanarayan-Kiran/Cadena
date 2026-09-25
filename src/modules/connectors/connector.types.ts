@@ -65,8 +65,16 @@ export interface ConnectorConfigDto {
    * and the provider platform already vouch for.
    */
   queryIndexes?: Record<string, string[]>;
+  /** Direct cloud egress, or an outbound-only relay for a target behind a firewall (US16.3). */
+  connectivity?: ConnectorConnectivityConfig;
   /** How twins become governed WorkItems: owning team, type map and owner map. */
   projection?: Record<string, unknown>;
+}
+
+export interface ConnectorConnectivityConfig {
+  mode: 'direct' | 'relay';
+  /** Assigned by the control plane when the relay credential is provisioned. */
+  relayId?: string;
 }
 
 export interface ConnectorWriteBackPolicy {
@@ -278,6 +286,39 @@ export interface ConnectorRecord {
   errorMessage?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ConnectorRelayRegistration {
+  id: string;
+  connectorId: string;
+  name: string;
+  status: 'waiting' | 'connected';
+  lastSeenAt?: string;
+  createdAt: string;
+  /** Returned only when provisioned or rotated; Cadena stores only its SHA-256 hash. */
+  token?: string;
+}
+
+export interface ConnectorRelayDelivery {
+  id: string;
+  relayId: string;
+  connectorId: string;
+  sequence: number;
+  idempotencyKey: string;
+  leaseId: string;
+  leaseExpiresAt: string;
+  request: {
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH';
+    url: string;
+    headers: Record<string, string>;
+    body?: string;
+  };
+}
+
+export interface ConnectorRelayAck {
+  leaseId: string;
+  response?: { status: number; headers?: Record<string, string>; body?: string };
+  error?: string;
 }
 
 export interface IngestionRecordError {

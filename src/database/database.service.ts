@@ -698,6 +698,48 @@ export class DatabaseService {
         UNIQUE (org_id, provider, name)
       );
 
+      -- US16.3: agents behind a firewall claim provider HTTP requests by outbound long-poll.
+      CREATE TABLE IF NOT EXISTS integration_connector_relays (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        connector_id UUID NOT NULL UNIQUE REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        token_hash TEXT NOT NULL,
+        last_seen_at TIMESTAMP WITH TIME ZONE,
+        revoked_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+
+      CREATE SEQUENCE IF NOT EXISTS integration_relay_request_position_seq;
+      CREATE TABLE IF NOT EXISTS integration_relay_requests (
+        id UUID PRIMARY KEY,
+        org_id UUID NOT NULL,
+        relay_id UUID NOT NULL REFERENCES integration_connector_relays(id) ON DELETE CASCADE,
+        connector_id UUID NOT NULL REFERENCES integration_connectors(id) ON DELETE CASCADE,
+        idempotency_key TEXT NOT NULL,
+        method TEXT NOT NULL,
+        url TEXT NOT NULL,
+        headers TEXT NOT NULL DEFAULT '{}',
+        body TEXT,
+        queue_position BIGINT NOT NULL DEFAULT nextval('integration_relay_request_position_seq'),
+        status TEXT NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        lease_id UUID,
+        lease_expires_at TIMESTAMP WITH TIME ZONE,
+        next_attempt_at TIMESTAMP WITH TIME ZONE,
+        response_status INT,
+        response_headers TEXT,
+        response_body TEXT,
+        error_message TEXT,
+        completed_at TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (relay_id, idempotency_key)
+      );
+      CREATE INDEX IF NOT EXISTS integration_relay_requests_queue
+        ON integration_relay_requests (relay_id, status, queue_position);
+
       -- US16.1: one durable quota/backoff state is shared by every connector for an org + target.
       CREATE TABLE IF NOT EXISTS integration_rate_governance (
         org_id UUID NOT NULL,

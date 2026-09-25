@@ -17,3 +17,9 @@ export function stringList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)));
 }
+
+export function usesOutboundRelay(config: Record<string, unknown>): boolean {
+  const connectivity = config.connectivity;
+  return Boolean(connectivity && typeof connectivity === 'object'
+    && (connectivity as Record<string, unknown>).mode === 'relay');
+}
